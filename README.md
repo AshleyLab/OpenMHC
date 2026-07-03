@@ -1,4 +1,4 @@
-# OpenMHC
+# OpenMHC: Accelerating the Science of Wearable Foundation Models
 
 [![Project Page](https://img.shields.io/badge/Project%20Page-MyHeartCounts-1f883d?logo=googlechrome&style=flat-square)](https://myheartcounts.stanford.edu/)
 [![Benchmark](https://img.shields.io/badge/HuggingFace-Benchmark-ffd21e?style=flat-square&logo=huggingface)](https://myheartcounts-openmhc.hf.space)
