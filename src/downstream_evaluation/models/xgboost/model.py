@@ -204,14 +204,21 @@ def extract_xgboost_features(
                 checkpoint_dir=ckpt_dir, output_path=dd_out, cutoff_dates=cutoff_dates,
             )
 
-        # 3. Curve analysis — independent of the timeseries pipeline.
+        # 3. Curve analysis — independent of the timeseries pipeline. Its cross-user
+        #    preprocessing (FPCA basis, population-mean imputation, basis-mean fallback)
+        #    is fit on the train split only (transform-all), so test-split curves never
+        #    leak into any user's features.
         ca_out = out / "pipeline_curve_analysis_user_features.parquet"
         if force or not ca_out.exists():
+            from downstream_evaluation.data.splits import load_split_file
+
+            train_users = load_split_file(paths.splits_file)["train"]
             build_curve_analysis_features(
                 arrow_dir=arrow_dir, output_path=ca_out,
                 checkpoint_path=out / f"curve_analysis_avg_curves{suffix}.parquet",
                 max_nonwear_minutes=max_nonwear_minutes, variance_filter=variance_filter,
                 cutoff_dates=cutoff_dates, eligible_keys=eligible_keys,
+                fit_user_ids=train_users,
             )
     logger.info("xgboost features written -> %s", out)
 

@@ -27,14 +27,16 @@ def _metrics_for(task: str, y_true, y_pred, seed: int = 42) -> dict[str, float]:
     ttype = get_task_type(task)
     if ttype == "binary":
         return compute_binary_metrics(y_true, y_pred, seed=seed)
-    # multiclass/ordinal scores discrete class predictions. The uniform ordinal probe
-    # already predicts ints; an end-to-end method may hand back raw floats (e.g. the
-    # hybrid's rank-combined scores, GRU-D's ordinal expected level), so round to int
-    # before scoring (a no-op when predictions are already discrete).
+    # Multiclass accuracy scores discrete class predictions: the uniform probe already
+    # predicts ints, but an end-to-end method may hand back raw floats, so round to int
+    # (a no-op when predictions are already discrete).
     if ttype == "multiclass":
         return compute_multiclass_metrics(y_true, np.round(y_pred).astype(int), seed=seed)
+    # Ordinal uses Spearman's rho, which depends only on rank order. Rounding to int
+    # would collapse the rank-merged fallback scores (percentile-ranked into (0, 1]) to
+    # {0, 1} and destroy the ordering, so score the raw prediction.
     if ttype == "ordinal":
-        return compute_ordinal_metrics(y_true, np.round(y_pred).astype(int), seed=seed)
+        return compute_ordinal_metrics(y_true, y_pred, seed=seed)
     return compute_regression_metrics(y_true, y_pred, seed=seed)
 
 

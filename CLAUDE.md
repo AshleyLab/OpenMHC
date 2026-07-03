@@ -112,8 +112,7 @@ All evaluate/download functions resolve the dataset root in this priority order:
 ### Splits & Label Validity
 
 - Canonical split: `sharable_users_seed42_2026.json` (user-level, no leakage)
-- Two validity criteria: C1 (`single_day`) = broader, C2 (`weekly_5of7`) = ~55% smaller/stricter
-- Default criterion: C1
+- Label validity: the `single_day` rule (≥1 filtered day in the window), baked into the shipped lookups; the engine has no runtime validity-criterion toggle
 
 ### Result Objects
 

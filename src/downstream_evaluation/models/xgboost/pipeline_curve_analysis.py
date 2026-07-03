@@ -229,9 +229,9 @@ def _compute_averaged_curves(
 # ── Phase B helpers ──────────────────────────────────────────────────────────
 
 
-def _impute_population_mean(matrix: np.ndarray) -> np.ndarray:
-    """Fill NaN values with population mean at each minute position."""
-    col_means = np.nanmean(matrix, axis=0)
+def _impute_population_mean(matrix: np.ndarray, fit_mask: np.ndarray) -> np.ndarray:
+    """Fill NaN values with the train-cohort population mean at each minute position."""
+    col_means = np.nanmean(matrix[fit_mask], axis=0)
     # If entire minute column is NaN, fill with 0
     col_means = np.where(np.isfinite(col_means), col_means, 0.0)
     nan_mask = np.isnan(matrix)
@@ -244,6 +244,7 @@ def _build_sparse_basis_representation(
     n_basis: int = 24,
     smoothing_parameter: float = 1e5,
     min_obs: int = 10,
+    fit_mask: np.ndarray | None = None,
 ) -> FDataBasis:
     """Convert sparse averaged curves to a smooth B-spline basis representation.
 
@@ -257,13 +258,15 @@ def _build_sparse_basis_representation(
     large (~1e5) because the penalty matrix scales with domain range.
 
     Users with fewer than `min_obs` valid points get the population-mean basis
-    representation (fitted from the mean of all valid users' basis coefficients).
+    representation (fitted from the mean of the valid train users' basis coefficients).
 
     Args:
         matrix: (n_users, 1440) array with NaN for missing minutes.
         n_basis: Number of B-spline basis functions (default 24 = ~1 per hour).
         smoothing_parameter: Regularization strength for curvature penalty (default 1e5).
         min_obs: Minimum non-NaN observations to attempt basis fitting.
+        fit_mask: Boolean mask over users selecting the train cohort; the insufficient-obs
+            mean-coefficient fallback is computed from these users only. ``None`` uses all.
 
     Returns:
         FDataBasis with shape (n_users, n_basis).
@@ -325,8 +328,13 @@ def _build_sparse_basis_representation(
         regularization=reg,
     )
 
-    # Compute mean coefficients from valid users for fallback
-    mean_coefficients = fd_valid.coefficients.mean(axis=0, keepdims=True)
+    # Compute mean coefficients from the valid TRAIN users for the fallback, so the
+    # insufficient-obs users' representation does not depend on test-split curves.
+    if fit_mask is None:
+        train_pos = list(range(len(valid_user_indices)))
+    else:
+        train_pos = [j for j, ui in enumerate(valid_user_indices) if fit_mask[ui]]
+    mean_coefficients = fd_valid.coefficients[train_pos].mean(axis=0, keepdims=True)
 
     # Assemble full coefficient matrix (all users, in original order)
     all_coefficients = np.zeros((n_users, n_basis), dtype=np.float64)
@@ -494,6 +502,7 @@ def build_curve_analysis_features(
     variance_filter: bool = True,
     cutoff_dates: dict[str, str] | None = None,
     eligible_keys: set[tuple[str, str]] | None = None,
+    fit_user_ids: set[str] | None = None,
 ) -> pl.DataFrame:
     """Build curve analysis user-level features from Arrow files.
 
@@ -521,6 +530,10 @@ def build_curve_analysis_features(
                          has near-zero variance (flat signal = sensor malfunction).
         cutoff_dates: Optional ``{user_id: "YYYY-MM-DD"}`` per-user data cutoff.
                       Rows with ``date > cutoff_dates[user_id]`` are excluded.
+        fit_user_ids: Train-split user IDs. The cross-user preprocessing (population-mean
+                      imputation, the FPCA eigenbasis, the basis-mean fallback) is fit on
+                      these users only and applied to all, so a held-out user's features do
+                      not depend on test-split data. ``None`` fits on every user (legacy).
 
     Returns:
         DataFrame with user_id + (n_components x 4 channels) FPCA score columns
@@ -599,6 +612,13 @@ def build_curve_analysis_features(
     print("Phase B: Assembling matrices and processing channels...")
     user_ids = curves_df["user_id"].to_list()
     n_users = len(user_ids)
+    # Cross-user preprocessing (imputation means, FPCA eigenbasis, basis-mean fallback)
+    # is fit on the train cohort only; a missing split fits on every user (legacy path).
+    fit_mask = (
+        np.ones(n_users, dtype=bool)
+        if fit_user_ids is None
+        else np.array([str(u) in fit_user_ids for u in user_ids])
+    )
     channel_matrices: dict[str, np.ndarray] = {}  # non-sparse channels (FDataGrid path)
     channel_basis: dict[str, object] = {}  # sparse channels (FDataBasis path)
 
@@ -621,11 +641,12 @@ def build_curve_analysis_features(
                 n_basis=n_basis,
                 smoothing_parameter=smoothing_parameter,
                 min_obs=min_obs,
+                fit_mask=fit_mask,
             )
             channel_basis[ch_info["name"]] = fd_basis
         else:
-            # Non-sparse channel: population-mean imputation (unchanged)
-            matrix = _impute_population_mean(matrix)
+            # Non-sparse channel: train-cohort population-mean imputation
+            matrix = _impute_population_mean(matrix, fit_mask)
             n_nan_after = np.isnan(matrix).sum()
             print(
                 f"  {ch_info['name']}: {n_users}x{MINUTES_PER_DAY}, "
@@ -651,11 +672,13 @@ def build_curve_analysis_features(
         if ch_name in channel_basis:
             # Sparse channel: FPCA on FDataBasis (B-spline smoothed)
             fd = channel_basis[ch_name]
-            scores = fpca.fit_transform(fd)
         else:
             # Non-sparse channel: FPCA on FDataGrid (population-mean imputed)
             fd = FDataGrid(channel_matrices[ch_name], grid_points=grid_points)
-            scores = fpca.fit_transform(fd)
+        # Fit the eigenbasis on the train cohort only, then project every user onto it,
+        # so a held-out user's scores don't depend on a basis fitted with test curves.
+        fpca.fit(fd[fit_mask])
+        scores = fpca.transform(fd)
 
         # Canonicalize component signs. FPCA eigenfunctions are defined only up to sign,
         # and skfda leaves the sign machine/library-version dependent, so the same data can

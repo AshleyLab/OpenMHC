@@ -261,13 +261,28 @@ class WBM:
         logger.info("WBM embeddings ready: %d segments, dim=%d", len(emb), self._dim)
 
     def encode_cohort(self, task: str, td) -> np.ndarray:
-        """Per-user mean-pool of the WBM embeddings over each user's eligible weeks."""
+        """Per-user mean-pool of the WBM embeddings over each user's eligible weeks.
+
+        ``td`` is the weekly cohort (the encoder's own cohort); daily users without a
+        weekly embedding are handled by ``WBMProbe.predict`` via the NaN->Linear fallback
+        and never reach here. A weekly-cohort user with no embedding for any eligible week
+        would be silently zero-filled and scored as a fabricated prediction, so fail loudly.
+        """
         self._ensure_embeddings()
         X = np.zeros((len(td.user_ids), self._dim), dtype=np.float32)
+        missing = []
         for i, (uid, weeks) in enumerate(zip(td.user_ids, td.dates)):
             vecs = [self._by_key[k] for w in weeks if (k := (str(uid), str(w))) in self._by_key]
             if vecs:
                 X[i] = np.mean(vecs, axis=0)
+            else:
+                missing.append(str(uid))
+        if missing:
+            raise ValueError(
+                f"WBM: {len(missing)} weekly-cohort user(s) have no embedding for any "
+                f"eligible week and would be silently zero-filled (e.g. {missing[:5]}); the "
+                "weekly lookup and the embedding cache are out of sync."
+            )
         return X
 
 

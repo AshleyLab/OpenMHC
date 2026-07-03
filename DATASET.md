@@ -104,12 +104,7 @@ with values being participant IDs (strings).
 
 ## Label validity
 
-A (user, label) pair is "valid" if the user has sufficient wearable data in the label's time window:
-
-- **C1 / `single_day`** — at least 1 filtered day in the window. Default; maximises participant pool.
-- **C2 / `weekly_5of7`** — at least one contiguous 7-day subwindow with ≥ 5 filtered days. Stricter; ~55% smaller.
-
-Submissions to the leaderboard use **C1** by default. Switch with the `data.label_validity_criterion` config.
+A (user, label) pair is "valid" if the user has at least one filtered day of wearable data in the label's time window (the `single_day` rule — it maximises the participant pool, and every Track 1 method shares it).
 
 Validity is **baked into the shipped labels lookups** — a non-sentinel cell in `daily_labels_lookup.parquet` / `weekly_labels_lookup_stride7_windowed.parquet` already marks a valid `(user, day/week)` inside the task window, so the downstream eval reads validity straight from the lookups. (The standalone `label_validity.json` still ships under `labels/` and is consumed separately by the LabelsAPI's `get_labels(return_valid_only=True)`; `label_validity.parquet` is a convenience mirror and `validity_config.json` holds the validity-window thresholds.)
 

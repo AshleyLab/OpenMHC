@@ -106,7 +106,6 @@ def compute_binary_metrics(
     """
     if len(np.unique(y_true)) < 2 or np.isnan(y_prob).any() or np.isinf(y_prob).any():
         return {"auprc": float("nan"), "auprc_se": float("nan")}
-    y_prob = np.clip(y_prob, 1e-10, 1.0 - 1e-10)
 
     def _auprc(yt, yp):
         if len(np.unique(yt)) < 2:

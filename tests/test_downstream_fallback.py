@@ -109,6 +109,28 @@ def test_wbmprobe_predict_aligns_and_nans_missing():
     assert out[1] == 0.7 and out[3] == 0.9  # weekly users keep the SSL probe output
 
 
+def test_missing_feature_fails_loud_not_zero_filled():
+    """A cohort user with no extractable feature raises, rather than being scored as zeros.
+
+    The silent zero-fill produced a finite prediction that bypassed the NaN->Linear
+    fallback and under-counted ``n_fallback``; the guard now fails loudly instead.
+    MultiRocket stands in for the shared pattern (tsfm/lsm2/grud/wbm guard identically).
+    """
+    from downstream_evaluation.models.multirocket import MultiRocket
+
+    m = MultiRocket()
+    m._pooled = {"u0": np.arange(5, dtype=np.float32), "u1": np.ones(5, dtype=np.float32)}
+
+    # Fully covered cohort → aligned feature matrix, no error.
+    x = m._features(["u0", "u1"])
+    assert x.shape == (2, 5)
+    assert np.array_equal(x[0], np.arange(5))
+
+    # An uncovered cohort user → loud failure naming the gap, not a silent zero row.
+    with pytest.raises(ValueError, match="zero-filled|out of sync"):
+        m._features(["u0", "u2"])
+
+
 def test_prediction_results_fallback_fields_default():
     """PredictionResults stays constructible from records alone (additive fields)."""
     pr = PredictionResults(records=[{"task": "t", "metric": "auprc", "value": 0.5}])

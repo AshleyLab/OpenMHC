@@ -278,13 +278,27 @@ class LSM2:
         logger.info("LSM2 embeddings ready: %d day-embeddings, dim=%d", len(emb), self._dim)
 
     def _encode(self, user_ids, dates) -> np.ndarray:
-        """Per-user mean-pool of the cached LSM2 day-embeddings over each user's eligible days."""
+        """Per-user mean-pool of the cached LSM2 day-embeddings over each user's eligible days.
+
+        A cohort user with no cached embedding for any eligible day would be
+        silently zero-filled and scored as a fabricated prediction (bypassing the
+        NaN->Linear fallback), so fail loudly instead.
+        """
         self._ensure_embeddings()
         X = np.zeros((len(user_ids), self._dim), dtype=np.float32)
+        missing = []
         for i, (uid, ds) in enumerate(zip(user_ids, dates)):
             vecs = [self._by_key[k] for d in ds if (k := (str(uid), str(d)[:10])) in self._by_key]
             if vecs:
                 X[i] = np.mean(vecs, axis=0)
+            else:
+                missing.append(str(uid))
+        if missing:
+            raise ValueError(
+                f"LSM2: {len(missing)} cohort user(s) have no cached embedding for any "
+                f"eligible day and would be silently zero-filled (e.g. {missing[:5]}); the "
+                "cohort lookup and the embedding cache are out of sync."
+            )
         return X
 
     def fit(self, data, labels, task_type) -> None:
