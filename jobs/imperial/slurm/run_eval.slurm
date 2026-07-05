@@ -38,7 +38,7 @@ echo "Node: $(hostname) | Job: ${SLURM_JOB_ID:-local} | Date: $(date)"
 set +u
 [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
 source "$HOME/miniconda3/etc/profile.d/conda.sh"
-conda activate py310
+conda activate "${CONDA_ENV:-openmhc}"
 set -u
 
 export PYTHONNOUSERSITE=1

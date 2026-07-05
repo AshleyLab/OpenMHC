@@ -56,24 +56,40 @@ class LinearProbe:
         self._clf = create_model(config, random_state=seed, task_type=task_type)
 
     @staticmethod
-    def _as_features(emb: np.ndarray) -> np.ndarray:
-        """Float32 feature matrix with non-finite values zero-filled (NaN/±inf → 0)."""
+    def _finite_rows(emb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Return the float32 matrix and a mask of the rows that are entirely finite.
+
+        A row with any NaN/±inf marks a participant the encoder could not represent. Such
+        rows are excluded from fitting and predicted as NaN, so the harness can substitute
+        the Linear baseline for them — the same "emit NaN where you cannot predict"
+        convention the Forecaster protocol uses.
+        """
         x = np.asarray(emb, dtype=np.float32)
-        np.nan_to_num(x, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-        return x
+        return x, np.isfinite(x).all(axis=1)
 
     def fit(self, embeddings: np.ndarray, labels: np.ndarray) -> LinearProbe:
-        """Fit the probe on training embeddings ``(n, D)`` and their labels ``(n,)``."""
-        self._clf.fit(self._as_features(embeddings), labels)
+        """Fit the probe on training embeddings ``(n, D)`` and their labels ``(n,)``.
+
+        Participants whose embedding is non-finite are dropped from the fit.
+        """
+        x, finite = self._finite_rows(embeddings)
+        self._clf.fit(x[finite], np.asarray(labels)[finite])
         return self
 
     def predict(self, embeddings: np.ndarray) -> np.ndarray:
         """Predict for ``(n, D)`` embeddings.
 
         Returns the class-1 probability for binary tasks and the point prediction
-        otherwise (ordinal labels are integer-valued; regression is continuous).
+        otherwise (ordinal labels are integer-valued; regression is continuous). A
+        participant whose embedding is non-finite is returned as NaN, so the harness scores
+        it with the fallback rather than a fabricated value.
         """
-        x = self._as_features(embeddings)
-        if self.task_type == "binary":
-            return self._clf.predict_proba(x)[:, 1]
-        return self._clf.predict(x)
+        x, finite = self._finite_rows(embeddings)
+        out = np.full(len(x), np.nan, dtype=np.float64)
+        if finite.any():
+            xv = x[finite]
+            if self.task_type == "binary":
+                out[finite] = self._clf.predict_proba(xv)[:, 1]
+            else:
+                out[finite] = self._clf.predict(xv)
+        return out

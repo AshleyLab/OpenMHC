@@ -21,6 +21,7 @@ directory to load it directly instead of rebuilding.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -73,6 +74,11 @@ _PARQUET_NAMES = [
     "pipeline_curve_analysis_user_features.parquet",
     "pipeline_day_dynamics_user_features.parquet",
 ]
+# The curve-analysis features are only valid when their FPCA basis and per-minute
+# imputation means are fit on the training split alone. This sidecar records that a table
+# was built that way; a curve table without it has unknown fit provenance and is rebuilt
+# rather than loaded, so held-out users can never influence their own features.
+_CURVE_FIT_MARKER = "pipeline_curve_analysis_user_features.fitmeta.json"
 # Diagnostic/metadata columns to drop (they would leak coverage info).
 _METADATA_PREFIXES = ("n_", "total_")
 
@@ -209,7 +215,10 @@ def extract_xgboost_features(
         #    is fit on the train split only (transform-all), so test-split curves never
         #    leak into any user's features.
         ca_out = out / "pipeline_curve_analysis_user_features.parquet"
-        if force or not ca_out.exists():
+        ca_marker = out / _CURVE_FIT_MARKER
+        # Rebuild when the table is missing, or when its train-fit marker is absent, so a
+        # table of unknown fit provenance is refit on the training split rather than reused.
+        if force or not ca_out.exists() or not ca_marker.exists():
             from downstream_evaluation.data.splits import load_split_file
 
             train_users = load_split_file(paths.splits_file)["train"]
@@ -219,6 +228,9 @@ def extract_xgboost_features(
                 max_nonwear_minutes=max_nonwear_minutes, variance_filter=variance_filter,
                 cutoff_dates=cutoff_dates, eligible_keys=eligible_keys,
                 fit_user_ids=train_users,
+            )
+            ca_marker.write_text(
+                json.dumps({"fpca_fit_scope": "train", "n_train_users": len(train_users)})
             )
     logger.info("xgboost features written -> %s", out)
 
@@ -300,8 +312,12 @@ class XGBoost:
         if self._index is not None:
             return
         fd = self._resolve_features_dir()
-        if not all((fd / n).exists() for n in _PARQUET_NAMES):
-            logger.info("xgboost feature cache miss at %s — building from raw (CPU)", fd)
+        # A complete cache has every feature table plus the marker showing the curve
+        # features were fit on the training split. Missing either one triggers a rebuild,
+        # so a curve table of unknown fit provenance is never loaded as-is.
+        have_tables = all((fd / n).exists() for n in _PARQUET_NAMES)
+        if not (have_tables and (fd / _CURVE_FIT_MARKER).exists()):
+            logger.info("xgboost feature cache incomplete at %s — building from raw (CPU)", fd)
             extract_xgboost_features(
                 output_dir=str(fd),
                 data_dir=self._data_dir,

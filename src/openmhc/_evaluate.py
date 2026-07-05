@@ -311,7 +311,9 @@ def evaluate_prediction(
             ``download_dataset`` writes to). If omitted, ``MHC_DATA_DIR`` must
             be set. All sub-paths (`processed/daily_hourly_hf/`, `splits/`,
             `labels/`, etc.) are derived from this root.
-        seed: Random seed for classifiers and splits.
+        seed: Random seed for the per-task bootstrap standard errors and the Linear
+            fallback baseline. The bundled models pin their own classifier seed, so this
+            does not change their point predictions.
         predictions_dir: when set, write per-(method, task) test predictions +
             a shared ``_subgroups.json`` here — the input the paper-metrics
             bootstrap paired-resamples for skill / rank / fairness CIs.

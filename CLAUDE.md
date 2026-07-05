@@ -39,7 +39,7 @@ Transform tasks into verifiable goals:
 ## Project Overview
 
 **OpenMHC** is a public evaluation API and leaderboard for the MyHeartCounts wearable health benchmark (NeurIPS 2026). It evaluates models across three tracks:
-- **Track 1 — Outcome Prediction**: Health classification/regression from weekly (168h) sensor embeddings (33 tasks)
+- **Track 1 — Outcome Prediction**: Health classification/regression from weekly (168h) sensor embeddings (32 tasks)
 - **Track 2 — Imputation**: Reconstructing masked daily (1440-min) sensor data across 6 masking scenarios
 - **Track 3 — Forecasting**: Time-series forecasting of hourly sensor values
 
@@ -60,7 +60,7 @@ ruff format src/
 python -c "import openmhc; openmhc.download_dataset(version='xs')"  # ~1.9 GB dev subset
 ```
 
-Ruff config: 100-char line length, Google docstrings, targets Python 3.10+. Line-length check (E501) is disabled for docstrings.
+Ruff config: 100-char line length, Google docstrings, targets Python 3.10+. The line-length check (E501) is disabled repo-wide.
 
 ## Architecture
 
@@ -81,12 +81,12 @@ src/
 ├── downstream_evaluation/    # Track 1 internals (sklearn classifiers, feature extraction)
 ├── imputation_evaluation/    # Track 2 internals (masking, metrics, W&B logging)
 ├── forecasting_evaluation/   # Track 3 internals (Chronos2, AutoARIMA, etc.)
-└── labels/                   # Label registry (33 task names, types, validity criteria)
+└── labels/                   # Label registry (32 task names, types, validity criteria)
 ```
 
 ### Hydra CLI (Track 2)
 
-Reproducible Track 2 runs are dispatched via the `mhc-impute-eval` console script (declared in `pyproject.toml`). The CLI composes YAML configs at `configs/imputation/` (repo root), validates against the dataclass schema in `src/imputation_evaluation/config.py`, builds the imputer via the registry in `src/imputation_evaluation/hydra/registry.py`, and forwards to the same `run_eval` library entry point as `openmhc.evaluate_imputation`. Public-API users never touch Hydra. See `src/imputation_evaluation/README.md` Part 1.5 for usage. Tracks 1 and 3 have their own CLI surfaces (`scripts/downstream_eval/`, `scripts/run_forecasting_eval.py`).
+Reproducible Track 2 runs are dispatched via the `mhc-impute-eval` console script (declared in `pyproject.toml`). The CLI composes YAML configs at `configs/imputation/` (repo root), validates against the dataclass schema in `src/imputation_evaluation/config.py`, builds the imputer via the registry in `src/imputation_evaluation/hydra/registry.py`, and forwards to the same `run_eval` library entry point as `openmhc.evaluate_imputation`. Public-API users never touch Hydra. See `src/imputation_evaluation/README.md` Part 1.5 for usage. Track 1 runs via `scripts/run_eval.py` (and the `mhc-downstream-eval` console script); Track 3 via the `mhc-forecast-eval` console script.
 
 ### Protocol Pattern (Critical)
 
@@ -99,7 +99,9 @@ Example: an `Imputer.impute(data, observed_mask, target_mask)` method may option
 All evaluate/download functions resolve the dataset root in this priority order:
 1. Explicit `data_dir=` argument
 2. `MHC_DATA_DIR` environment variable
-3. Default: `~/.cache/openmhc/data`
+
+If neither is provided, OpenMHC raises rather than silently falling back to a default
+location (`~/.cache/openmhc/data` is only the suggested path in that error message).
 
 ### Data Formats
 

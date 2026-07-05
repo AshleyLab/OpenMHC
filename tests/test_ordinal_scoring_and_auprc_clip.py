@@ -69,6 +69,27 @@ def test_ordinal_predictions_persisted_raw(tmp_path):
     assert len(np.unique(stored)) > 2
 
 
+def test_prepare_predictions_policy_per_task_type():
+    """The single source both ladders use to split raw output into (y_pred, y_proba)."""
+    from downstream_evaluation.evaluation.metrics import prepare_predictions
+
+    raw = np.array([-2.0, 0.2, 0.7, 3.5])
+
+    y_pred, y_proba = prepare_predictions("binary", raw)
+    assert np.array_equal(y_pred, (raw >= 0.5).astype(np.int64))
+    assert np.array_equal(y_proba, raw)
+
+    y_pred, y_proba = prepare_predictions("multiclass", np.array([0.4, 1.6, 2.2]))
+    assert np.array_equal(y_pred, np.array([0, 2, 2]))
+    assert y_pred.dtype == np.int64
+    assert np.array_equal(y_proba, np.array([0.4, 1.6, 2.2]))
+
+    for ttype in ("ordinal", "regression"):
+        y_pred, y_proba = prepare_predictions(ttype, raw)
+        assert np.array_equal(y_pred, raw) and np.array_equal(y_proba, raw)
+        assert np.issubdtype(y_pred.dtype, np.floating)
+
+
 def test_binary_auprc_not_clipped_for_score_submissions():
     """AUPRC uses raw scores; out-of-``(0, 1)`` logits are not clamped to a bound."""
     rng = np.random.default_rng(2)

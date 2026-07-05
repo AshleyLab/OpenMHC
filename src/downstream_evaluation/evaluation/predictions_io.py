@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from downstream_evaluation.evaluation.metrics import get_task_type
+from downstream_evaluation.evaluation.metrics import get_task_type, prepare_predictions
 
 # Five age bands (plus ``unknown``) — the subgroups the fairness analysis slices on.
 _AGE_GROUP_BINS: tuple[tuple[float, float, str], ...] = (
@@ -54,31 +54,15 @@ def write_task_predictions(
 ) -> None:
     """Write ``<predictions_dir>/<method>/<task>/test.parquet``.
 
-    ``y_pred`` is the evaluator's raw test output: the class-1 probability for
-    binary tasks, the point prediction otherwise. The ``y_pred`` / ``y_proba``
-    columns are derived from it so the bootstrap can read the probability (binary
-    AUPRC) and the point prediction (ordinal Spearman / regression Pearson) it needs
-    per task type. Binary ``y_pred`` is thresholded and multiclass ``y_pred`` is
-    rounded to an int class; ordinal and regression ``y_pred`` stay continuous so the
-    rank / linear metric scores the raw prediction.
+    ``y_pred`` is the evaluator's raw test output: the class-1 probability for binary
+    tasks, the point prediction otherwise. The ``y_pred`` / ``y_proba`` columns are derived
+    from it so the bootstrap can read the probability (binary AUPRC) and the point
+    prediction (ordinal Spearman / regression Pearson) it needs per task type. The
+    per-task-type policy lives in ``prepare_predictions``, shared with the live metrics.
     """
     ttype = get_task_type(task)
     y_true = np.asarray(y_true)
-    raw = np.asarray(y_pred, dtype=np.float64)
-    if ttype == "binary":
-        y_proba = raw
-        y_pred_col = (raw >= 0.5).astype(np.int64)
-    elif ttype == "ordinal":
-        # Spearman is rank-based; keep the raw prediction so rank-merged fallback
-        # scores are not collapsed to {0, 1} by an int cast.
-        y_pred_col = raw
-        y_proba = raw
-    elif ttype == "multiclass":
-        y_pred_col = np.round(raw).astype(np.int64)
-        y_proba = raw
-    else:  # regression
-        y_pred_col = raw
-        y_proba = raw
+    y_pred_col, y_proba = prepare_predictions(ttype, y_pred)
 
     df = (
         pd.DataFrame(

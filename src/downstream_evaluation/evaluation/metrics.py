@@ -94,6 +94,29 @@ def get_task_type(task_name: str) -> str:
         raise ValueError(f"Unknown label type '{label_type}' for task '{task_name}'")
 
 
+def prepare_predictions(task_type: str, raw: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Split a model's raw test output into the ``(y_pred, y_proba)`` a task type needs.
+
+    ``raw`` is the evaluator's per-user output: the positive-class probability for binary
+    tasks, the point prediction otherwise. Returns the prediction the primary metric scores
+    (``y_pred``) and the continuous score (``y_proba``):
+
+    - binary: ``y_pred`` is the 0.5-thresholded class, ``y_proba`` the probability.
+    - multiclass: ``y_pred`` is the rounded integer class.
+    - ordinal / regression: ``y_pred`` stays the continuous score, so rank-based Spearman
+      and Pearson score the raw prediction rather than a class.
+
+    Both the persisted substrate (``write_task_predictions``) and the live metrics
+    (``_metrics_for``) derive their columns here, so the two cannot diverge on this policy.
+    """
+    raw = np.asarray(raw, dtype=np.float64)
+    if task_type == "binary":
+        return (raw >= 0.5).astype(np.int64), raw
+    if task_type == "multiclass":
+        return np.round(raw).astype(np.int64), raw
+    return raw, raw
+
+
 def compute_binary_metrics(
     y_true: np.ndarray, y_prob: np.ndarray, seed: int = _BOOTSTRAP_SEED
 ) -> dict[str, float]:

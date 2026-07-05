@@ -23,6 +23,8 @@ import logging
 
 import numpy as np
 
+from downstream_evaluation.models._feature_align import raise_if_missing
+
 logger = logging.getLogger(__name__)
 
 N_SENSOR_CHANNELS = 19
@@ -51,7 +53,7 @@ def _scatter_mean(src, index, n_groups):
 class _UserDataset:
     """Torch Dataset of per-user segment groups (one item = one user)."""
 
-    def __init__(self, X, y_by_task, uids, task_names, empirical_mean=None):
+    def __init__(self, X, y_by_task, uids, task_names, empirical_mean):
         import torch
         from pypots.data.utils import _parse_delta_torch
         from pypots.imputation.locf import locf_torch
@@ -364,18 +366,29 @@ class GRUD:
         from openmhc._evaluate import _DatasetPaths
 
         paths = _DatasetPaths.from_root(self._data_dir)
+        # GRU-D always evaluates on the full-history daily lookup, matching the other daily
+        # models. It is not wired for the forward-windowed ablation, where it would train on
+        # full-history cohorts while being scored on windowed test cohorts; use a different
+        # model for that ablation.
         lookup = str(paths.root / "processed" / lookup_filename("daily", full_history=True))
         return TaskDataProvider(lookup, load_split_file(paths.splits_file), granularity="daily")
 
-    def _build_split(self, provider, split, cls_n, reg_tasks, ord_n, empirical_mean=None):
-        """Flatten the cohort's per-user segments + per-(task) labels for one split."""
+    def _build_split(self, provider, split, cls_n, reg_tasks, ord_n, empirical_mean):
+        """Flatten the cohort's per-user segments + per-(task) labels for one split.
+
+        ``empirical_mean`` is the per-channel decay target: pass ``None`` on the train
+        split to compute it from those users, and the cached train mean on validation and
+        predict so test-set statistics never influence the decay.
+        """
         labels: dict[str, dict[str, float]] = {}
         cohort: set[str] = set()
         for t in self._tasks:
             td = provider.task_data(t, split)
             labels[t] = {str(u): lab for u, lab in zip(td.user_ids, td.labels)}
             cohort.update(labels[t])
-        users = [u for u in sorted(cohort) if u in self._segments]
+        missing = [u for u in sorted(cohort) if u not in self._segments]
+        raise_if_missing(self.name, missing, "segment store")
+        users = sorted(cohort)
         Xs, uids = [], []
         y_by_task = {t: [] for t in self._tasks}
         for u in users:
@@ -446,7 +459,9 @@ class GRUD:
             sd = float(y.std()) if len(y) and y.std() > 1e-8 else 1.0
             self._reg_stats[t] = (mu, sd)
 
-        train_ds = self._build_split(provider, "train", cls_n, reg_tasks, ord_n)
+        train_ds = self._build_split(
+            provider, "train", cls_n, reg_tasks, ord_n, empirical_mean=None
+        )
         self._empirical_mean = train_ds.empirical_mean
         val_ds = self._build_split(
             provider, "validation", cls_n, reg_tasks, ord_n, empirical_mean=self._empirical_mean
@@ -465,13 +480,8 @@ class GRUD:
         """
         task = self._ctx.task
         missing = [str(u) for u in self._ctx.user_ids if str(u) not in self._segments]
-        if missing:
-            raise ValueError(
-                f"{self.name}: {len(missing)} cohort user(s) have no daily segment and would "
-                f"be silently zero-filled (e.g. {missing[:5]}); the cohort lookup and the "
-                "segment store are out of sync."
-            )
-        users = [str(u) for u in self._ctx.user_ids if str(u) in self._segments]
+        raise_if_missing(self.name, missing, "segment store")
+        users = [str(u) for u in self._ctx.user_ids]
         # one-user-per-item dataset, in user_ids order, dummy labels.
         Xs, uids = [], []
         for u in users:

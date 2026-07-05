@@ -146,6 +146,11 @@ class Method(Protocol):
     def predict(self, data: ParticipantData) -> np.ndarray:
         """Return one prediction per participant, in ``data`` order (the only required method).
 
+        Return ``NaN`` for a participant you cannot score. The harness substitutes the
+        Linear baseline for those participants rather than dropping them, and reports the
+        substituted share as the fallback rate — so a partial-coverage model is scored
+        fairly instead of penalized.
+
         The optional ``fit(data, labels, task_type)`` / ``set_context(ctx)`` hooks are
         documented in the class docstring above; the engine calls each only if defined.
         """

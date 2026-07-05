@@ -25,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+from downstream_evaluation.models._feature_align import raise_if_missing
+
 logger = logging.getLogger(__name__)
 
 N_CHANNELS = 19
@@ -293,12 +295,7 @@ class LSM2:
                 X[i] = np.mean(vecs, axis=0)
             else:
                 missing.append(str(uid))
-        if missing:
-            raise ValueError(
-                f"LSM2: {len(missing)} cohort user(s) have no cached embedding for any "
-                f"eligible day and would be silently zero-filled (e.g. {missing[:5]}); the "
-                "cohort lookup and the embedding cache are out of sync."
-            )
+        raise_if_missing("LSM2", missing, "embedding cache")
         return X
 
     def fit(self, data, labels, task_type) -> None:

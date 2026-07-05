@@ -231,6 +231,12 @@ def _compute_averaged_curves(
 
 def _impute_population_mean(matrix: np.ndarray, fit_mask: np.ndarray) -> np.ndarray:
     """Fill NaN values with the train-cohort population mean at each minute position."""
+    if not fit_mask.any():
+        raise ValueError(
+            "no training users are present in the curve cohort, so the per-minute "
+            "population mean cannot be estimated; the split file and the curve data are "
+            "out of sync."
+        )
     col_means = np.nanmean(matrix[fit_mask], axis=0)
     # If entire minute column is NaN, fill with 0
     col_means = np.where(np.isfinite(col_means), col_means, 0.0)
@@ -334,6 +340,11 @@ def _build_sparse_basis_representation(
         train_pos = list(range(len(valid_user_indices)))
     else:
         train_pos = [j for j, ui in enumerate(valid_user_indices) if fit_mask[ui]]
+    if not train_pos:
+        raise ValueError(
+            "no training user has enough observations to fit the basis-mean fallback for "
+            "insufficient-observation users; the split file and the curve data are out of sync."
+        )
     mean_coefficients = fd_valid.coefficients[train_pos].mean(axis=0, keepdims=True)
 
     # Assemble full coefficient matrix (all users, in original order)
@@ -502,7 +513,8 @@ def build_curve_analysis_features(
     variance_filter: bool = True,
     cutoff_dates: dict[str, str] | None = None,
     eligible_keys: set[tuple[str, str]] | None = None,
-    fit_user_ids: set[str] | None = None,
+    *,
+    fit_user_ids: set[str],
 ) -> pl.DataFrame:
     """Build curve analysis user-level features from Arrow files.
 
@@ -530,10 +542,10 @@ def build_curve_analysis_features(
                          has near-zero variance (flat signal = sensor malfunction).
         cutoff_dates: Optional ``{user_id: "YYYY-MM-DD"}`` per-user data cutoff.
                       Rows with ``date > cutoff_dates[user_id]`` are excluded.
-        fit_user_ids: Train-split user IDs. The cross-user preprocessing (population-mean
-                      imputation, the FPCA eigenbasis, the basis-mean fallback) is fit on
-                      these users only and applied to all, so a held-out user's features do
-                      not depend on test-split data. ``None`` fits on every user (legacy).
+        fit_user_ids: Train-split user IDs (required, non-empty). The cross-user
+                      preprocessing (population-mean imputation, the FPCA eigenbasis, the
+                      basis-mean fallback) is fit on these users only and applied to all,
+                      so a held-out user's features do not depend on test-split data.
 
     Returns:
         DataFrame with user_id + (n_components x 4 channels) FPCA score columns
@@ -545,6 +557,12 @@ def build_curve_analysis_features(
     arrow_dir = Path(arrow_dir)
     if not arrow_dir.exists():
         raise FileNotFoundError(f"Directory not found: {arrow_dir}")
+
+    if not fit_user_ids:
+        raise ValueError(
+            "build_curve_analysis_features requires a non-empty fit_user_ids (the training "
+            "split); the FPCA basis and imputation means must be fit on training users only."
+        )
 
     if splits is None:
         splits = ["train", "test", "val"]
@@ -612,13 +630,9 @@ def build_curve_analysis_features(
     print("Phase B: Assembling matrices and processing channels...")
     user_ids = curves_df["user_id"].to_list()
     n_users = len(user_ids)
-    # Cross-user preprocessing (imputation means, FPCA eigenbasis, basis-mean fallback)
-    # is fit on the train cohort only; a missing split fits on every user (legacy path).
-    fit_mask = (
-        np.ones(n_users, dtype=bool)
-        if fit_user_ids is None
-        else np.array([str(u) in fit_user_ids for u in user_ids])
-    )
+    # Cross-user preprocessing (imputation means, FPCA eigenbasis, basis-mean fallback) is
+    # fit on the train cohort only, so a held-out user's features never depend on test curves.
+    fit_mask = np.array([str(u) in fit_user_ids for u in user_ids])
     channel_matrices: dict[str, np.ndarray] = {}  # non-sparse channels (FDataGrid path)
     channel_basis: dict[str, object] = {}  # sparse channels (FDataBasis path)
 

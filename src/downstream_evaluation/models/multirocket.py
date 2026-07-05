@@ -21,6 +21,8 @@ import logging
 
 import numpy as np
 
+from downstream_evaluation.models._feature_align import aligned_feature_matrix
+
 logger = logging.getLogger(__name__)
 
 N_SENSOR_CHANNELS = 19
@@ -159,24 +161,8 @@ class MultiRocket:
         logger.info("MultiRocket pooled per-user features: %d users, dim=%d", len(self._pooled), dim)
 
     def _features(self, user_ids) -> np.ndarray:
-        """Per-user pooled features aligned to ``user_ids``.
-
-        Every cohort user must have a pooled feature: a missing one would be
-        silently zero-filled and scored as a fabricated prediction (bypassing the
-        NaN->Linear fallback), so fail loudly instead.
-        """
-        missing = [str(u) for u in user_ids if str(u) not in self._pooled]
-        if missing:
-            raise ValueError(
-                f"MultiRocket: {len(missing)} cohort user(s) lack a pooled feature and "
-                f"would be silently zero-filled (e.g. {missing[:5]}); the cohort lookup and "
-                "the segment store are out of sync."
-            )
-        dim = next(iter(self._pooled.values())).shape[0] if self._pooled else 0
-        X = np.zeros((len(user_ids), dim), dtype=np.float32)
-        for i, uid in enumerate(user_ids):
-            X[i] = self._pooled[str(uid)]
-        return X
+        """Per-user pooled features aligned to ``user_ids`` (fails loud on a missing user)."""
+        return aligned_feature_matrix("MultiRocket", user_ids, self._pooled, "segment store")
 
     def fit(self, data, labels, task_type) -> None:
         # ``data`` is unused: MultiRocket pools per user from its own self-loaded
