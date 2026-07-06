@@ -588,6 +588,77 @@ def bootstrap_skill_rank(
     return result
 
 
+def compute_point_skill_rank(
+    *,
+    models: dict[str, dict[str, str]],
+    baseline_model: str,
+    binary_groups: list[tuple[str, tuple[int, ...]]],
+    per_user_metrics: pd.DataFrame,
+    clip_lower: float = 0.01,
+    clip_upper: float = 100.0,
+    min_pairs: int = 1,
+) -> dict[str, pd.DataFrame]:
+    """Deterministic point estimate of skill and rank from the per-user substrate.
+
+    Runs the exact point flow ``bootstrap_skill_rank`` uses to anchor its BCa
+    interval (identity-draw == point): ``_compute_long_skill_scores`` +
+    ``_build_model_summary`` for skill, ``_compute_all_ranks`` for rank. The
+    returned ``point`` column is merge-ready onto the CSVs written by
+    ``build_forecasting_bootstrap_from_hf`` — skill keyed by ``(model, scope)``
+    (scope = ``<name>_score``), rank by ``(model, scope, metric)``.
+
+    Args:
+        models: ``{name: {"path": ..., "display_name": ...}}``.
+        baseline_model: skill-score denominator (key in ``models``).
+        binary_groups: ``[(group_name, channel_indices), ...]`` for rank scopes.
+        per_user_metrics: canonical substrate frame (micro/user).
+        clip_lower: lower clip on the per-task error ratio.
+        clip_upper: upper clip on the per-task error ratio.
+        min_pairs: minimum paired units required to score a task.
+
+    Returns:
+        ``{"skill_scores": df[model, scope, point],
+           "avg_rankings": df[model, scope, metric, point]}``.
+    """
+    error_df = to_error_df(per_user_metrics, user_col="unit_id")
+    rank_user_df = to_rank_user_df(per_user_metrics, binary_groups=binary_groups)
+
+    point_summary = _build_model_summary(
+        long_df=_compute_long_skill_scores(
+            error_df=error_df,
+            models=models,
+            baseline_model=baseline_model,
+            clip_lower=clip_lower,
+            clip_upper=clip_upper,
+            min_pairs=min_pairs,
+        ),
+        models=models,
+        baseline_model=baseline_model,
+    )
+    skill_point = pd.DataFrame(
+        [
+            {"model": row["model"], "scope": col, "point": float(row[col])}
+            for _, row in point_summary.iterrows()
+            for col in point_summary.columns
+            if col.endswith("_score") and pd.notna(row[col])
+        ]
+    )
+    point_ranks = _compute_all_ranks(user_metric_df=rank_user_df)
+    rank_point = pd.DataFrame(
+        [
+            {
+                "model": row["model"],
+                "scope": row["scope"],
+                "metric": row["metric"],
+                "point": float(row["rank"]),
+            }
+            for _, row in point_ranks.iterrows()
+            if pd.notna(row["rank"])
+        ]
+    )
+    return {"skill_scores": skill_point, "avg_rankings": rank_point}
+
+
 def _summary_table(records: list[dict], key_cols: list[str], ci_level: float) -> pd.DataFrame:
     """Reduce per-draw value records to one summarised row per key tuple."""
     out_cols = key_cols + ["mean", "se", "ci_lo", "ci_hi", "n_boot"]
