@@ -135,7 +135,7 @@ at `configs/downstream/`:
 
 ```bash
 mhc-downstream-eval method=xgboost
-mhc-downstream-eval --multirun method=linear,mae,xgboost
+mhc-downstream-eval --multirun method=linear,lsm2,xgboost
 ```
 
 The full Track-1 guide (data contract, baselines, CLI, paper reproduction) is in

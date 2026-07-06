@@ -260,15 +260,40 @@ class WBM:
         self._dim = int(emb.shape[1])
         logger.info("WBM embeddings ready: %d segments, dim=%d", len(emb), self._dim)
 
-    def encode_cohort(self, task: str, td) -> np.ndarray:
-        """Per-user mean-pool of the WBM embeddings over each user's eligible weeks."""
+    def encode_cohort(self, task: str, td) -> tuple[np.ndarray, np.ndarray]:
+        """Per-user mean-pool of the WBM embeddings over each user's eligible weeks.
+
+        ``td`` is the weekly cohort. Returns the pooled embeddings for the users that have
+        at least one weekly embedding, together with a boolean mask (over ``td.user_ids``)
+        marking which users those are. A weekly-cohort user with no embedding for any
+        eligible week is left out; the caller leaves that user's prediction unset so the
+        harness scores it with the Linear baseline — the same path taken by daily users
+        without any weekly embedding.
+        """
         self._ensure_embeddings()
-        X = np.zeros((len(td.user_ids), self._dim), dtype=np.float32)
+        rows = []
+        kept = np.zeros(len(td.user_ids), dtype=bool)
+        missing = []
         for i, (uid, weeks) in enumerate(zip(td.user_ids, td.dates)):
             vecs = [self._by_key[k] for w in weeks if (k := (str(uid), str(w))) in self._by_key]
             if vecs:
-                X[i] = np.mean(vecs, axis=0)
-        return X
+                rows.append(np.mean(vecs, axis=0))
+                kept[i] = True
+            else:
+                missing.append(str(uid))
+        if missing:
+            logger.warning(
+                "WBM: %d weekly-cohort user(s) have no embedding for any eligible week and "
+                "will be scored with the Linear fallback (e.g. %s); check the weekly lookup "
+                "and the embedding cache if this count is unexpected.",
+                len(missing), missing[:5],
+            )
+        X = (
+            np.asarray(rows, dtype=np.float32)
+            if rows
+            else np.zeros((0, self._dim), dtype=np.float32)
+        )
+        return X, kept
 
 
 class WBMProbe:
@@ -356,16 +381,25 @@ class WBMProbe:
         import openmhc
 
         wtd = self._weekly_td(self._ctx.task, "train")
-        X = self._wbm.encode_cohort(self._ctx.task, wtd)
-        self._probe = openmhc.LinearProbe(task_type, seed=self.seed).fit(X, wtd.labels)
+        X, kept = self._wbm.encode_cohort(self._ctx.task, wtd)
+        if not kept.any():
+            raise ValueError(
+                f"WBM: no training user in the weekly cohort for task {self._ctx.task!r} has "
+                "an embedding, so the probe cannot be fit; check the weekly lookup and the "
+                "embedding cache."
+            )
+        y = np.asarray(wtd.labels)[kept]
+        self._probe = openmhc.LinearProbe(task_type, seed=self.seed).fit(X, y)
 
     def predict(self, data) -> np.ndarray:
         """Per-user SSL-probe predictions aligned to the daily cohort; NaN for users
         without a weekly embedding (the harness substitutes the Linear baseline)."""
         daily_users = [str(u) for u in self._ctx.user_ids]
         wtd = self._weekly_td(self._ctx.task, self._ctx.split)
-        preds = self._probe.predict(self._wbm.encode_cohort(self._ctx.task, wtd))
-        by_user = dict(zip((str(u) for u in wtd.user_ids), preds))
+        X, kept = self._wbm.encode_cohort(self._ctx.task, wtd)
+        preds = self._probe.predict(X)
+        kept_uids = [str(u) for u, k in zip(wtd.user_ids, kept) if k]
+        by_user = dict(zip(kept_uids, preds))
         out = np.full(len(daily_users), np.nan, dtype=np.float64)
         for i, u in enumerate(daily_users):
             if u in by_user:

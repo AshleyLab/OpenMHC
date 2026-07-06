@@ -18,6 +18,7 @@ from downstream_evaluation.evaluation.metrics import (
     compute_ordinal_metrics,
     compute_regression_metrics,
     get_task_type,
+    prepare_predictions,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,17 +26,17 @@ logger = logging.getLogger(__name__)
 
 def _metrics_for(task: str, y_true, y_pred, seed: int = 42) -> dict[str, float]:
     ttype = get_task_type(task)
+    # Binary AUPRC reads the probability; multiclass accuracy the rounded class; ordinal
+    # Spearman and regression Pearson the continuous score. prepare_predictions is the one
+    # place that policy lives, shared with the persisted substrate.
+    y_pred_col, y_proba = prepare_predictions(ttype, y_pred)
     if ttype == "binary":
-        return compute_binary_metrics(y_true, y_pred, seed=seed)
-    # multiclass/ordinal scores discrete class predictions. The uniform ordinal probe
-    # already predicts ints; an end-to-end method may hand back raw floats (e.g. the
-    # hybrid's rank-combined scores, GRU-D's ordinal expected level), so round to int
-    # before scoring (a no-op when predictions are already discrete).
+        return compute_binary_metrics(y_true, y_proba, seed=seed)
     if ttype == "multiclass":
-        return compute_multiclass_metrics(y_true, np.round(y_pred).astype(int), seed=seed)
+        return compute_multiclass_metrics(y_true, y_pred_col, seed=seed)
     if ttype == "ordinal":
-        return compute_ordinal_metrics(y_true, np.round(y_pred).astype(int), seed=seed)
-    return compute_regression_metrics(y_true, y_pred, seed=seed)
+        return compute_ordinal_metrics(y_true, y_pred_col, seed=seed)
+    return compute_regression_metrics(y_true, y_pred_col, seed=seed)
 
 
 def _combine_with_fallback(y_pred, fb, ttype: str):
@@ -218,52 +219,42 @@ class DownstreamEvaluator:
         non_finite = ~np.isfinite(y_pred)
         n_fallback = 0
         if non_finite.any():
-            y_pred, n_fallback = self._apply_fallback(
-                task, ttype, y_pred, train_td, test_td, train_data, test_data, spec
-            )
+            y_pred, n_fallback = self._apply_fallback(task, ttype, y_pred, train_td, test_td)
         return test_td.labels, y_pred, n_fallback
 
-    def _apply_fallback(self, task, ttype, y_pred, train_td, test_td, train_data, test_data, spec):
+    def _fallback_loader(self, spec):
+        """The DataLoader that feeds the Linear baseline its daily segments (built once)."""
+        if getattr(self, "_fb_loader", None) is None:
+            from downstream_evaluation.data.loader import DataLoader
+
+            self._fb_loader = DataLoader(
+                self.data_dir, granularity="daily", resolution=spec.loader_resolution
+            )
+        return self._fb_loader
+
+    def _apply_fallback(self, task, ttype, y_pred, train_td, test_td):
         """Substitute the Linear baseline for non-finite per-user predictions.
 
-        Reproduces the routing the WBM model used to do internally before #38:
-        participants the model could predict keep its output; participants it
-        left non-finite are scored with a Linear baseline fit on the train
-        cohort. For ranking metrics (binary / ordinal) each cohort is
-        percentile-ranked to ``[0, 1]`` independently before merging, so the two
-        independently-fit predictors sit on a common scale; regression merges
-        raw (Pearson r is scale-invariant). Returns ``(y_pred, n_substituted)``.
+        Participants the model could predict keep its output; participants it left
+        non-finite are scored with a Linear baseline fit on the train cohort. For ranking
+        metrics (binary / ordinal) each cohort is percentile-ranked to ``[0, 1]``
+        independently before merging, so the two independently-fit predictors sit on a
+        common scale; regression merges raw (Pearson r is scale-invariant). Returns
+        ``(y_pred, n_substituted)``.
 
-        Only the legacy daily-segment path supplies the ``(n, 24, 38)`` arrays
-        the Linear baseline needs, which is the path WBM uses; a ``data_spec``
-        model that emits non-finite predictions is an unsupported combination.
+        The baseline builds its own daily segments from the data root, so the fallback
+        applies to any model — cache-backed, streaming, or predict-only — not only models
+        that hand the harness raw segments.
         """
-        if spec is not None:
-            raise NotImplementedError(
-                f"Missing-prediction fallback for task {task!r} requires the legacy "
-                "daily-segment path, but the model declares a data_spec. Only the "
-                "WBM (daily) model currently exercises the fallback."
-            )
-        if train_data is None:
-            raise NotImplementedError(
-                f"Missing-prediction fallback for task {task!r} needs train segments to "
-                "fit the Linear baseline, but the model omitted fit()."
-            )
-        from openmhc._protocols import EvalContext
-
         from downstream_evaluation.models.linear import Linear
 
         fb_model = Linear(data_dir=self.data_dir, seed=self.seed)
-        fb_model.set_context(
-            EvalContext(
-                task=task, split=train_td.split, user_ids=train_td.user_ids, dates=train_td.dates
-            )
-        )
-        fb_model.fit(train_data, train_td.labels, ttype)
-        fb_model.set_context(
-            EvalContext(
-                task=task, split=test_td.split, user_ids=test_td.user_ids, dates=test_td.dates
-            )
-        )
-        fb = np.asarray(fb_model.predict(test_data), dtype=np.float64)
+        spec = fb_model.data_spec
+        loader = self._fallback_loader(spec)
+        fb_train = _spec_inputs(loader, spec, train_td, ttype, streaming=False, with_labels=True)
+        fb_test = _spec_inputs(loader, spec, test_td, ttype, streaming=False, with_labels=False)
+        _set_context(fb_model, train_td)
+        fb_model.fit(fb_train, train_td.labels, ttype)
+        _set_context(fb_model, test_td)
+        fb = np.asarray(fb_model.predict(fb_test), dtype=np.float64)
         return _combine_with_fallback(y_pred, fb, ttype)

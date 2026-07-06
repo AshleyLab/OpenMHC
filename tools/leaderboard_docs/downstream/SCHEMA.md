@@ -49,7 +49,7 @@ compression.
 | `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (age bucket, sex value, or `unknown`) |
 | `user_id` | string (dict) | participant id from the canonical split |
 | `y_true` | float32 | ground-truth label for this `(task, user)` |
-| `y_pred` | float32 | the model's discrete prediction (class for binary/ordinal/multiclass; point value for regression) |
+| `y_pred` | float32 | the model's prediction, by task type: a thresholded class for binary, a rounded class for multiclass, and the continuous score for ordinal and regression (ordinal is scored with rank-based Spearman, so the raw score is kept rather than rounded to a class) |
 | `y_proba` | float32 | the model's continuous score — class-1 probability for binary, point prediction otherwise (the column the ranking/correlation metrics read) |
 
 ### Value semantics

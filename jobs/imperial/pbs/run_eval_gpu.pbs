@@ -28,7 +28,7 @@ echo "=== downstream eval (PBS/GPU): METHOD=${METHOD:-mae} ==="
 echo "Node: $(hostname) | Job: ${PBS_JOBID:-local} | PWD: $(pwd) | Date: $(date)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
-source "$HOME/miniforge3/bin/activate" py310
+source "$HOME/miniforge3/bin/activate" "${CONDA_ENV:-openmhc}"
 python -V
 
 export PYTHONNOUSERSITE=1

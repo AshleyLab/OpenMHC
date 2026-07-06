@@ -32,6 +32,8 @@ from urllib.parse import quote
 
 import numpy as np
 
+from downstream_evaluation.models._feature_align import aligned_feature_matrix
+
 logger = logging.getLogger(__name__)
 
 HOURS_PER_DAY = 24
@@ -453,16 +455,13 @@ class TSFMEncoder:
         return out
 
     def _encode(self, task: str, split: str, user_ids) -> np.ndarray:
-        """Per-user channel-pooled TSFM embedding, aligned to ``user_ids``."""
+        """Per-user channel-pooled TSFM embedding aligned to ``user_ids``.
+
+        Fails loud on a cohort user with no cached feature.
+        """
         self._ensure_split(split)
         by_user = self._load_task(split, task)
-        dim = len(next(iter(by_user.values()))) if by_user else 0
-        X = np.zeros((len(user_ids), dim), dtype=np.float32)
-        for i, uid in enumerate(user_ids):
-            vec = by_user.get(str(uid))
-            if vec is not None:
-                X[i] = vec
-        return X
+        return aligned_feature_matrix(self.name, user_ids, by_user, "feature cache")
 
     def fit(self, data, labels, task_type) -> None:
         # ``data`` is unused: TSFM self-serves its build-on-miss embedding cache,

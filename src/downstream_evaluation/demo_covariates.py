@@ -73,15 +73,26 @@ def build_demo_user_lookup_from_labels_df(
 ) -> dict[str, np.ndarray]:
     """Build ``{user_id: np.array([cov, ...])}`` from the labels lookup.
 
-    Takes the first non-sentinel value per user, fills missing with 0.0. The
-    labels lookup carries the demographic columns (``age``/``BiologicalSex``/
-    ``BMI_values``), so no separate data source is needed.
+    Takes the first value per user, with sentinels treated as missing. A user missing a
+    covariate is imputed with 0.0 and the per-covariate count is logged, since 0.0 is out
+    of distribution for age/BMI and collides with an encoded sex category. The labels
+    lookup carries the demographic columns (``age``/``BiologicalSex``/``BMI_values``), so
+    no separate data source is needed.
     """
     _demo_df = labels_df[["user_id"] + demo_covariates].copy()
     for c in demo_covariates:
         sentinel = -1.0 if _demo_df[c].dtype in (np.float64, np.float32) else -1
         _demo_df.loc[_demo_df[c] == sentinel, c] = np.nan
-    _user_demo = _demo_df.groupby("user_id")[demo_covariates].first().fillna(0.0)
+    _user_demo = _demo_df.groupby("user_id")[demo_covariates].first()
+    n_missing = _user_demo.isna().sum()
+    if int(n_missing.sum()) > 0:
+        per_cov = ", ".join(f"{c}={int(n_missing[c])}" for c in demo_covariates if n_missing[c])
+        log.warning(
+            "demographic covariates imputed with 0.0 for users missing a value (%s of %d "
+            "users); 0.0 is out of distribution for age/BMI — treat these as imputed.",
+            per_cov, len(_user_demo),
+        )
+    _user_demo = _user_demo.fillna(0.0)
     return {uid: row.values.astype(np.float32) for uid, row in _user_demo.iterrows()}
 
 
@@ -108,20 +119,23 @@ def apply_demographics(
 ) -> np.ndarray:
     """Append the non-excluded demographic covariates to feature matrix ``X``.
 
-    Covariates matching ``task_name`` (self) or listed in ``DEMO_ALIAS`` are
-    excluded to prevent label leakage. Returns ``X`` unchanged when no lookup
-    or covariate list is provided, or when all covariates are excluded.
+    Covariates matching ``task_name`` (self) or listed in ``DEMO_ALIAS`` are excluded to
+    prevent label leakage. Returns ``X`` unchanged when no lookup or covariate list is
+    provided, or when all covariates are excluded. A cohort user absent from the lookup
+    fails loud rather than being appended a fabricated all-zero demographic row.
     """
     if demo_user_lookup is None or not demo_covariates:
         return X
     cov_indices = _kept_cov_indices(task_name, demo_covariates)
     if not cov_indices:
         return X
+    from downstream_evaluation.models._feature_align import raise_if_missing
+
+    missing = [uid for uid in uids if demo_user_lookup.get(uid) is None]
+    raise_if_missing("Linear demographics", missing, "demographics lookup")
     demo_matrix = np.zeros((len(uids), len(cov_indices)), dtype=np.float32)
     for row_idx, uid in enumerate(uids):
-        vec = demo_user_lookup.get(uid)
-        if vec is not None:
-            demo_matrix[row_idx] = vec[cov_indices]
+        demo_matrix[row_idx] = demo_user_lookup[uid][cov_indices]
     return np.hstack([X, demo_matrix])
 
 

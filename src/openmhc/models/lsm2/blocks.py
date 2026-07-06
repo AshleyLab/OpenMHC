@@ -100,9 +100,12 @@ class MultiHeadAttention(nn.Module):
 
         Args:
             x: Input tensor of shape (B, N, C)
-            attn_mask: Optional attention mask. Can be:
-                - (B, N) where True/1 is "keep" and False/0 is "mask"
-                - (B, 1, 1, N) additive mask with -inf for masked positions
+            attn_mask: Optional additive attention mask, added to the attention logits
+                (``0`` keeps a key, ``-inf`` masks it). Either:
+                - (B, N): a per-key bias broadcast across queries and heads
+                - (B, 1, 1, N): the same bias in SDPA's 4-D broadcast shape
+                A 0/1 boolean "keep" array is NOT a mask here — it would be added as a small
+                logit bias, not applied as masking.
             rope_fn: Optional callable (q, k) -> (q_rot, k_rot) for rotary pos emb.
 
         Returns:

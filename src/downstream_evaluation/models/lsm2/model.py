@@ -25,6 +25,8 @@ from pathlib import Path
 
 import numpy as np
 
+from downstream_evaluation.models._feature_align import raise_if_missing
+
 logger = logging.getLogger(__name__)
 
 N_CHANNELS = 19
@@ -278,13 +280,22 @@ class LSM2:
         logger.info("LSM2 embeddings ready: %d day-embeddings, dim=%d", len(emb), self._dim)
 
     def _encode(self, user_ids, dates) -> np.ndarray:
-        """Per-user mean-pool of the cached LSM2 day-embeddings over each user's eligible days."""
+        """Per-user mean-pool of the cached LSM2 day-embeddings over each user's eligible days.
+
+        A cohort user with no cached embedding for any eligible day would be
+        silently zero-filled and scored as a fabricated prediction (bypassing the
+        NaN->Linear fallback), so fail loudly instead.
+        """
         self._ensure_embeddings()
         X = np.zeros((len(user_ids), self._dim), dtype=np.float32)
+        missing = []
         for i, (uid, ds) in enumerate(zip(user_ids, dates)):
             vecs = [self._by_key[k] for d in ds if (k := (str(uid), str(d)[:10])) in self._by_key]
             if vecs:
                 X[i] = np.mean(vecs, axis=0)
+            else:
+                missing.append(str(uid))
+        raise_if_missing("LSM2", missing, "embedding cache")
         return X
 
     def fit(self, data, labels, task_type) -> None:

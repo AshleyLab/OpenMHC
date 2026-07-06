@@ -23,6 +23,8 @@ import logging
 
 import numpy as np
 
+from downstream_evaluation.models._feature_align import raise_if_missing
+
 logger = logging.getLogger(__name__)
 
 N_SENSOR_CHANNELS = 19
@@ -51,7 +53,7 @@ def _scatter_mean(src, index, n_groups):
 class _UserDataset:
     """Torch Dataset of per-user segment groups (one item = one user)."""
 
-    def __init__(self, X, y_by_task, uids, task_names):
+    def __init__(self, X, y_by_task, uids, task_names, empirical_mean):
         import torch
         from pypots.data.utils import _parse_delta_torch
         from pypots.imputation.locf import locf_torch
@@ -63,11 +65,18 @@ class _UserDataset:
         self.values = torch.nan_to_num(X_t, nan=0.0)
         self.deltas = _parse_delta_torch(self.missing_mask)
         obs = self.missing_mask
-        self.empirical_mean = torch.nan_to_num(
-            (self.values * obs).reshape(-1, X.shape[2]).sum(0)
-            / obs.reshape(-1, X.shape[2]).sum(0),
-            nan=0.0,
-        )
+        # GRU-D decays long-missing channels toward this per-channel mean — a fitted
+        # statistic, so it must come from the train cohort only. Validation and predict
+        # pass the cached train mean rather than recomputing it on their own (test)
+        # cohort, which would leak test-set statistics into every prediction.
+        if empirical_mean is not None:
+            self.empirical_mean = empirical_mean
+        else:
+            self.empirical_mean = torch.nan_to_num(
+                (self.values * obs).reshape(-1, X.shape[2]).sum(0)
+                / obs.reshape(-1, X.shape[2]).sum(0),
+                nan=0.0,
+            )
         # group segment indices by user (preserve first-seen order)
         order, seen = [], {}
         for i, u in enumerate(uids):
@@ -322,6 +331,7 @@ class GRUD:
         self.seed = seed
         self._trainer = None
         self._segments = None  # {uid: (n_segs, 24, 19)} with NaN at missing
+        self._empirical_mean = None  # train-cohort GRU-D decay target, cached on fit
         self._task_types: dict[str, str] = {}
         self._reg_stats: dict[str, tuple[float, float]] = {}  # task -> (mean, std)
         self._ctx = None  # EvalContext (active task + cohort user_ids), injected per call
@@ -351,23 +361,34 @@ class GRUD:
         self._segments = {u: values[np.asarray(idx)] for u, idx in by_user.items()}
 
     def _provider(self):
-        from downstream_evaluation.data.provider import LOOKUP_BY_GRANULARITY, TaskDataProvider
+        from downstream_evaluation.data.provider import TaskDataProvider, lookup_filename
         from downstream_evaluation.data.splits import load_split_file
         from openmhc._evaluate import _DatasetPaths
 
         paths = _DatasetPaths.from_root(self._data_dir)
-        lookup = str(paths.root / "processed" / LOOKUP_BY_GRANULARITY["daily"])
+        # GRU-D always evaluates on the full-history daily lookup, matching the other daily
+        # models. It is not wired for the forward-windowed ablation, where it would train on
+        # full-history cohorts while being scored on windowed test cohorts; use a different
+        # model for that ablation.
+        lookup = str(paths.root / "processed" / lookup_filename("daily", full_history=True))
         return TaskDataProvider(lookup, load_split_file(paths.splits_file), granularity="daily")
 
-    def _build_split(self, provider, split, cls_n, reg_tasks, ord_n):
-        """Flatten the cohort's per-user segments + per-(task) labels for one split."""
+    def _build_split(self, provider, split, cls_n, reg_tasks, ord_n, empirical_mean):
+        """Flatten the cohort's per-user segments + per-(task) labels for one split.
+
+        ``empirical_mean`` is the per-channel decay target: pass ``None`` on the train
+        split to compute it from those users, and the cached train mean on validation and
+        predict so test-set statistics never influence the decay.
+        """
         labels: dict[str, dict[str, float]] = {}
         cohort: set[str] = set()
         for t in self._tasks:
             td = provider.task_data(t, split)
             labels[t] = {str(u): lab for u, lab in zip(td.user_ids, td.labels)}
             cohort.update(labels[t])
-        users = [u for u in sorted(cohort) if u in self._segments]
+        missing = [u for u in sorted(cohort) if u not in self._segments]
+        raise_if_missing(self.name, missing, "segment store")
+        users = sorted(cohort)
         Xs, uids = [], []
         y_by_task = {t: [] for t in self._tasks}
         for u in users:
@@ -386,7 +407,9 @@ class GRUD:
                     y_by_task[t].extend([int(val)] * len(segs))
         X = np.concatenate(Xs, axis=0)
         y_by_task = {t: np.asarray(v) for t, v in y_by_task.items()}
-        return _UserDataset(X, y_by_task, np.asarray(uids, dtype=object), self._tasks)
+        return _UserDataset(
+            X, y_by_task, np.asarray(uids, dtype=object), self._tasks, empirical_mean=empirical_mean
+        )
 
     def fit(self, data, labels, task_type) -> None:
         """Train the shared multi-task model once on the first call.
@@ -436,17 +459,29 @@ class GRUD:
             sd = float(y.std()) if len(y) and y.std() > 1e-8 else 1.0
             self._reg_stats[t] = (mu, sd)
 
-        train_ds = self._build_split(provider, "train", cls_n, reg_tasks, ord_n)
-        val_ds = self._build_split(provider, "validation", cls_n, reg_tasks, ord_n)
+        train_ds = self._build_split(
+            provider, "train", cls_n, reg_tasks, ord_n, empirical_mean=None
+        )
+        self._empirical_mean = train_ds.empirical_mean
+        val_ds = self._build_split(
+            provider, "validation", cls_n, reg_tasks, ord_n, empirical_mean=self._empirical_mean
+        )
         device = "cuda" if torch.cuda.is_available() else "cpu"
         logger.info("GRU-D training: %d train users, device=%s", len(train_ds), device)
         self._trainer = _Trainer(cls_n, reg_tasks, ord_n, device, seed=self.seed)
         self._trainer.fit(train_ds, val_ds, n_steps=24, n_features=N_SENSOR_CHANNELS)
 
     def predict(self, data) -> np.ndarray:
-        """Per-user predictions for the active task, aligned to the cohort ``user_ids``."""
+        """Per-user predictions for the active task, aligned to the cohort ``user_ids``.
+
+        Every cohort user must have a daily segment: a missing one would be silently
+        predicted as 0.0 and scored as a fabricated prediction (bypassing the
+        NaN->Linear fallback), so fail loudly instead.
+        """
         task = self._ctx.task
-        users = [str(u) for u in self._ctx.user_ids if str(u) in self._segments]
+        missing = [str(u) for u in self._ctx.user_ids if str(u) not in self._segments]
+        raise_if_missing(self.name, missing, "segment store")
+        users = [str(u) for u in self._ctx.user_ids]
         # one-user-per-item dataset, in user_ids order, dummy labels.
         Xs, uids = [], []
         for u in users:
@@ -460,11 +495,12 @@ class GRUD:
             for t in self._tasks
         }
         ds = _UserDataset(
-            np.concatenate(Xs, axis=0), dummy, np.asarray(uids, dtype=object), self._tasks
+            np.concatenate(Xs, axis=0), dummy, np.asarray(uids, dtype=object), self._tasks,
+            empirical_mean=self._empirical_mean,
         )
         preds = self._trainer.predict(ds, task, self._task_types[task])
         if self._task_types[task] == "regression" and task in self._reg_stats:
             mu, sd = self._reg_stats[task]
             preds = preds * sd + mu  # reverse the train-split z-score
         pred_by_user = dict(zip(ds.user_ids, preds))
-        return np.array([pred_by_user.get(str(u), 0.0) for u in self._ctx.user_ids], dtype=np.float64)
+        return np.array([pred_by_user[str(u)] for u in self._ctx.user_ids], dtype=np.float64)
