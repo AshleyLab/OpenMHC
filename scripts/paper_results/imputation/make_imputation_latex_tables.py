@@ -340,13 +340,16 @@ def _cache_is_valid(cache_dir: Path) -> bool:
     return all((cache_dir / name).is_file() for name in REDUCED_CSVS)
 
 
-def _attach_point(boot, point, *, reference: str = "locf"):
+def _attach_point(boot, point, *, reference: str):
     """Left-merge the deterministic ``point`` onto a bootstrap summary table.
 
     Merges on ``(method, scope)``. Fails loudly if any non-reference bootstrap cell
     lacks a matching point (a scope-vocabulary drift between the deterministic and
     bootstrap reducers). The reference method (LOCF) is exempt: it has no skill point
     (skill vs self is 0 by construction) and renders as ``$0.0$``.
+
+    ``reference`` is required (not defaulted) so a caller with a different baseline
+    can never silently mis-exempt the wrong method.
     """
     merged = boot.merge(point, on=["method", "scope"], how="left")
     gap = merged[
@@ -359,6 +362,38 @@ def _attach_point(boot, point, *, reference: str = "locf"):
             f"(scope drift between reducers). Examples: {examples}"
         )
     return merged
+
+
+def attach_skill_rank_point(tables, per_user_df, *, baseline):
+    """Attach the deterministic ``point`` column to the skill / rank bootstrap tables.
+
+    Shared by the main and skill-by-scenario table generators. The point is computed
+    by :func:`compute_point_skill_rank` over:
+
+    * the **test** split only — matching the bootstrap draws and the fairness point;
+    * the **same method pool** as the draws — average rank is a cross-method
+      statistic, so an extra method in the per-method substrate (e.g. the dense
+      ``lsm2_weekly`` absent from the main table's draws) would shift every rank.
+
+    Returns ``(skill_scores, avg_rankings)``, each with a ``point`` column
+    left-merged on via :func:`_attach_point`.
+    """
+    from imputation_evaluation.evaluation.bootstrap_skill_rank import (
+        compute_point_skill_rank,
+    )
+
+    draw_methods = set(tables["avg_rankings"]["method"].astype(str)) | set(
+        tables["skill_scores"]["method"].astype(str)
+    )
+    pu_all = per_user_df[
+        (per_user_df["subgroup_attr"] == "all")
+        & (per_user_df["split"] == "test")
+        & (per_user_df["method"].astype(str).isin(draw_methods))
+    ].rename(columns={"E_per_user": "E"})
+    point = compute_point_skill_rank(pu_all, baseline_method=baseline)
+    skill = _attach_point(tables["skill_scores"], point["skill_scores"], reference=baseline)
+    rank = _attach_point(tables["avg_rankings"], point["avg_rankings"], reference=baseline)
+    return skill, rank
 
 
 def _build_reduced_csvs(
@@ -377,7 +412,6 @@ def _build_reduced_csvs(
 
     from imputation_evaluation.evaluation.bootstrap_skill_rank import (
         aggregate_skill_rank_fairness,
-        compute_point_skill_rank,
         read_draws_parquet,
     )
 
@@ -436,24 +470,13 @@ def _build_reduced_csvs(
         per_user_df=per_user_df,
     )
 
-    # Deterministic point estimate for skill / rank (the reported center), from the
-    # same leaderboard reducers on the unresampled ``subgroup_attr == "all"`` cohort.
-    # Attached as a ``point`` column alongside the bootstrap percentile CI.
-    # CRITICAL: average rank is a cross-method statistic, so the point must be
-    # computed over the SAME method pool as the bootstrap draws. The per-method
-    # substrate on HF may carry extra methods (e.g. the dense ``lsm2_weekly``) that
-    # are absent from this table's draws; including them would shift every rank.
+    # Deterministic point estimate for skill / rank (the reported center), attached
+    # as a ``point`` column alongside the bootstrap percentile CI. See
+    # ``attach_skill_rank_point`` for the test-split + method-pool invariants.
     logger.info("Computing deterministic skill / rank point estimates …")
-    draw_methods = set(tables["avg_rankings"]["method"].astype(str)) | set(
-        tables["skill_scores"]["method"].astype(str)
+    tables["skill_scores"], tables["avg_rankings"] = attach_skill_rank_point(
+        tables, per_user_df, baseline="locf"
     )
-    pu_all = per_user_df[
-        (per_user_df["subgroup_attr"] == "all")
-        & (per_user_df["method"].astype(str).isin(draw_methods))
-    ].rename(columns={"E_per_user": "E"})
-    point = compute_point_skill_rank(pu_all, baseline_method="locf")
-    tables["skill_scores"] = _attach_point(tables["skill_scores"], point["skill_scores"])
-    tables["avg_rankings"] = _attach_point(tables["avg_rankings"], point["avg_rankings"])
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     tables["skill_scores"].to_csv(

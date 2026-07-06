@@ -991,7 +991,7 @@ def compute_per_task_paired_R(
 def compute_point_skill_rank(
     per_user_all: pd.DataFrame,
     *,
-    baseline_method: str = BASELINE_CONTINUOUS,
+    baseline_method: str,
     clip_lower: float = SKILL_CLIP_LOWER,
     clip_upper: float = SKILL_CLIP_UPPER,
 ) -> dict[str, pd.DataFrame]:
@@ -1010,9 +1010,10 @@ def compute_point_skill_rank(
             ``[method, scenario, channel, channel_type, user_id, E]`` — one row per
             (method, task, user). The value column must be named ``E`` (rename
             ``E_per_user`` upstream).
-        baseline_method: paired denominator for the skill ratio (default
-            :data:`BASELINE_CONTINUOUS` = ``"locf"``). The baseline appears in the
-            rank output but not the skill output (skill vs self is 0 by construction).
+        baseline_method: paired denominator for the skill ratio (required; the
+            Track-2 leaderboard baseline is :data:`BASELINE_CONTINUOUS` = ``"locf"``).
+            The baseline appears in the rank output but not the skill output
+            (skill vs self is 0 by construction).
         clip_lower: lower clip on the per-task ratio.
         clip_upper: upper clip on the per-task ratio.
 

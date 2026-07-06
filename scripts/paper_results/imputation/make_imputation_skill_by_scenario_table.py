@@ -11,15 +11,15 @@ substrate parquets — so all rows are ranked within one consistent 17-method po
 Columns: Aggregate Skill Score $S$, Average Rank $R$, Fairness Skill Score
 $S_{\\text{fair}}$ (the **disparity-ratio** score used by the main table — the
 deprecated $S-\\lambda\\bar D$ score and its $\\bar D$ column are dropped), and
-per-scenario Skill Scores for the six masking scenarios. Values are bootstrap
-mean $\\pm$ SE ($B{=}1000$); $S_{\\text{fair}}$ is the deterministic point
-estimate $\\pm$ bootstrap SE.
+per-scenario Skill Scores for the six masking scenarios. Values are deterministic
+point estimates on the held-out test split; sub/superscripts give the $95\\%$
+bootstrap confidence interval ($B{=}1000$): the percentile interval for every
+column except $S_{\\text{fair}}$, which uses the BCa interval.
 
 Reductions are the canonical ones (``aggregate_skill_rank_fairness`` for
 skill/rank, ``compute_fairness_skill_scores`` for the disparity-ratio fairness),
 identical to ``make_imputation_latex_tables.py`` but over the dense-weekly
-superset and with ``bca=False`` (the table renders $\\pm$SE, so the BCa jackknife
-is unnecessary).
+superset.
 
 Usage:
     python scripts/paper_results/imputation/make_imputation_skill_by_scenario_table.py \
@@ -127,7 +127,6 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
 
     from imputation_evaluation.evaluation.bootstrap_skill_rank import (
         aggregate_skill_rank_fairness,
-        compute_point_skill_rank,
         read_draws_parquet,
     )
 
@@ -137,7 +136,7 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
         SENSITIVE_ATTRS,
         compute_fairness_skill_scores,
     )
-    from make_imputation_latex_tables import _attach_point  # noqa: E402
+    from make_imputation_latex_tables import attach_skill_rank_point  # noqa: E402
 
     draws_path = hf_hub_download(
         repo_id=repo_id, filename=DRAWS_PATH, repo_type="dataset", revision=revision
@@ -157,21 +156,10 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
     ]
     per_user_df = pd.concat(per_method, ignore_index=True)
 
-    # Deterministic point (the reported center) for skill / rank, from the same
-    # leaderboard reducers on the unresampled all/all cohort; percentile CI comes
-    # from the bootstrap summary.
-    # Average rank is cross-method: compute the point over the same method pool as
-    # the bootstrap draws (restrict the substrate to those methods).
-    draw_methods = set(tables["avg_rankings"]["method"].astype(str)) | set(
-        tables["skill_scores"]["method"].astype(str)
-    )
-    pu_all = per_user_df[
-        (per_user_df["subgroup_attr"] == "all")
-        & (per_user_df["method"].astype(str).isin(draw_methods))
-    ].rename(columns={"E_per_user": "E"})
-    point = compute_point_skill_rank(pu_all, baseline_method=REFERENCE)
-    skill_tbl = _attach_point(tables["skill_scores"], point["skill_scores"])
-    rank_tbl = _attach_point(tables["avg_rankings"], point["avg_rankings"])
+    # Deterministic point (the reported center) for skill / rank; percentile CI
+    # comes from the bootstrap summary. See ``attach_skill_rank_point`` for the
+    # test-split + cross-method pool invariants.
+    skill_tbl, rank_tbl = attach_skill_rank_point(tables, per_user_df, baseline=REFERENCE)
 
     # Fairness: deterministic point + BCa interval (matches the main table). The
     # BCa jackknife needs the per-user substrate.
