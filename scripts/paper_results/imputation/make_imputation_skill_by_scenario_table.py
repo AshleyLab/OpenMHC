@@ -11,15 +11,15 @@ substrate parquets — so all rows are ranked within one consistent 17-method po
 Columns: Aggregate Skill Score $S$, Average Rank $R$, Fairness Skill Score
 $S_{\\text{fair}}$ (the **disparity-ratio** score used by the main table — the
 deprecated $S-\\lambda\\bar D$ score and its $\\bar D$ column are dropped), and
-per-scenario Skill Scores for the six masking scenarios. Values are bootstrap
-mean $\\pm$ SE ($B{=}1000$); $S_{\\text{fair}}$ is the deterministic point
-estimate $\\pm$ bootstrap SE.
+per-scenario Skill Scores for the six masking scenarios. Values are deterministic
+point estimates on the held-out test split; sub/superscripts give the $95\\%$
+bootstrap confidence interval ($B{=}1000$): the percentile interval for every
+column except $S_{\\text{fair}}$, which uses the BCa interval.
 
 Reductions are the canonical ones (``aggregate_skill_rank_fairness`` for
 skill/rank, ``compute_fairness_skill_scores`` for the disparity-ratio fairness),
 identical to ``make_imputation_latex_tables.py`` but over the dense-weekly
-superset and with ``bca=False`` (the table renders $\\pm$SE, so the BCa jackknife
-is unnecessary).
+superset.
 
 Usage:
     python scripts/paper_results/imputation/make_imputation_skill_by_scenario_table.py \
@@ -64,17 +64,17 @@ METHODS: dict[str, tuple[str, str, str]] = {
 }
 
 # (header, source, scope, center, scale100, lower_better, ref_zero)
-#   source: "skill" | "rank" | "fair"
+#   source: "skill" | "rank" | "fair"; center is always the deterministic "point".
 COLUMNS = [
-    (r"$S\uparrow$", "skill", "overall", "mean", True, False, True),
-    (r"$R\downarrow$", "rank", "overall", "mean", False, True, False),
+    (r"$S\uparrow$", "skill", "overall", "point", True, False, True),
+    (r"$R\downarrow$", "rank", "overall", "point", False, True, False),
     (r"$S_{\text{fair}}\uparrow$", "fair", "overall", "point", True, False, True),
-    (r"Random noise\,$\uparrow$", "skill", "random_noise", "mean", True, False, True),
-    (r"Temporal slice\,$\uparrow$", "skill", "temporal_slice", "mean", True, False, True),
-    (r"Signal slice\,$\uparrow$", "skill", "signal_slice", "mean", True, False, True),
-    (r"Sleep gap\,$\uparrow$", "skill", "sleep_gap", "mean", True, False, True),
-    (r"Workout gap\,$\uparrow$", "skill", "workout_gap", "mean", True, False, True),
-    (r"Intensity failure\,$\uparrow$", "skill", "intensity_failure", "mean", True, False, True),
+    (r"Random noise\,$\uparrow$", "skill", "random_noise", "point", True, False, True),
+    (r"Temporal slice\,$\uparrow$", "skill", "temporal_slice", "point", True, False, True),
+    (r"Signal slice\,$\uparrow$", "skill", "signal_slice", "point", True, False, True),
+    (r"Sleep gap\,$\uparrow$", "skill", "sleep_gap", "point", True, False, True),
+    (r"Workout gap\,$\uparrow$", "skill", "workout_gap", "point", True, False, True),
+    (r"Intensity failure\,$\uparrow$", "skill", "intensity_failure", "point", True, False, True),
 ]
 NCOL = len(COLUMNS) + 1
 
@@ -91,7 +91,7 @@ HEADER_TMPL = r"""\begin{table}[t!]
     \renewcommand{\arraystretch}{1.05}
     \centering
     \captionsetup{width=\textwidth}
-    \caption{\textbf{Imputation Results by Masking Scenario.} Aggregate Skill Score $S$ (in \%; $0=$LOCF reference), Average Rank $R$, Fairness Skill Score $S_{\text{fair}}$ (disparity-ratio; see Appendix~\ref{sec:fairness_adjusted_score}), and per-scenario Skill Scores across all six masking scenarios (lower is better for $R$; higher otherwise). Single-day methods above; long-context methods ($\geq 7\times 1440$ time steps) below. Gradients computed within each track. Values are bootstrap means $\pm$ SE ($B{=}1000$); $S_{\text{fair}}$ is the point estimate $\pm$ bootstrap SE.}
+    \caption{\textbf{Imputation Results by Masking Scenario.} Aggregate Skill Score $S$ (in \%; $0=$LOCF reference), Average Rank $R$, Fairness Skill Score $S_{\text{fair}}$ (disparity-ratio; see Appendix~\ref{app:fairness_skillscore}), and per-scenario Skill Scores across all six masking scenarios (lower is better for $R$; higher otherwise). Single-day methods above; long-context methods ($\geq 7\times 1440$ time steps) below. Gradients computed within each track. Values are point estimates on the held-out test split; sub/superscripts give the $95\%$ bootstrap confidence interval ($B{=}1000$): the percentile interval for every column except $S_{\text{fair}}$, which uses the bias-corrected and accelerated (BCa) interval.}
     \label{tab:imputation_appendix_skill_by_scenario}
     \small
     \setlength{\tabcolsep}{1.5pt}
@@ -131,13 +131,12 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
     )
 
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
     from aggregate_fairness_skill_score import (  # noqa: E402
-        BCA_HEADLINE_SCOPES,
         SENSITIVE_ATTRS,
-        _fair_points_by_key,
-        _per_user_to_per_cell_E,
         compute_fairness_skill_scores,
     )
+    from make_imputation_latex_tables import attach_skill_rank_point  # noqa: E402
 
     draws_path = hf_hub_download(
         repo_id=repo_id, filename=DRAWS_PATH, repo_type="dataset", revision=revision
@@ -156,62 +155,38 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
         for m in METHODS
     ]
     per_user_df = pd.concat(per_method, ignore_index=True)
-    # Fairness SE from the (cheap) percentile bootstrap; the CENTER is the
-    # deterministic point estimate (matches the main table, which uses point).
-    # We compute the point directly via _fair_points_by_key — the BCa jackknife
-    # (the slow part) is unnecessary since this table renders point +/- SE.
+
+    # Deterministic point (the reported center) for skill / rank; percentile CI
+    # comes from the bootstrap summary. See ``attach_skill_rank_point`` for the
+    # test-split + cross-method pool invariants.
+    skill_tbl, rank_tbl = attach_skill_rank_point(tables, per_user_df, baseline=REFERENCE)
+
+    # Fairness: deterministic point + BCa interval (matches the main table). The
+    # BCa jackknife needs the per-user substrate.
     fairness = compute_fairness_skill_scores(
-        draws_df, attrs=list(SENSITIVE_ATTRS), baseline_method=REFERENCE, bca=False,
+        draws_df, attrs=list(SENSITIVE_ATTRS), baseline_method=REFERENCE,
+        bca=True, per_user_df=per_user_df,
     )
-    # B.2: drop per-channel binary ch_7..ch_18 (sleep/workouts reach fairness only
-    # via cat_collapsed:*), matching compute_fairness_skill_scores' point flow.
-    pu = per_user_df
-    drop = pu["channel"].astype(str).str.match(r"^ch_(?:[7-9]|1[0-8])$") & (
-        pu["channel_type"].astype(str) == "binary"
-    )
-    per_cell = _per_user_to_per_cell_E(pu[~drop & (pu["split"] == "test")])
-    points = _fair_points_by_key(
-        per_cell, attrs=list(SENSITIVE_ATTRS), baseline_method=REFERENCE,
-        clip_lower=1e-2, clip_upper=100.0, scopes=BCA_HEADLINE_SCOPES,
-    )
+    fairness = fairness[(fairness["scope"] == "overall") & (fairness["split"] == "test")]
 
-    fair_se: dict[str, float] = {}
-    fair_rows = fairness[(fairness["scope"] == "overall") & (fairness["split"] == "test")]
-    for _, r in fair_rows.iterrows():
-        m = r["method"]
-        fair_se[m] = _require_finite_float(
-            r.get("se"), f"fairness SE for method={m!r}, scope='overall'"
-        )
+    out: dict[str, dict[tuple[str, str], tuple[float, float, float]]] = {m: {} for m in METHODS}
 
-    out: dict[str, dict[tuple[str, str], tuple[float, float]]] = {m: {} for m in METHODS}
-
-    def _ingest(df, source, center_col):
-        sub = df[df["split"] == "test"]
-        for _, r in sub.iterrows():
+    def _ingest(df, source, center_col, lo_col, hi_col):
+        for _, r in df[df["split"] == "test"].iterrows():
             m = r["method"]
             if m not in out:
                 continue
             c = r.get(center_col)
-            if c is None:
-                continue
-            c = float(c)
-            if not math.isfinite(c):
-                continue
-            se = r.get("se")
+            if c is None or not math.isfinite(float(c)):
+                continue  # e.g. LOCF has no skill point (rendered as $0.0$)
             scope = str(r["scope"])
-            se = _require_finite_float(
-                se, f"{source} SE for method={m!r}, scope={scope!r}"
-            )
-            out[m][(source, scope)] = (c, se)
+            lo = _require_finite_float(r.get(lo_col), f"{source} lo for method={m!r}, scope={scope!r}")
+            hi = _require_finite_float(r.get(hi_col), f"{source} hi for method={m!r}, scope={scope!r}")
+            out[m][(source, scope)] = (float(c), lo, hi)
 
-    _ingest(tables["skill_scores"], "skill", "mean")
-    _ingest(tables["avg_rankings"], "rank", "mean")
-    for m in METHODS:
-        pt = points.get((m, "overall"))
-        if pt is not None:
-            if m not in fair_se:
-                raise ValueError(f"Missing fairness SE for method={m!r}, scope='overall'")
-            out[m][("fair", "overall")] = (float(pt), fair_se[m])
+    _ingest(skill_tbl, "skill", "point", "ci_lo", "ci_hi")
+    _ingest(rank_tbl, "rank", "point", "ci_lo", "ci_hi")
+    _ingest(fairness, "fair", "point", "bca_lo", "bca_hi")
     return out
 
 
@@ -222,17 +197,18 @@ def intensity(value: float, vmin: float, vmax: float, lower_better: bool) -> int
     return round(frac * 100)
 
 
-def fmt_cell(method, center, se, scale100, ref_zero, n, is_best) -> str:
+def fmt_cell(method, center, lo, hi, scale100, ref_zero, n, is_best) -> str:
+    """One LaTeX cell: optional color + ``$value^{+upper}_{-lower}$`` (percentile/BCa CI)."""
     if ref_zero and method == REFERENCE:
         return r"$0.0$"
     center = _require_finite_float(center, f"center for method={method!r}")
-    se = _require_finite_float(se, f"SE for method={method!r}")
     s = 100.0 if scale100 else 1.0
     num = f"{center * s:+.1f}" if scale100 else f"{center * s:.1f}"
-    se_s = f"{se * s:.1f}"
+    up = f"{(hi - center) * s:.1f}"
+    down = f"{(center - lo) * s:.1f}"
     body = rf"\mathbf{{{num}}}" if is_best else num
     color = rf"\cellcolor{{customblue!{n}}}" if n > 0 else ""
-    return rf"{color}${body}{{\scriptstyle \pm {se_s}}}$"
+    return rf"{color}${body}^{{+{up}}}_{{-{down}}}$"
 
 
 def build_body(data) -> str:
@@ -252,21 +228,24 @@ def build_body(data) -> str:
                 lines.append(r"    \hline")
             lines.append(rf"    \multicolumn{{{NCOL}}}{{l}}{{{GROUP_TITLE[grp]}}} \\")
             members = [m for m in section if METHODS[m][2] == grp]
-            members.sort(key=lambda m: -data[m].get(("skill", "overall"), (0.0, 0.0))[0])
+            members.sort(key=lambda m: -data[m].get(("skill", "overall"), (0.0, 0.0, 0.0))[0])
             for m in members:
                 cells = []
                 for ci, (_h, src, scope, _ctr, scale100, lower, ref_zero) in enumerate(COLUMNS):
+                    if ref_zero and m == REFERENCE:
+                        cells.append(fmt_cell(m, 0.0, 0.0, 0.0, scale100, ref_zero, 0, False))
+                        continue
                     key = (src, scope)
                     if key not in data[m]:
                         raise ValueError(
                             f"Missing table cell for method={m!r}, source={src!r}, scope={scope!r}"
                         )
-                    center, se = data[m][key]
+                    center, lo, hi = data[m][key]
                     vmin, vmax = bounds[ci]
                     n = intensity(center, vmin, vmax, lower)
                     best_val = vmin if lower else vmax
                     is_best = (center == best_val) and (m != REFERENCE)
-                    cells.append(fmt_cell(m, center, se, scale100, ref_zero, n, is_best))
+                    cells.append(fmt_cell(m, center, lo, hi, scale100, ref_zero, n, is_best))
                 lines.append(rf"    {METHODS[m][0]} & " + " & ".join(cells) + r" \\")
     return "\n".join(lines) + "\n"
 

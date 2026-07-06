@@ -71,6 +71,9 @@ REDUCED_CSVS = (
     "fairness_skill_score_bootstrap.csv",
 )
 CACHE_MANIFEST = "manifest.json"
+# Bump when the reduced-CSV schema changes so stale caches auto-rebuild.
+# v2: skill/rank CSVs carry a deterministic ``point`` column (was bootstrap mean only).
+CACHE_SCHEMA_VERSION = 2
 
 # ---------------------------------------------------------------------------
 # Method registry: key -> (latex_label, context, model_group)
@@ -108,14 +111,14 @@ METHODS: dict[str, tuple[str, str, str]] = {
 #   lower_better: invert the color gradient (best = lowest)
 #   ref_zero  : LOCF renders as a plain "$0.0$" (skill columns; baseline == 0)
 COLUMNS: list[tuple[str, str, str, str, str, str, bool, bool, bool]] = [
-    (r"$R\downarrow$",            "avg_rankings_bootstrap.csv",          "overall",        "mean",  "ci_lo",  "ci_hi",  False, True,  False),
-    (r"$S\uparrow$",              "skill_scores_bootstrap.csv",          "overall",        "mean",  "ci_lo",  "ci_hi",  True,  False, True),
+    (r"$R\downarrow$",            "avg_rankings_bootstrap.csv",          "overall",        "point", "ci_lo",  "ci_hi",  False, True,  False),
+    (r"$S\uparrow$",              "skill_scores_bootstrap.csv",          "overall",        "point", "ci_lo",  "ci_hi",  True,  False, True),
     (r"$S_{\text{fair}}\uparrow$","fairness_skill_score_bootstrap.csv",  "overall",        "point", "bca_lo", "bca_hi", True,  False, True),
-    (r"Activity\,$\uparrow$",     "skill_scores_bootstrap.csv",          "cat:activity",   "mean",  "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Physio.\,$\uparrow$",      "skill_scores_bootstrap.csv",          "cat:physiology", "mean",  "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Sleep\,$\uparrow$",        "skill_scores_bootstrap.csv",          "cat:sleep",      "mean",  "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Workout\,$\uparrow$",      "skill_scores_bootstrap.csv",          "cat:workouts",   "mean",  "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Semantic\,$\uparrow$",     "skill_scores_bootstrap.csv",          "semantic",       "mean",  "ci_lo",  "ci_hi",  True,  False, True),
+    (r"Activity\,$\uparrow$",     "skill_scores_bootstrap.csv",          "cat:activity",   "point", "ci_lo",  "ci_hi",  True,  False, True),
+    (r"Physio.\,$\uparrow$",      "skill_scores_bootstrap.csv",          "cat:physiology", "point", "ci_lo",  "ci_hi",  True,  False, True),
+    (r"Sleep\,$\uparrow$",        "skill_scores_bootstrap.csv",          "cat:sleep",      "point", "ci_lo",  "ci_hi",  True,  False, True),
+    (r"Workout\,$\uparrow$",      "skill_scores_bootstrap.csv",          "cat:workouts",   "point", "ci_lo",  "ci_hi",  True,  False, True),
+    (r"Semantic\,$\uparrow$",     "skill_scores_bootstrap.csv",          "semantic",       "point", "ci_lo",  "ci_hi",  True,  False, True),
 ]
 
 NCOL = len(COLUMNS) + 1  # + method column
@@ -129,13 +132,13 @@ GROUP_TITLE = {
     "neural": r"\cellcolor[HTML]{EFEFEF}\textit{Neural Models}",
 }
 
-HEADER = r"""\begin{table}[b!]
+HEADER = r"""\begin{table}[t!]
     \vspace{-2mm}
     \renewcommand{\arraystretch}{1.05}
     \centering
     \captionsetup{width=\textwidth}
     \caption{\textbf{Imputation Results.} We report Average Rank $R$, Aggregate Skill Score $S$ (in \%; $0=\TN{LOCF}$ reference), Fairness Skill Score $S_{\text{fair}}$, and Channel-Specific Skill Scores for the following channels: \textit{Activity, Physiology, Sleep, Workout}. Finally, we also report performance on all \textit{Semantic} masking approaches (see Appendix \ref{sec:imputation}). Single-day imputation method results are in the upper section of the table; long-context imputation method results ($\geq 7\times 1440$ time steps) are below. %
-    Sub/superscripts give the $95\%$ bootstrap confidence interval ($1000$ resamples); $S_{\text{fair}}$ uses the bias-corrected and accelerated (BCa) interval about its point estimate, all other columns the percentile interval about the bootstrap mean. \kwz{CAPTION}
+    Values are point estimates on the held-out test split; sub/superscripts give the $95\%$ bootstrap confidence interval ($1000$ resamples): the percentile interval for every column except $S_{\text{fair}}$, which uses the bias-corrected and accelerated (BCa) interval. \kwz{CAPTION}
     }
     \label{tab:imputation_main_results}
     \small
@@ -249,14 +252,20 @@ def build_body(cols: list[dict[str, tuple[float, float, float]]]) -> str:
             lines.append(rf"    \multicolumn{{{NCOL}}}{{l}}{{{GROUP_TITLE[grp]}}} \\")
 
             members = [m for m, (_, c, g) in METHODS.items() if c == ctx and g == grp]
-            # order by overall skill (column index 1) descending
-            members.sort(key=lambda m: -cols[1][m][0])
+            # order by overall skill (column index 1) descending; the reference
+            # (LOCF) has no skill point, so fall back to 0 for ordering.
+            members.sort(key=lambda m: -cols[1].get(m, (0.0, 0.0, 0.0))[0])
 
             for m in members:
                 label = METHODS[m][0]
                 cells = []
                 for ci, col in enumerate(COLUMNS):
                     _h, _f, _sc, _ctr, _lo, _hi, scale100, lower, ref_zero = col
+                    # The reference renders as a plain $0.0$ in ref_zero columns and
+                    # carries no point there, so don't require a data cell for it.
+                    if ref_zero and m == REFERENCE:
+                        cells.append(fmt_cell(m, 0.0, 0.0, 0.0, scale100, ref_zero, 0, False))
+                        continue
                     center, lo, hi = cols[ci][m]
                     vmin, vmax = bounds[ci]
                     n = intensity(center, vmin, vmax, lower)
@@ -312,8 +321,15 @@ def _remote_fingerprint(repo_id: str, revision: str | None) -> dict[str, str]:
 
 
 def _cache_key(fingerprint: dict[str, str]) -> str:
-    """md5 over the sorted (path, sha256) pairs — the cache identity."""
-    payload = json.dumps(fingerprint, sort_keys=True).encode()
+    """md5 over the sorted (path, sha256) pairs + schema version — the cache identity.
+
+    ``CACHE_SCHEMA_VERSION`` is folded in so that a change to the reduced-CSV
+    schema (e.g. adding the deterministic ``point`` column) invalidates old
+    caches automatically, without needing ``--force``.
+    """
+    payload = json.dumps(
+        {"schema": CACHE_SCHEMA_VERSION, "files": fingerprint}, sort_keys=True
+    ).encode()
     return hashlib.md5(payload).hexdigest()
 
 
@@ -322,6 +338,62 @@ def _cache_is_valid(cache_dir: Path) -> bool:
     if not (cache_dir / CACHE_MANIFEST).is_file():
         return False
     return all((cache_dir / name).is_file() for name in REDUCED_CSVS)
+
+
+def _attach_point(boot, point, *, reference: str):
+    """Left-merge the deterministic ``point`` onto a bootstrap summary table.
+
+    Merges on ``(method, scope)``. Fails loudly if any non-reference bootstrap cell
+    lacks a matching point (a scope-vocabulary drift between the deterministic and
+    bootstrap reducers). The reference method (LOCF) is exempt: it has no skill point
+    (skill vs self is 0 by construction) and renders as ``$0.0$``.
+
+    ``reference`` is required (not defaulted) so a caller with a different baseline
+    can never silently mis-exempt the wrong method.
+    """
+    merged = boot.merge(point, on=["method", "scope"], how="left")
+    gap = merged[
+        (merged["method"] != reference) & merged["mean"].notna() & merged["point"].isna()
+    ]
+    if len(gap):
+        examples = gap[["method", "scope"]].drop_duplicates().head(10).to_dict("records")
+        raise ValueError(
+            f"{len(gap)} bootstrap cells have no deterministic point "
+            f"(scope drift between reducers). Examples: {examples}"
+        )
+    return merged
+
+
+def attach_skill_rank_point(tables, per_user_df, *, baseline):
+    """Attach the deterministic ``point`` column to the skill / rank bootstrap tables.
+
+    Shared by the main and skill-by-scenario table generators. The point is computed
+    by :func:`compute_point_skill_rank` over:
+
+    * the **test** split only — matching the bootstrap draws and the fairness point;
+    * the **same method pool** as the draws — average rank is a cross-method
+      statistic, so an extra method in the per-method substrate (e.g. the dense
+      ``lsm2_weekly`` absent from the main table's draws) would shift every rank.
+
+    Returns ``(skill_scores, avg_rankings)``, each with a ``point`` column
+    left-merged on via :func:`_attach_point`.
+    """
+    from imputation_evaluation.evaluation.bootstrap_skill_rank import (
+        compute_point_skill_rank,
+    )
+
+    draw_methods = set(tables["avg_rankings"]["method"].astype(str)) | set(
+        tables["skill_scores"]["method"].astype(str)
+    )
+    pu_all = per_user_df[
+        (per_user_df["subgroup_attr"] == "all")
+        & (per_user_df["split"] == "test")
+        & (per_user_df["method"].astype(str).isin(draw_methods))
+    ].rename(columns={"E_per_user": "E"})
+    point = compute_point_skill_rank(pu_all, baseline_method=baseline)
+    skill = _attach_point(tables["skill_scores"], point["skill_scores"], reference=baseline)
+    rank = _attach_point(tables["avg_rankings"], point["avg_rankings"], reference=baseline)
+    return skill, rank
 
 
 def _build_reduced_csvs(
@@ -396,6 +468,14 @@ def _build_reduced_csvs(
         baseline_method="locf",
         bca=True,
         per_user_df=per_user_df,
+    )
+
+    # Deterministic point estimate for skill / rank (the reported center), attached
+    # as a ``point`` column alongside the bootstrap percentile CI. See
+    # ``attach_skill_rank_point`` for the test-split + method-pool invariants.
+    logger.info("Computing deterministic skill / rank point estimates …")
+    tables["skill_scores"], tables["avg_rankings"] = attach_skill_rank_point(
+        tables, per_user_df, baseline="locf"
     )
 
     cache_dir.mkdir(parents=True, exist_ok=True)

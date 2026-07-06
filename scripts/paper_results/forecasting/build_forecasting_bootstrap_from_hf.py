@@ -74,6 +74,17 @@ def _reduce_draws(draws: pd.DataFrame, reduction: str, key_cols: list[str]) -> p
         rec.update(_summarize(grp["value"].to_numpy(), CI_LEVEL))
         rows.append(rec)
     return pd.DataFrame(rows)
+
+
+def _assert_point_coverage(df: pd.DataFrame, key_cols: list[str], baseline: str) -> None:
+    """Fail loudly if any non-baseline bootstrap row lacks a deterministic point."""
+    gap = df[(df["model"] != baseline) & df["point"].isna() & df["mean"].notna()]
+    if len(gap):
+        examples = gap[key_cols].drop_duplicates().head(10).to_dict("records")
+        raise SystemExit(
+            f"{len(gap)} bootstrap cells have no deterministic point (scope drift). "
+            f"Examples: {examples}"
+        )
 # The 10 paper models (matches forecasting/bootstrap/draws.meta.json).
 MODELS = [
     "seasonal_naive",
@@ -118,13 +129,29 @@ def main() -> int:
         repo_id=args.repo_id, filename=DRAWS_PATH, repo_type="dataset", revision=args.revision
     )
     draws = pd.read_parquet(draws_path)
-    _reduce_draws(draws, "skill", ["model", "scope"]).to_csv(
-        args.out_dir / "forecasting_skill_score_bootstrap.csv", index=False
+
+    # Deterministic point estimate (the reported center) from the per-user
+    # substrate — the same point flow bootstrap_skill_rank anchors its BCa on.
+    # Merged as a ``point`` column alongside the percentile CI reduced from draws.
+    from forecasting_evaluation.metrics.bootstrap_skill_rank import compute_point_skill_rank
+
+    point = compute_point_skill_rank(
+        models=models,
+        baseline_model=_spec.PAPER_BASELINE,
+        binary_groups=[(name, tuple(idx)) for name, idx in _spec.BINARY_GROUPS],
+        per_user_metrics=substrate,
     )
-    _reduce_draws(draws, "rank", ["model", "scope", "metric"]).to_csv(
-        args.out_dir / "forecasting_grouped_metric_rank_bootstrap.csv", index=False
+    skill_df = _reduce_draws(draws, "skill", ["model", "scope"]).merge(
+        point["skill_scores"], on=["model", "scope"], how="left"
     )
-    print(f"skill/rank reduced from draws ({time.time() - t0:.0f}s)")
+    rank_df = _reduce_draws(draws, "rank", ["model", "scope", "metric"]).merge(
+        point["avg_rankings"], on=["model", "scope", "metric"], how="left"
+    )
+    _assert_point_coverage(skill_df, ["model", "scope"], _spec.PAPER_BASELINE)
+    _assert_point_coverage(rank_df, ["model", "scope", "metric"], _spec.PAPER_BASELINE)
+    skill_df.to_csv(args.out_dir / "forecasting_skill_score_bootstrap.csv", index=False)
+    rank_df.to_csv(args.out_dir / "forecasting_grouped_metric_rank_bootstrap.csv", index=False)
+    print(f"skill/rank reduced from draws + point ({time.time() - t0:.0f}s)")
 
     from labels.api import ENROLLMENT_PATH, LABELS_PATH
 

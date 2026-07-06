@@ -56,6 +56,7 @@ from imputation_evaluation.evaluation.paper_metrics_core import (
     EXCLUDE_BINARY_SCENARIOS,
     aggregate_task_ranks_to_scopes,
     build_baseline_errors,
+    compute_average_rankings,
     compute_skill_scores,
 )
 
@@ -985,6 +986,64 @@ def compute_per_task_paired_R(
     grouped["R"] = np.exp(grouped["mean"])
     grouped["n_users"] = grouped["size"].astype(int)
     return grouped[cols]
+
+
+def compute_point_skill_rank(
+    per_user_all: pd.DataFrame,
+    *,
+    baseline_method: str,
+    clip_lower: float = SKILL_CLIP_LOWER,
+    clip_upper: float = SKILL_CLIP_UPPER,
+) -> dict[str, pd.DataFrame]:
+    """Deterministic point estimate of skill score and average rank per (method, scope).
+
+    Point-flow companion to the bootstrap skill / rank tables: runs the exact
+    leaderboard reducers on the **unresampled** cohort so the emitted ``point``
+    matches the bootstrap identity-draw estimate (see
+    :func:`paper_metrics_core.compute_average_rankings`). Reuses the same reducer
+    chain as ``scripts/paper_results/compute_imputation_paper_metrics.py``:
+    ``compute_per_task_paired_R`` -> ``compute_skill_scores(mode="paired")`` for
+    skill, and ``compute_average_rankings`` for rank.
+
+    Args:
+        per_user_all: ``subgroup_attr == "all"`` per-user error frame with columns
+            ``[method, scenario, channel, channel_type, user_id, E]`` — one row per
+            (method, task, user). The value column must be named ``E`` (rename
+            ``E_per_user`` upstream).
+        baseline_method: paired denominator for the skill ratio (required; the
+            Track-2 leaderboard baseline is :data:`BASELINE_CONTINUOUS` = ``"locf"``).
+            The baseline appears in the rank output but not the skill output
+            (skill vs self is 0 by construction).
+        clip_lower: lower clip on the per-task ratio.
+        clip_upper: upper clip on the per-task ratio.
+
+    Returns:
+        ``{"skill_scores": df[method, scope, point],
+           "avg_rankings": df[method, scope, point]}``.
+    """
+    # The HF substrate stores string keys as pandas ``category`` dtype; coerce to
+    # plain str so the reducers' groupby/stack don't materialise the categorical
+    # cross-product.
+    per_user_all = per_user_all.copy()
+    for c in ("method", "scenario", "channel", "channel_type", "user_id"):
+        if c in per_user_all.columns and isinstance(
+            per_user_all[c].dtype, pd.CategoricalDtype
+        ):
+            per_user_all[c] = per_user_all[c].astype(str)
+
+    R_per_task = compute_per_task_paired_R(
+        per_user_all,
+        baseline_method=baseline_method,
+        clip_lower=clip_lower,
+        clip_upper=clip_upper,
+    )
+    skill = compute_skill_scores(
+        R_per_task, mode="paired", clip_lower=clip_lower, clip_upper=clip_upper
+    )
+    rank = compute_average_rankings(per_user_all)
+    skill_point = skill.rename(columns={"skill_score": "point"})[["method", "scope", "point"]]
+    rank_point = rank.rename(columns={"avg_rank": "point"})[["method", "scope", "point"]]
+    return {"skill_scores": skill_point, "avg_rankings": rank_point}
 
 
 def _per_method_cell_paired_collapsed_ratios(

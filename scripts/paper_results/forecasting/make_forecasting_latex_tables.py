@@ -78,13 +78,13 @@ RANK = "forecasting_grouped_metric_rank_bootstrap.csv"
 FAIR = "forecasting_fairness_skill_score_bootstrap.csv"
 
 COLUMNS: list[tuple[str, str, str, str, str, str, bool, bool, bool, str | None]] = [
-    (r"$R \downarrow$",            RANK,  "overall",          "mean",  "ci_lo",  "ci_hi",  False, True,  False, "overall"),
-    (r"$S \uparrow$",              SKILL, "overall_score",    "mean",  "ci_lo",  "ci_hi",  True,  False, True,  None),
+    (r"$R \downarrow$",            RANK,  "overall",          "point", "ci_lo",  "ci_hi",  False, True,  False, "overall"),
+    (r"$S \uparrow$",              SKILL, "overall_score",    "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
     (r"$S_{\text{fair}} \uparrow$",FAIR,  "overall",          "point", "bca_lo", "bca_hi", True,  False, True,  None),
-    (r"Activity\,$\uparrow$",      SKILL, "activity_score",   "mean",  "ci_lo",  "ci_hi",  True,  False, True,  None),
-    (r"Physio.\,$\uparrow$",       SKILL, "physiology_score", "mean",  "ci_lo",  "ci_hi",  True,  False, True,  None),
-    (r"Sleep\,$\uparrow$",         SKILL, "sleep_score",      "mean",  "ci_lo",  "ci_hi",  True,  False, True,  None),
-    (r"Workout\,$\uparrow$",       SKILL, "workout_score",    "mean",  "ci_lo",  "ci_hi",  True,  False, True,  None),
+    (r"Activity\,$\uparrow$",      SKILL, "activity_score",   "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
+    (r"Physio.\,$\uparrow$",       SKILL, "physiology_score", "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
+    (r"Sleep\,$\uparrow$",         SKILL, "sleep_score",      "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
+    (r"Workout\,$\uparrow$",       SKILL, "workout_score",    "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
 ]
 
 NCOL = len(COLUMNS) + 1  # + method column
@@ -98,8 +98,10 @@ We report Average Rank $R$, Aggregate Skill Score $S$
 (in \%; $0=\textsc{Seasonal Naive}$ reference),
 Fairness-adjusted Skill Score $S_{\mathrm{fair}}$, and category-specific
 Skill Scores for \textit{Activity}, \textit{Physiology}, \textit{Sleep},
-and \textit{Workout}. FT denotes fine-tuned. Subscripts and superscripts
-indicate the $95\%$ bootstrap confidence interval based on $1000$ resamples.
+and \textit{Workout}. FT denotes fine-tuned. Values are point estimates on the
+held-out test split; subscripts and superscripts indicate the $95\%$ bootstrap
+confidence interval ($1000$ resamples): the percentile interval for every column
+except $S_{\mathrm{fair}}$, which uses the bias-corrected and accelerated (BCa) interval.
 }
 \label{tab:forecasting_grouped_model_summary}
 
