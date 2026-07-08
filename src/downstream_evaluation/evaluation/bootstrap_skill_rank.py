@@ -960,3 +960,82 @@ def jackknife_fairness_skill(
             )
         )
     return _pad_jackknife_maps(per_user_maps), point
+
+
+# ---------------------------------------------------------------------------
+# Live leaderboard reduce — point skill / rank / fairness straight from the
+# per-user-pairs substrate, no bootstrap. The Track-1 leaderboard reduces this on
+# each load (mirroring the imputation / forecasting tracks), so the board equals the
+# paper's point estimate by construction.
+# ---------------------------------------------------------------------------
+
+
+def reduce_substrate_to_point(
+    substrate: pd.DataFrame,
+    baseline: str = "linear",
+    *,
+    subgroup_attributes: tuple[str, ...] = ("age_group", "sex"),
+    clip_lower: float = DEFAULT_CLIP_LOWER,
+    clip_upper: float = DEFAULT_CLIP_UPPER,
+    domain_map: dict[str, str] = TASK_DOMAIN_MAP,
+) -> dict[str, dict]:
+    """Point skill / rank / fairness per method from the pooled per-user-pairs substrate.
+
+    Reconstructs the aligned per-(method, task) predictions and the fairness subgroup
+    map from the long substrate frame (the :mod:`per_user_pairs` layout: the ``all``
+    cell holds the pairs, the ``age_group`` / ``sex`` cells the subgroup values), then
+    runs the same point reducers the bootstrap uses — on the full cohort, with no
+    resampling. Reusing those reducers makes the result identical to the paper's ``point``
+    column by construction (the substrate stores float32 pairs, so values match the
+    float64 paper point to ~1e-6, immaterial at leaderboard display precision).
+
+    Returns ``{method: {"skill": {scope: value}, "rank": {scope: value}, "fair_skill":
+    overall}}``: ``scope`` is ``"Overall"`` plus each health domain, ``skill`` the
+    domain-balanced skill vs ``baseline``, ``rank`` the cross-method average rank, and
+    ``fair_skill`` the disparity-ratio fairness skill (over ``subgroup_attributes``).
+    """
+    all_cell = substrate[substrate["subgroup_attr"] == "all"]
+    methods = sorted(all_cell["method"].astype(str).unique())
+    if baseline not in methods:
+        raise ValueError(f"baseline {baseline!r} not among substrate methods {methods}")
+
+    aligned_raw: dict[str, dict[str, dict]] = {m: {} for m in methods}
+    for (m, task), g in all_cell.groupby(["method", "task"], observed=True):
+        g = g.sort_values("user_id")
+        aligned_raw[str(m)][str(task)] = {
+            "uids": g["user_id"].astype(str).to_numpy(),
+            "y_true": g["y_true"].to_numpy(np.float64),
+            "y_pred": g["y_pred"].to_numpy(np.float64),
+            "y_proba": g["y_proba"].to_numpy(np.float64),
+            "task_type": str(g["task_type"].iloc[0]),
+        }
+    aligned = align_across_methods(aligned_raw)
+
+    subgroup_map: dict[str, dict[str, str]] = {}
+    for attr in subgroup_attributes:
+        cell = substrate[substrate["subgroup_attr"] == attr][["user_id", "subgroup_value"]]
+        for uid, val in cell.drop_duplicates("user_id").itertuples(index=False):
+            subgroup_map.setdefault(str(uid), {})[attr] = str(val)
+
+    tasks = sorted(aligned[methods[0]].keys())
+    full_idx = {t: np.arange(len(aligned[methods[0]][t]["uids"])) for t in tasks}
+    per_task = _per_task_metric_on_indices(aligned, methods, tasks, full_idx)
+    ranks = _per_domain_avg_rank(per_task, methods, domain_map)
+
+    masks = _build_subgroup_masks(aligned, tasks, methods, subgroup_map, list(subgroup_attributes))
+    fair = _fairness_skill_from_indices(
+        aligned, methods, tasks, tuple(subgroup_attributes), masks, full_idx,
+        baseline, clip_lower, clip_upper, domain_map,
+    )
+
+    out: dict[str, dict] = {}
+    for m in methods:
+        skill = _per_domain_skill_from_ratios(
+            _ratios_for_method(per_task, m, baseline), domain_map, clip_lower, clip_upper
+        )
+        out[m] = {
+            "skill": skill,
+            "rank": {scope: ranks[scope][m] for scope in ranks},
+            "fair_skill": fair.get((m, "overall"), 0.0 if m == baseline else float("nan")),
+        }
+    return out

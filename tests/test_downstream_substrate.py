@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+import pytest
 
 from downstream_evaluation.evaluation.per_user_pairs import (
     PER_USER_PAIRS_PARQUET_COLUMNS,
@@ -171,3 +172,49 @@ def test_resolve_fallback_rate_precedence(tmp_path):
     assert mod.resolve_fallback_rate(tmp_path, "wbm", {"wbm": 0.6276}) == 0.6276
     # No sidecar, no override -> 0.0 (legacy prediction dir).
     assert mod.resolve_fallback_rate(tmp_path, "linear", {}) == 0.0
+
+
+def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
+    """reduce_substrate_to_point runs from the pooled substrate; the baseline scores 0."""
+    from downstream_evaluation.evaluation.bootstrap_skill_rank import reduce_substrate_to_point
+    from downstream_evaluation.evaluation.per_user_pairs import build_per_user_pairs
+
+    uids = [f"u{i}" for i in range(6)]
+    data = {
+        "linear": {
+            "Diabetes": ([0, 1, 0, 1, 1, 0], [0, 1, 0, 1, 1, 0], [0.4, 0.6, 0.45, 0.55, 0.5, 0.5]),
+            "age": ([25.0, 35, 45, 55, 65, 30], [30.0, 38, 42, 50, 60, 35], [30.0, 38, 42, 50, 60, 35]),
+        },
+        "good": {
+            "Diabetes": ([0, 1, 0, 1, 1, 0], [0, 1, 0, 1, 1, 0], [0.1, 0.9, 0.2, 0.8, 0.85, 0.15]),
+            "age": ([25.0, 35, 45, 55, 65, 30], [26.0, 36, 44, 54, 64, 31], [26.0, 36, 44, 54, 64, 31]),
+        },
+    }
+    tasks = ["Diabetes", "age"]
+    for method, per_task in data.items():
+        for task, (yt, yp, pr) in per_task.items():
+            _write_task(
+                tmp_path, method, task,
+                pd.DataFrame({"uid": uids, "y_true": yt, "y_pred": yp, "y_proba": pr}),
+            )
+    (tmp_path / "_subgroups.json").write_text(
+        json.dumps({u: {"age_group": "18-29" if i % 2 else "30-39", "sex": "male" if i % 2 else "female"}
+                    for i, u in enumerate(uids)})
+    )
+    df = pd.concat(
+        [build_per_user_pairs(tmp_path, m, tasks, method_label=m) for m in data], ignore_index=True
+    )
+
+    res = reduce_substrate_to_point(df, baseline="linear")
+
+    assert set(res) == {"linear", "good"}
+    # Baseline vs self -> exactly 0 skill and 0 fairness.
+    assert res["linear"]["skill"]["Overall"] == pytest.approx(0.0, abs=1e-12)
+    assert res["linear"]["fair_skill"] == 0.0
+    # Both methods carry a finite Overall rank + skill.
+    for m in ("linear", "good"):
+        assert "Overall" in res[m]["rank"]
+        assert res[m]["skill"]["Overall"] == res[m]["skill"]["Overall"]  # not NaN
+    # An unknown baseline is a loud error.
+    with pytest.raises(ValueError, match="baseline"):
+        reduce_substrate_to_point(df, baseline="nonexistent")
