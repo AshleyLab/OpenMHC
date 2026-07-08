@@ -43,6 +43,10 @@ from downstream_evaluation.evaluation.per_user_pairs import (  # noqa: E402
     build_per_user_pairs,
     write_per_user_pairs_parquet,
 )
+from downstream_evaluation.evaluation.predictions_io import (  # noqa: E402
+    overall_fallback_rate,
+    read_fallback_sidecar,
+)
 from openmhc._constants import BENCHMARK_TASKS  # noqa: E402
 
 # csv key -> (display_name, type), matching the registry in ``build_leaderboard_json.py``.
@@ -62,15 +66,29 @@ METHODS: dict[str, tuple[str, str]] = {
 SUBMITTER = "OpenMHC team"
 SUBTRACK = "static"  # SCHEMA: static | longitudinal; all 8 score from one weekly embedding
 
-# Fraction of each method's test predictions the harness substituted with the Linear
-# baseline (a non-finite prediction is scored against ``linear``; issue #39). Only WBM,
-# which has no weekly embedding for ~2/3 of participants, is nonzero. The saved
-# predictions are post-substitution and do not carry the count, so the pooled rate
-# (Linear-substituted users / test users, over all tasks) is recorded here as a
-# property of the canonical eval run.
-FALLBACK_RATES: dict[str, float] = {
-    "wbm": 0.6276,
-}
+def resolve_fallback_rate(
+    predictions_dir: Path, method: str, overrides: dict[str, float]
+) -> float:
+    """The method's overall fallback rate (fraction substituted with the Linear baseline).
+
+    Preference order: an explicit ``--fallback-rate`` override, else the measured
+    ``fallback.json`` sidecar the eval writes next to the predictions
+    (``Σ n_fallback / Σ n_test``), else ``0.0``. A prediction dir written before the
+    sidecar existed has neither, so a legacy method with real fallback (e.g. ``wbm``)
+    must be given an explicit override — otherwise it is reported as ``0.0`` with a
+    warning rather than silently.
+    """
+    if method in overrides:
+        return overrides[method]
+    sidecar = read_fallback_sidecar(predictions_dir, method)
+    if sidecar is not None:
+        return overall_fallback_rate(sidecar)
+    print(
+        f"  [warn] {method}: no fallback.json sidecar and no --fallback-rate override; "
+        "reporting fallback rate as 0.0",
+        file=sys.stderr,
+    )
+    return 0.0
 
 
 def main() -> int:
@@ -94,7 +112,24 @@ def main() -> int:
         default=list(METHODS),
         help="Methods to build (default: all 8 canonical methods).",
     )
+    p.add_argument(
+        "--fallback-rate",
+        nargs="*",
+        default=[],
+        metavar="METHOD=RATE",
+        help=(
+            "Override a method's fallback rate for legacy prediction dirs that predate the "
+            "fallback.json sidecar (e.g. wbm=0.6276). Fresh runs read the measured sidecar."
+        ),
+    )
     args = p.parse_args()
+
+    overrides: dict[str, float] = {}
+    for item in args.fallback_rate:
+        name, sep, value = item.partition("=")
+        if not sep:
+            raise SystemExit(f"--fallback-rate expects METHOD=RATE, got {item!r}")
+        overrides[name] = float(value)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     subgroups = args.predictions_dir / "_subgroups.json"
@@ -119,7 +154,7 @@ def main() -> int:
         if df[["y_true", "y_pred", "y_proba"]].isna().any().any():
             raise SystemExit(f"{method}: NaN pair values — fallback should already be applied")
 
-        rate = FALLBACK_RATES.get(method, 0.0)
+        rate = resolve_fallback_rate(args.predictions_dir, method, overrides)
         out = args.out_dir / f"{method}.parquet"
         write_per_user_pairs_parquet(
             df,

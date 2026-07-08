@@ -131,3 +131,43 @@ def test_write_read_roundtrip_and_meta(tmp_path):
     assert meta["overall_fallback_rate"] == 0.0
     assert str(back["y_proba"].dtype) == "float32"
     assert str(back["method"].dtype) == "category"
+
+
+def test_fallback_sidecar_roundtrip_and_pool(tmp_path):
+    """Sidecar write -> read -> pooled overall_fallback_rate; absent method -> None."""
+    from downstream_evaluation.evaluation.predictions_io import (
+        overall_fallback_rate,
+        read_fallback_sidecar,
+        write_fallback_sidecar,
+    )
+
+    counts = {"Diabetes": {"n_fallback": 3, "n_test": 10}, "age": {"n_fallback": 0, "n_test": 5}}
+    path = write_fallback_sidecar(tmp_path, "wbm", counts)
+    assert path == tmp_path / "wbm" / "fallback.json"
+    assert read_fallback_sidecar(tmp_path, "wbm") == counts
+    # pooled rate = (3 + 0) / (10 + 5); empty cohort -> 0.0; absent method -> None.
+    assert overall_fallback_rate(read_fallback_sidecar(tmp_path, "wbm")) == 3 / 15
+    assert overall_fallback_rate({}) == 0.0
+    assert read_fallback_sidecar(tmp_path, "linear") is None
+
+
+def test_resolve_fallback_rate_precedence(tmp_path):
+    """The producer resolves an override over the measured sidecar over 0.0."""
+    import importlib.util
+    from pathlib import Path
+
+    from downstream_evaluation.evaluation.predictions_io import write_fallback_sidecar
+
+    repo = Path(__file__).resolve().parents[1]
+    script = repo / "scripts/paper_results/downstream/leaderboard/produce_per_method_per_user_pairs.py"
+    spec = importlib.util.spec_from_file_location("produce_pairs", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    write_fallback_sidecar(tmp_path, "wbm", {"t": {"n_fallback": 2, "n_test": 8}})
+    # Measured sidecar.
+    assert mod.resolve_fallback_rate(tmp_path, "wbm", {}) == 2 / 8
+    # Explicit override wins over the sidecar.
+    assert mod.resolve_fallback_rate(tmp_path, "wbm", {"wbm": 0.6276}) == 0.6276
+    # No sidecar, no override -> 0.0 (legacy prediction dir).
+    assert mod.resolve_fallback_rate(tmp_path, "linear", {}) == 0.0
