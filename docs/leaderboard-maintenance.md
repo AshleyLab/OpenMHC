@@ -77,12 +77,13 @@ the reducer ignores `subgroup_attr == "all"` on its own.
    Restart it to pick up the new/changed method. Uploading to the dataset does
    *not* trigger a Space rebuild; only pushing to the Space does.
 
-   > **Track 1 (downstream) Space-side work is not yet wired** (separate Space
-   > repo). The substrate is per-user *pairs*, so the Space's Track-1 recompute
-   > must run the downstream bootstrap reducers
-   > (`downstream_evaluation/evaluation/bootstrap_skill_rank.py`) on the pairs
-   > vs. the `linear` baseline, and surface the `fallback_rate` column —
-   > it can't reuse the imputation per-cell-mean path verbatim.
+   > **Track 1 (downstream)** is wired the same way (since 2026-07). The Space's
+   > `compute_downstream_rows` runs `reduce_substrate_to_point`
+   > (`downstream_evaluation/evaluation/bootstrap_skill_rank.py`) on the per-user
+   > *pairs* — point skill / rank / disparity-ratio fairness vs the `linear`
+   > baseline — and reads `fallback_rate` from the sidecar. So a new downstream
+   > substrate appears on the next restart, exactly like the other two tracks.
+   > (It does not reuse the imputation per-cell-mean path.)
 
 Dataset visibility, if needed:
 `HfApi().update_repo_settings(repo_id, private=False, repo_type="dataset")`

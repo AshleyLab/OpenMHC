@@ -22,10 +22,13 @@ server-side against the `linear` baseline.
 The substrate parquets are the canonical inputs for:
 
 - The OpenMHC HF Space (`MyHeartCounts/OpenMHC`) — the live leaderboard table (skill /
-  fair-skill / mean-rank vs the `linear` baseline). Track-1's headline scores are
-  paired-bootstrap means, too heavy to reduce on each page load, so the maintainers reduce
-  these substrates offline and publish the per-method rows as `downstream/leaderboard_rows.json`,
-  which the Space reads directly.
+  fair-skill / average-rank vs the `linear` baseline). The Space **reduces these substrates
+  live on every page load** — point estimate vs the `linear` baseline — exactly like the
+  imputation and forecasting tracks. So once your `<method>.parquet` (+ `.meta.json`) is on
+  the dataset, **it goes straight onto the board** — reduced live vs `linear`, with no
+  precomputed rows file and no offline maintainer reduce (the board picks it up on the
+  Space's next restart). (The paper's 95% confidence intervals come from the separate
+  `downstream/bootstrap/` reference; the live board shows the point value.)
 - Independent re-aggregation (the reducers in `scripts/paper_results/downstream/`).
 - The cluster-bootstrap reference at `downstream/bootstrap/` (per-draw CIs) is reduced
   from these substrates, so any change here must be matched by a bootstrap refresh.
@@ -80,7 +83,10 @@ caution.
 
 The substrate is produced and uploaded from the OpenMHC code repo. It is pooled from
 saved eval predictions (no model re-run); the bootstrap reference is kept on the same
-predictions.
+predictions. Because the Space reduces the substrate live, **uploading it (step 5) is all
+it takes** — no precomputed rows file to regenerate and no offline reduce; the board picks it
+up on the Space's next restart. (You only touch the Space *code* when the reducer itself
+changes — see `docs/leaderboard-maintenance.md`.)
 
 ```bash
 # (1) Eval — run each method through the public API, saving per-(method, task)
