@@ -134,12 +134,13 @@ def main() -> None:
 
     current = json.loads(args.current.read_text())
     paper_dir: Path = args.paper_dir
-    # Match imputation/forecasting: skill score + average rank report the bootstrap
-    # ``mean``; the BCa-corrected fairness skill score reports the deterministic ``point``.
-    skill = _load_scope(paper_dir / "skill_scores_bootstrap.csv", "Overall", "mean")
-    rank = _load_scope(paper_dir / "avg_rankings_bootstrap.csv", "Overall", "mean")
+    # Report the deterministic ``point`` estimate (metric on the real data) for every
+    # column; the bootstrap is used only for uncertainty. The percentile CI endpoints are
+    # unchanged — only the reported center moves from the bootstrap mean to the point.
+    skill = _load_scope(paper_dir / "skill_scores_bootstrap.csv", "Overall", "point")
+    rank = _load_scope(paper_dir / "avg_rankings_bootstrap.csv", "Overall", "point")
     fair = _load_scope(paper_dir / "fairness_skill_score_bootstrap.csv", "overall", "point")
-    doms = _load_domains(paper_dir / "skill_scores_bootstrap.csv", "mean")
+    doms = _load_domains(paper_dir / "skill_scores_bootstrap.csv", "point")
 
     missing = [k for k, _, _ in METHODS if k not in skill]
     if missing:

@@ -93,7 +93,10 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     # fairness bootstrap. Demographics come from the daily lookup regardless of the
     # model's granularity, so the map covers the widest set of users.
     if config.predictions_dir is not None:
-        from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
+        from downstream_evaluation.evaluation.predictions_io import (
+            write_fallback_sidecar,
+            write_subgroup_map,
+        )
 
         test_users: set[str] = set()
         for task in config.tasks:
@@ -103,6 +106,16 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
                 continue
         daily_lookup = f"{config.data_dir}/processed/{lookup_filename('daily', config.temporal.is_full_history)}"
         write_subgroup_map(config.predictions_dir, daily_lookup, test_users)
+
+        # Persist per-task fallback counts alongside the predictions so the offline
+        # substrate producer can compute this method's fallback rate without re-running it.
+        method_name = getattr(model, "name", type(model).__name__)
+        per_task_counts = {
+            task: {"n_fallback": r["n_fallback"], "n_test": r["n_test"]}
+            for task, r in results.items()
+            if isinstance(r, dict) and "n_fallback" in r
+        }
+        write_fallback_sidecar(config.predictions_dir, method_name, per_task_counts)
 
     results["config"] = {
         "model": getattr(model, "name", type(model).__name__),
