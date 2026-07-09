@@ -531,12 +531,12 @@ def _summarise(values: list[float], ci_level: float, point: float | None = None)
     """Deterministic point + bootstrap mean + SE / percentile-CI for one quantity.
 
     ``values`` are the bootstrap draws (the point draw excluded). ``point`` is the
-    full-cohort deterministic estimate; ``mean`` is the bootstrap mean of the draws;
-    SE and the percentile CI come from the draws. Both centres are returned so each
-    table can report the convention that matches imputation/forecasting — the
-    deterministic ``point`` for the BCa-corrected fairness skill score, the bootstrap
-    ``mean`` for the (near-unbiased) skill score and average rank. When ``point`` is
-    omitted it falls back to the bootstrap mean.
+    full-cohort deterministic estimate and is the reported centre for every quantity —
+    skill score, average rank, and the BCa-corrected fairness skill score alike; the
+    draws supply only the SE and the percentile CI around it. ``mean``, the bootstrap
+    mean of those draws, is returned alongside as a diagnostic (the gap between the two
+    centres measures the resampling bias). When ``point`` is omitted the centre falls
+    back to the bootstrap mean.
     """
     arr = np.asarray(values, dtype=np.float64)
     arr = arr[np.isfinite(arr)]
