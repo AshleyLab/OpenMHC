@@ -372,12 +372,12 @@ The participant data itself is not tracked in this repository. See
 Official citation information will be added when the public manuscript and full dataset
 release are available.
 
-@misc{schuetz2026openmhc,
-  title  = {OpenMHC: Accelerating the Science of Wearable Foundation Models},
-  author = {Schuetz, Narayan and Bai, Yuze and Pan, Lianggang and Eggert, Edgar and Nerrise, Favour and Delgado-SanMartin, Juan and Rosenblattl, Max and Gurbanova, Milana and Asadi, Mohammad and Johnson, Anders and Schmeidmayer, Paul and Wang, Dennis and Lawrie, Allan and Kim, Daniel Seung and Liu, Xin and Paruchuri, Akshay and Adeli, Ehsan and Ashley, Euan and Zhang, Kelly W.},
-  year   = {2026},
-  note   = {Manuscript under review}
-}
+    @misc{schuetz2026openmhc,
+    title  = {OpenMHC: Accelerating the Science of Wearable Foundation Models},
+    author = {Schuetz, Narayan and Bai, Yuze and Pan, Lianggang and Eggert, Edgar and Nerrise, Favour and Delgado-SanMartin, Juan and  Rosenblattl, Max and Gurbanova, Milana and Asadi, Mohammad and Johnson, Anders and Schmeidmayer, Paul and Wang, Dennis and Lawrie, Allan and Kim, Daniel Seung and Liu, Xin and Paruchuri, Akshay and Adeli, Ehsan and Ashley, Euan and Zhang, Kelly W.},
+    year   = {2026},
+    note   = {Manuscript under review}
+    }
 
 ## License
 
