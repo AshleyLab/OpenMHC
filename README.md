@@ -4,7 +4,7 @@
 [![Benchmark](https://img.shields.io/badge/HuggingFace-Benchmark-ffd21e?style=flat-square&logo=huggingface)](https://myheartcounts-openmhc.hf.space)
 [![Models](https://img.shields.io/badge/HuggingFace-Models-ffd21e?style=flat-square&logo=huggingface)](https://huggingface.co/MyHeartCounts/models)
 [![Dataset](https://img.shields.io/badge/Dataset-XS%20on%20Dataverse-1f883d?style=flat-square)](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/ZYMJF6)
-[![Paper](https://img.shields.io/badge/Paper-Coming%20Soon-b31b1b?style=flat-square)](https://myheartcounts.stanford.edu/assets/OpenMHC_preprint20260707-D8wbezht.pdf)
+[![arXiv](https://img.shields.io/badge/arXiv-2607.16235-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2607.16235)
 
 ![OpenMHC overview](figures/figure_1_final.png)
 
