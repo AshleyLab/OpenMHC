@@ -22,7 +22,7 @@
 
 ## Observed values
 
-**Total observations**: 39,766 — **type-enforced**: 39,766 (**unique**: 11) — raw Python types seen: `float` (39,766).
+**Total observations**: 27,428 — **type-enforced**: 27,428 (**unique**: 11) — raw Python types seen: `float` (27,428).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
@@ -30,30 +30,30 @@
 | min | 0 |
 | q25 | 7.00 |
 | median | 8.00 |
-| mean | 7.56 |
+| mean | 7.53 |
 | q75 | 9.00 |
 | max | 10.00 |
-| std | 1.99 |
+| std | 1.96 |
 
 **Top 11 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `8.00` | 10,263 |
-| `9.00` | 8,275 |
-| `7.00` | 6,396 |
-| `10.00` | 5,714 |
-| `6.00` | 3,370 |
-| `5.00` | 2,556 |
-| `4.00` | 1,293 |
-| `3.00` | 846 |
-| `2.00` | 501 |
-| `0` | 308 |
-| `1.00` | 244 |
+| `8.00` | 7,116 |
+| `9.00` | 5,855 |
+| `7.00` | 4,591 |
+| `10.00` | 3,511 |
+| `6.00` | 2,421 |
+| `5.00` | 1,871 |
+| `4.00` | 840 |
+| `3.00` | 502 |
+| `2.00` | 333 |
+| `0` | 218 |
+| `1.00` | 170 |
 
 _Daily-resolution variant also available in `data/labels/healthkit_daily.json`; this table reflects `last_labels.json` (nearest-per-user measurement) for API consistency._
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history (file-level)
 - Commits: 4 (daily_check_coaching.json)

@@ -50,45 +50,45 @@ Each gender-ethnicity stratum has:
 
 ## Observed values
 
-**Total observations**: 5,968 — **type-enforced**: 5,968 (**unique**: 5,718) — raw Python types seen: `float` (5,968).
+**Total observations**: 2,239 — **type-enforced**: 2,239 (**unique**: 2,220) — raw Python types seen: `float` (2,239).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
-| min | 0.003377 |
+| min | 0.003791 |
 | q25 | 0.03 |
-| median | 0.06 |
-| mean | 0.08 |
+| median | 0.05 |
+| mean | 0.07 |
 | q75 | 0.10 |
-| max | 0.57 |
+| max | 0.68 |
 | std | 0.07 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `0.01` | 7 |
-| `0.02` | 4 |
-| `0.04` | 4 |
-| `0.04` | 4 |
-| `0.06` | 4 |
-| `0.09` | 4 |
-| `0.01` | 3 |
-| `0.02` | 3 |
-| `0.02` | 3 |
-| `0.02` | 3 |
-| `0.02` | 3 |
-| `0.02` | 3 |
-| `0.03` | 3 |
-| `0.03` | 3 |
-| `0.03` | 3 |
-| `0.04` | 3 |
-| `0.04` | 3 |
-| `0.04` | 3 |
-| `0.05` | 3 |
-| `0.05` | 3 |
+| `0.04` | 2 |
+| `0.07` | 2 |
+| `0.02` | 2 |
+| `0.03` | 2 |
+| `0.009575` | 2 |
+| `0.02` | 2 |
+| `0.02` | 2 |
+| `0.02` | 2 |
+| `0.006807` | 2 |
+| `0.04` | 2 |
+| `0.07` | 2 |
+| `0.02` | 2 |
+| `0.01` | 2 |
+| `0.07` | 2 |
+| `0.01` | 2 |
+| `0.04` | 2 |
+| `0.02` | 2 |
+| `0.03` | 2 |
+| `0.06` | 2 |
+| `0.15` | 1 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history (of source file or calculation)
 - **APHHeartAgeAndRiskFactors.m**: Recent material change
