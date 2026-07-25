@@ -42,11 +42,27 @@ directly.
 | `model` | string (dict) | your method identifier; **must equal the `<method>` filename stem** — set it via `evaluate_forecasting(method_name="<method>")` (defaults to `"custom"`) |
 | `group` | string (dict) | `continuous` (`ch 0`–`6`, scored on `mae`) or `binary` (`ch 7`–`18`, scored on `auroc`) |
 | `metric` | string (dict) | scored metric: `mae` (continuous) or `auroc` (binary) |
-| `channel_idx` | int16 | sensor channel index (0–18) |
+| `channel_idx` | int16 | sensor channel index (0–18); see [Channel categories](#channel-categories) |
 | `channel_name` | string (dict) | human-readable channel name |
 | `user_id` | string (dict) | participant id from the canonical split |
 | `metric_value` | float64 | RAW per-user metric, micro-pooled over the user's forecast windows (`Σcell / Σcount`) |
 | `n_values` | int64 | finite horizon-cell count behind `metric_value` |
+
+### Channel categories
+
+The headline `overall` scope is **category-balanced** — each category is weighted
+once regardless of how many channels it holds (so the 10 `workout` channels do not
+outvote the 2 `sleep` ones). Categories partition `group`: `continuous` =
+`activity` + `physiology`, `binary` = `sleep` + `workout`.
+
+| category | `channel_idx` |
+|---|---|
+| `activity` | 0, 1, 2, 3, 4 |
+| `physiology` | 5, 6 |
+| `sleep` | 7, 8 |
+| `workout` | 9–18 |
+
+Source of truth: `CATEGORY_SCOPES` in `src/forecasting_evaluation/metrics/metric_spec.py`.
 
 ### Value semantics
 
@@ -68,10 +84,38 @@ directly.
 ### No subgroup rows — fairness is joined server-side
 
 Unlike Track 2, the forecasting substrate is keyed by `user_id` only and carries
-**no `subgroup_attr` / `subgroup_value` columns**. The fairness skill score is
-computed maintainer-side by joining demographics (`age_group`, `sex`) onto
-`user_id` from the private label tables, so submitters do **not** ship subgroup
-rows — `evaluate_forecasting` emits exactly the columns above.
+**no `subgroup_attr` / `subgroup_value` columns**. Submitters do **not** ship
+subgroup rows — `evaluate_forecasting` emits exactly the columns above — and the
+fairness skill score is joined at scoring time.
+
+That join needs **no private data**: every forecasting user also appears in
+`imputation/locf.parquet`, which carries per-user `age_group` / `sex` subgroup
+rows under the canonical 18/30/40/50/60 age bins. Reusing that partition gives
+forecasting fairness the identical user→subgroup mapping as imputation, with no
+extra artifact. This is exactly what the live leaderboard does, and it
+reproduces the published `S_fair` point estimates:
+
+```python
+demo = {}                                     # {user_id: {age_group, sex}}
+imp = pd.read_parquet(
+    hf_hub_download(REPO, "imputation/locf.parquet", repo_type="dataset"),
+    columns=["subgroup_attr", "subgroup_value", "user_id"])
+for attr in ("age_group", "sex"):
+    sub = imp[imp.subgroup_attr.astype(str) == attr][
+        ["user_id", "subgroup_value"]].drop_duplicates()
+    for uid, val in sub.itertuples(index=False):
+        demo.setdefault(str(uid), {})[attr] = str(val)
+
+err  = to_error_df(substrate, user_col="user_id")   # canonical error conversion
+fair = compute_fair_skill_scores_from_errors(
+    err, demo, baseline_method="seasonal_naive")
+fair[fair.scope == "overall"]                       # == published S_fair points
+```
+
+> **Use the `_from_errors` entry point.** Track 3 passes **per-user** errors plus
+> a `demographics` dict; Track 2 passes **per-cell mean** errors to
+> `compute_fair_skill_scores`. Mixing the two up returns plausible but wrong
+> numbers with no error raised. Convert with `to_error_df` rather than by hand.
 
 ## `<method>.meta.json`
 
