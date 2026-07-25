@@ -28,6 +28,13 @@ method, for one of three reductions (`reduction` column):
 Reducing each draw group to mean / SE / percentile-CI (and BCa for the headline
 scopes) reproduces the published `forecasting_*_bootstrap.csv` tables.
 
+> **Fairness reducers: read `SCHEMA.md` first.** This file holds draws only, no
+> point estimate. The draw mean is **not** the published `S_fair` (the disparity
+> ratio is downward-biased), and the published intervals are **BCa**, not
+> percentile — the two disagree on whether `DLinear`'s fairness advantage
+> excludes zero. The fairness rows were regenerated 2026-07-25 under MAPD
+> (previously max-min); `skill` and `rank` were unchanged.
+
 > **Note — scope-level, not task-level.** Unlike the imputation track (whose
 > `draws.parquet` is per-task `E`/`R`/`rank`, reducible to any scope), forecasting
 > aggregates tasks → scopes *within* each draw, so its draws are already at the

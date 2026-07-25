@@ -45,6 +45,32 @@ holding the per-draw values for all three reductions.
 Resamples are **paired** across methods (one shared `boot_idx` matrix, `seed=42`),
 so per-draw cross-method comparisons (skill ratios, ranks) are valid.
 
+### Reducing the fairness draws — two footguns
+
+The published `S_fair` values (paper Table 4, leaderboard) are **point estimates
+on the full cohort**, which this file does **not** contain — it holds only the
+1000 resampled draws. Reduce them carefully:
+
+- **Do not report the draw mean as the point estimate.** The disparity ratio is
+  skewed and downward-biased, so its bootstrap mean sits well below the point.
+  For `AutoETS`/`overall` the draw mean is ≈ −2.17 versus a point of ≈ −3.04.
+  Recover the point with
+  `compute_fair_skill_scores_from_errors(err, demo, baseline_method="seasonal_naive")`
+  on the per-user substrate (see [`../SCHEMA.md`](../SCHEMA.md)).
+- **Percentile intervals are biased low; the published intervals are BCa.** BCa
+  needs the draws **plus** a leave-one-user-out jackknife of the point flow
+  (`bootstrap_fair_skill_score(..., bca=True)` returns both). The difference
+  changes conclusions: `DLinear`/`overall` has a percentile interval of
+  `(−0.052, +0.235)` — spanning zero — but a BCa interval of `(+0.113, +0.322)`,
+  which does not.
+
+> **Fairness rows regenerated 2026-07-25.** The originals were computed with the
+> legacy **max-min** disparity primitive while the paper and leaderboard use
+> **MAPD**; they now agree. `sex` rows are bit-identical either way (MAPD ≡
+> max-min for a 2-level attribute); `age_group`, `overall`, the categories and
+> the per-channel scopes changed. `skill` and `rank` rows were not touched. See
+> `draws.meta.json:fairness_rows_regenerated`.
+
 ## `draws.meta.json`
 
 ```jsonc
