@@ -60,7 +60,7 @@ fqdn==1.5.1
 frozenlist==1.8.0
 fsspec==2023.10.0
 gitdb==4.0.12
-GitPython==3.1.50
+GitPython==3.1.57
 gluonts==0.16.2
 grpcio==1.81.0
 h11==0.16.0
