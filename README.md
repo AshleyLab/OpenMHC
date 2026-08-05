@@ -14,7 +14,7 @@ This is the official public repository and package of OpenMHC, which includes th
 The research-grade codebased can be found here https://github.com/NarayanSchuetz/OpenMHC (particularly relevant for training infra, until we ported that properly).
 
 What can this repository and the OpenMHC dataset be useful for?
-- Experiment on the, to-date, largest fully public mobile/wearable health dataset. This space is vastly underexplored in the AI/ML world and will allow for many valuable contributions that could affect millions of users one day.
+- Experiment on the, to-date, largest broadly accessible mobile/wearable health dataset. This space is vastly underexplored in the AI/ML world and will allow for many valuable contributions that could affect millions of users one day.
 - Leverage our pre-trained wearable foundation models on your own datasets (this could be from research or your own Apple HealthKit exports - we are working on adaptors for the latter but Claude/Codex can likely help prior to that), or pre-train you models on our large-scale dataset.
 - Evaluate your own new method/model on our benchmark tasks, spanning dense downstream prediction across >30 tasks, 24h wearable data forecasting, a single day/multi-day minute level imputation and submit them to be displayed on the official leaderboard
 - Augment your own datasets, in mobile/wearable health studies we are often limite to small disease cohorts, OpenMHC can give you access to larger numbers of subjects to compare to.
