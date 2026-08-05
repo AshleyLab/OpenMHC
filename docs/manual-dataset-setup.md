@@ -2,33 +2,30 @@
 
 Use this guide if you cannot use `openmhc.download_dataset()` — for example, on air-gapped clusters, behind a corporate proxy, or when you already have the raw Dataverse bundle on disk.
 
-**One root per version.** Every OpenMHC dataset root must contain a `dataset_version.json` marker declaring which release lives there (`xs` or `full`), and the public eval API cross-checks that marker against the `version=` you pass. The two versions therefore cannot share a directory — put each under its own root and point `MHC_DATA_DIR` (or `data_dir=`) at whichever one you want to use.
+The OpenMHC dataset is distributed through Harvard Dataverse and will be made available to all qualified researchers free of charge upon acceptance of the paper. The DOI and access instructions are published here at that point.
 
-Recommended layout for keeping both versions side by side:
+**One root per version.** Every OpenMHC dataset root must contain a `dataset_version.json` marker declaring which release lives there (`xs` or `full`), and the public eval API cross-checks that marker against the `version=` you pass. The two therefore cannot share a directory — put each under its own root and point `MHC_DATA_DIR` (or `data_dir=`) at whichever one you want to use.
+
+Recommended layout for keeping both side by side:
 
 ```
 ~/.cache/openmhc/
-├── data-xs/      # 593-user reviewer subset
+├── data-xs/      # 593-user development subset
 └── data-full/    # 11,894-user paper release
 ```
 
 ---
 
-## XS version (~1.9 GB, 593 users)
+## Development subset (~1.9 GB, 593 users)
 
-**Source:** Dataverse deposit `doi:10.7910/DVN/ZYMJF6`
+**Source:** Dataverse deposit (DOI published upon paper acceptance)
 
 ### Step 1 — Download the bundle
 
 ```bash
-# Public dataset — no token needed
-curl -L -o openmhc-xs.zip \
-  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=doi:10.7910/DVN/ZYMJF6"
-
-# Restricted dataset — supply your Dataverse API token
 curl -L -o openmhc-xs.zip \
   -H "X-Dataverse-key: <your-token>" \
-  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=doi:10.7910/DVN/ZYMJF6"
+  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=<doi>"
 ```
 
 ### Step 2 — Extract the outer ZIP
@@ -100,7 +97,7 @@ This drops `dataset_version.json` at the root. Without it the eval API will refu
 
 ## Full version (~38 GB, 11,894 users)
 
-**Source:** Dataverse deposit `doi:10.7910/DVN/XNBITM` (released after publication)
+**Source:** Dataverse deposit (DOI published upon paper acceptance)
 
 The full bundle splits large archives into numbered parts (`*.tar.gz.part-NN`) that must be concatenated before extraction. All directories extract to canonical names — no renaming required.
 
@@ -109,7 +106,7 @@ The full bundle splits large archives into numbered parts (`*.tar.gz.part-NN`) t
 ```bash
 curl -L -o openmhc-full.zip \
   -H "X-Dataverse-key: <your-token>" \
-  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=doi:10.7910/DVN/XNBITM"
+  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=<doi>"
 ```
 
 ### Step 2 — Extract the outer ZIP

@@ -1,23 +1,24 @@
 # OpenMHC Dataset
 
-The MyHeartCounts (MHC) wearable benchmark dataset is hosted separately from this code repo on **Harvard Dataverse**. Two versions are available.
+The MyHeartCounts (MHC) wearable benchmark dataset is hosted separately from this code repo on **Harvard Dataverse**. It will be made available to all qualified researchers free of charge upon acceptance of the paper.
 
-| Version | Size | Use case | DOI |
+| Dataset | Size | Use case | DOI |
 |---|---|---|---|
-| `xs` | ~1.9 GB | Quickstart, NeurIPS reviewer evaluation | [`doi:10.7910/DVN/ZYMJF6`](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/ZYMJF6) |
-| `full` | ~38 GB | Full leaderboard submissions | TBD (released after publication) |
+| OpenMHC | ~38 GB | Benchmark evaluation, leaderboard submissions | Available upon paper acceptance |
+
+The API additionally recognises a small development subset (`version="xs"`, 593 users) used for quickstarts and smoke tests. It is a subsample of the same release rather than a separate dataset.
 
 ## Download
 
-The Python API wraps the Dataverse access API — no Dataverse account needed for public datasets. Each version must live under its **own** dataset root: the strict resolver cross-checks the root's `dataset_version.json` marker against the `version=` you pass to `evaluate_*`, so xs and full **cannot share a directory**.
+The Python API wraps the Dataverse access API. Each version must live under its **own** dataset root: the strict resolver cross-checks the root's `dataset_version.json` marker against the `version=` you pass to `evaluate_*`, so the development subset and the full release **cannot share a directory**.
 
 ```python
 import openmhc
 
-# XS subset (recommended first — 593 users, ~1.9 GB)
+# Development subset — 593 users, ~1.9 GB
 openmhc.download_dataset(version="xs", dest="~/.cache/openmhc/data-xs")
 
-# Full dataset (when published — 11,894 users, ~38 GB) — distinct root
+# Full dataset (upon paper acceptance — 11,894 users, ~38 GB) — distinct root
 openmhc.download_dataset(version="full", dest="~/.cache/openmhc/data-full")
 ```
 

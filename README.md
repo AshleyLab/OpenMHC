@@ -3,7 +3,7 @@
 [![Project Page](https://img.shields.io/badge/Project%20Page-MyHeartCounts-1f883d?logo=googlechrome&style=flat-square)](https://myheartcounts.stanford.edu/)
 [![Benchmark](https://img.shields.io/badge/HuggingFace-Benchmark-ffd21e?style=flat-square&logo=huggingface)](https://myheartcounts-openmhc.hf.space)
 [![Models](https://img.shields.io/badge/HuggingFace-Models-ffd21e?style=flat-square&logo=huggingface)](https://huggingface.co/MyHeartCounts/models)
-[![Dataset](https://img.shields.io/badge/Dataset-XS%20on%20Dataverse-1f883d?style=flat-square)](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/ZYMJF6)
+[![Dataset](https://img.shields.io/badge/Dataset-Upon%20paper%20acceptance-lightgrey?style=flat-square)](DATASET.md)
 [![arXiv](https://img.shields.io/badge/arXiv-2607.16235-b31b1b?style=flat-square&logo=arxiv&logoColor=white)](https://arxiv.org/abs/2607.16235)
 
 ![OpenMHC overview](figures/figure_1_final.png)
@@ -24,14 +24,13 @@ What can this repository and the OpenMHC dataset be useful for?
 
 ## Release Plan
 
-- [ ] Release Full OpenMHC dataset (Estimated: August-December)
+- [ ] Release OpenMHC dataset (upon paper acceptance)
 - [ ] Release Apple HealthKit export adaptor, so people can directly run our models on their data (Estimated: July-September)
 - [ ] Release examples on how to run our-pretrained models on individual dataset samples (Estimated: July-August)
 - [ ] Release cleaned-up training infrastructure here (Estimated: July-August)
 - [x] Release model checkpoints on Hugging Face
 - [x] Release benchmark Hugging Face Space
 - [x] Release evaluation code
-- [x] Release OpenMHC-XS dataset
 - [x] Release paper on arXiv
 
 ## Install
@@ -63,12 +62,10 @@ extras, virtualenv setup, Sherlock setup, and verification commands.
 
 ## Dataset Setup
 
-The dataset is hosted separately from this code repository. The `xs` release is
-available for quickstarts and smoke tests on
-[Harvard Dataverse](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/ZYMJF6)
-(`doi:10.7910/DVN/ZYMJF6`); the `full` release uses the same layout and API
-contract once available. Download each version into its own root directory and
-pass the version explicitly when evaluating:
+The dataset is hosted separately from this code repository on Harvard Dataverse
+and will be made available to all qualified researchers free of charge upon
+acceptance of the paper. Download it into its own root directory and pass the
+version explicitly when evaluating:
 
 ```python
 import openmhc
