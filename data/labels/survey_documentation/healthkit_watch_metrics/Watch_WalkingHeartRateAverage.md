@@ -22,47 +22,47 @@ Not a survey variable. Collected automatically via HealthKit from Apple Watch/iP
 
 ## Observed values
 
-**Total observations**: 263,606 — **type-enforced**: 263,606 (**unique**: 31,254) — raw Python types seen: `float` (263,606).
+**Total observations**: 196,697 — **type-enforced**: 196,697 (**unique**: 28,268) — raw Python types seen: `float` (196,697).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
 | min | 45.00 |
-| q25 | 88.29 |
-| median | 96.64 |
-| mean | 97.08 |
-| q75 | 105.2 |
+| q25 | 87.75 |
+| median | 96.17 |
+| mean | 96.61 |
+| q75 | 104.8 |
 | max | 202 |
-| std | 13.30 |
+| std | 13.38 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `90.00` | 454 |
-| `97.00` | 450 |
-| `105` | 421 |
-| `98.00` | 406 |
-| `97.50` | 375 |
-| `104` | 330 |
-| `90.50` | 294 |
-| `91.00` | 291 |
-| `89.50` | 287 |
-| `105.5` | 285 |
-| `99.00` | 277 |
-| `89.00` | 276 |
-| `106` | 267 |
-| `82.00` | 261 |
-| `96.00` | 260 |
-| `113` | 257 |
-| `104.5` | 253 |
-| `96.50` | 234 |
-| `112` | 231 |
-| `83.00` | 229 |
+| `90.00` | 349 |
+| `97.00` | 310 |
+| `105` | 296 |
+| `98.00` | 285 |
+| `97.50` | 269 |
+| `104` | 234 |
+| `90.50` | 217 |
+| `89.50` | 211 |
+| `89.00` | 207 |
+| `91.00` | 206 |
+| `105.5` | 195 |
+| `106` | 191 |
+| `99.00` | 190 |
+| `82.00` | 187 |
+| `113` | 186 |
+| `83.00` | 182 |
+| `96.00` | 178 |
+| `96.50` | 176 |
+| `104.5` | 174 |
+| `112` | 164 |
 
 _Daily-resolution variant also available in `data/labels/healthkit_daily.json`; this table reflects `last_labels.json` (nearest-per-user measurement) for API consistency._
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - Commits touching source file: 117 total

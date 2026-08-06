@@ -22,47 +22,47 @@ Not a survey variable. Collected automatically via HealthKit from Apple Watch/iP
 
 ## Observed values
 
-**Total observations**: 72,605 — **type-enforced**: 72,605 (**unique**: 3,265) — raw Python types seen: `float` (72,605).
+**Total observations**: 54,959 — **type-enforced**: 54,959 (**unique**: 2,797) — raw Python types seen: `float` (54,959).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
-| min | -1.00 |
+| min | 5.00 |
 | q25 | 14.00 |
-| median | 15.75 |
-| mean | 16.25 |
+| median | 15.86 |
+| mean | 16.24 |
 | q75 | 18.00 |
-| max | 106 |
-| std | 3.17 |
+| max | 39.00 |
+| std | 3.16 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `15.00` | 4,450 |
-| `14.00` | 3,471 |
-| `14.50` | 3,366 |
-| `17.00` | 3,342 |
-| `13.00` | 3,261 |
-| `15.50` | 3,102 |
-| `13.50` | 2,894 |
-| `16.00` | 2,822 |
-| `16.50` | 2,638 |
-| `17.50` | 2,164 |
-| `12.50` | 1,818 |
-| `18.00` | 1,625 |
-| `19.00` | 1,423 |
-| `18.50` | 1,394 |
-| `12.00` | 1,162 |
-| `11.50` | 1,041 |
-| `20.00` | 986 |
-| `20.50` | 953 |
-| `19.50` | 900 |
-| `15.25` | 782 |
+| `15.00` | 3,320 |
+| `17.00` | 2,687 |
+| `14.00` | 2,606 |
+| `14.50` | 2,530 |
+| `13.00` | 2,497 |
+| `15.50` | 2,329 |
+| `13.50` | 2,188 |
+| `16.00` | 2,095 |
+| `16.50` | 2,017 |
+| `17.50` | 1,706 |
+| `12.50` | 1,279 |
+| `18.00` | 1,224 |
+| `19.00` | 1,092 |
+| `18.50` | 1,033 |
+| `11.50` | 963 |
+| `12.00` | 947 |
+| `20.00` | 787 |
+| `20.50` | 737 |
+| `19.50` | 716 |
+| `21.00` | 610 |
 
 _Daily-resolution variant also available in `data/labels/healthkit_daily.json`; this table reflects `last_labels.json` (nearest-per-user measurement) for API consistency._
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - Commits touching source file: 117 total

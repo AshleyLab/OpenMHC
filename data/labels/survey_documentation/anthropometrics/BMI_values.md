@@ -23,45 +23,45 @@ Not a survey variable. Computed from Body Mass (kg) and Height (m) automatically
 
 ## Observed values
 
-**Total observations**: 22,334 — **type-enforced**: 22,334 (**unique**: 3,235) — raw Python types seen: `float` (22,334).
+**Total observations**: 10,047 — **type-enforced**: 10,047 (**unique**: 2,477) — raw Python types seen: `float` (10,047).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
-| min | 10.40 |
-| q25 | 23.02 |
-| median | 25.85 |
-| mean | 27.14 |
-| q75 | 29.91 |
-| max | 125 |
-| std | 6.55 |
+| min | 11.74 |
+| q25 | 23.33 |
+| median | 26.11 |
+| mean | 27.24 |
+| q75 | 30.04 |
+| max | 58.04 |
+| std | 5.85 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `25.10` | 75 |
-| `24.37` | 69 |
-| `24.39` | 67 |
-| `23.67` | 66 |
-| `25.83` | 65 |
-| `23.01` | 64 |
-| `22.96` | 62 |
-| `25.10` | 62 |
-| `23.73` | 59 |
-| `26.50` | 59 |
-| `22.24` | 58 |
-| `22.89` | 58 |
-| `23.49` | 58 |
-| `25.09` | 58 |
-| `27.26` | 58 |
-| `21.52` | 57 |
-| `22.81` | 57 |
-| `23.71` | 57 |
-| `25.09` | 56 |
-| `27.32` | 56 |
+| `25.10` | 40 |
+| `22.96` | 35 |
+| `23.01` | 34 |
+| `25.83` | 34 |
+| `24.37` | 32 |
+| `23.67` | 32 |
+| `25.85` | 31 |
+| `23.73` | 29 |
+| `25.10` | 27 |
+| `27.26` | 27 |
+| `22.81` | 27 |
+| `22.89` | 27 |
+| `22.38` | 27 |
+| `23.49` | 27 |
+| `26.54` | 26 |
+| `26.50` | 26 |
+| `23.57` | 26 |
+| `25.09` | 26 |
+| `27.32` | 25 |
+| `27.20` | 25 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - Commits touching source file: 117 total

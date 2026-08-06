@@ -22,47 +22,47 @@ Not a survey variable. Collected automatically via HealthKit from Apple Watch/iP
 
 ## Observed values
 
-**Total observations**: 180,442 — **type-enforced**: 180,442 (**unique**: 7,436) — raw Python types seen: `float` (180,442).
+**Total observations**: 134,955 — **type-enforced**: 134,955 (**unique**: 7,112) — raw Python types seen: `float` (134,955).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
 | min | 0.02 |
-| q25 | 1.13 |
-| median | 1.68 |
-| mean | 1.79 |
-| q75 | 2.31 |
-| max | 18.35 |
-| std | 0.93 |
+| q25 | 1.15 |
+| median | 1.71 |
+| mean | 1.82 |
+| q75 | 2.36 |
+| max | 14.00 |
+| std | 0.94 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `1.50` | 268 |
-| `1.45` | 247 |
-| `1.20` | 244 |
-| `1.27` | 244 |
-| `1.23` | 243 |
-| `1.43` | 242 |
-| `1.77` | 239 |
-| `1.32` | 236 |
-| `1.15` | 235 |
-| `1.62` | 235 |
-| `1.25` | 232 |
-| `1.57` | 232 |
-| `1.37` | 229 |
-| `1.05` | 228 |
-| `1.30` | 228 |
-| `1.52` | 228 |
-| `1.38` | 226 |
-| `1.00` | 223 |
-| `1.12` | 223 |
-| `1.40` | 223 |
+| `1.50` | 194 |
+| `1.62` | 183 |
+| `1.77` | 179 |
+| `1.43` | 178 |
+| `1.45` | 177 |
+| `1.25` | 177 |
+| `1.23` | 177 |
+| `1.15` | 176 |
+| `1.05` | 171 |
+| `1.30` | 170 |
+| `1.27` | 169 |
+| `1.38` | 167 |
+| `1.37` | 166 |
+| `1.12` | 166 |
+| `1.32` | 165 |
+| `1.20` | 164 |
+| `1.57` | 164 |
+| `1.52` | 163 |
+| `1.48` | 162 |
+| `1.40` | 161 |
 
 _Daily-resolution variant also available in `data/labels/healthkit_daily.json`; this table reflects `last_labels.json` (nearest-per-user measurement) for API consistency._
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - Commits touching source file: 117 total

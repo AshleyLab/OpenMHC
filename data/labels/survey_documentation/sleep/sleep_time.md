@@ -27,7 +27,7 @@ Continuous integer input (slider).
 
 ## Observed values
 
-**Total observations**: 44,359 — **type-enforced**: 44,359 (**unique**: 101) — raw Python types seen: `float` (44,359).
+**Total observations**: 9,883 — **type-enforced**: 9,883 (**unique**: 16) — raw Python types seen: `float` (9,883).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
@@ -35,37 +35,33 @@ Continuous integer input (slider).
 | min | 0 |
 | q25 | 7.00 |
 | median | 8.00 |
-| mean | 1.55e+14 |
+| mean | 7.69 |
 | q75 | 8.00 |
-| max | 6.874e+18 |
-| std | 3.264e+16 |
+| max | 24.00 |
+| std | 1.22 |
 
-**Top 20 most frequent values**:
+**Top 16 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `8.00` | 21,478 |
-| `7.00` | 10,483 |
-| `9.00` | 5,245 |
-| `6.00` | 3,549 |
-| `10.00` | 1,875 |
-| `5.00` | 761 |
-| `12.00` | 295 |
-| `4.00` | 213 |
-| `11.00` | 111 |
-| `3.00` | 52 |
-| `2.00` | 38 |
-| `1.00` | 33 |
-| `0` | 16 |
-| `14.00` | 15 |
-| `50.00` | 14 |
-| `13.00` | 13 |
-| `15.00` | 12 |
-| `56.00` | 10 |
-| `40.00` | 9 |
-| `730` | 8 |
+| `8.00` | 4,836 |
+| `7.00` | 2,716 |
+| `9.00` | 953 |
+| `6.00` | 821 |
+| `10.00` | 272 |
+| `5.00` | 157 |
+| `12.00` | 41 |
+| `4.00` | 35 |
+| `24.00` | 16 |
+| `11.00` | 15 |
+| `3.00` | 9 |
+| `13.00` | 5 |
+| `0` | 2 |
+| `2.00` | 2 |
+| `16.00` | 2 |
+| `1.00` | 1 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history (file-level)
 - Total commits: 6
