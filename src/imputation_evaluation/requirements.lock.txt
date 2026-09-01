@@ -203,7 +203,7 @@ torchmetrics==1.8.2
 tornado==6.5.6
 tqdm==4.67.3
 traitlets==5.15.0
-transformers==5.2.0
+transformers==5.10.1
 triton==3.2.0
 tsdb==0.7.1
 typer==0.25.1
