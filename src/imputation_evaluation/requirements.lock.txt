@@ -187,7 +187,7 @@ shellingham==1.5.4
 six==1.17.0
 smmap==5.0.3
 sortedcontainers==2.4.0
-soupsieve==2.8.4
+soupsieve==2.9
 stack-data==0.6.3
 statsmodels==0.14.6
 submitit==1.5.4
