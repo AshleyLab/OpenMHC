@@ -6,6 +6,21 @@
 **Role**: context
 **Type**: categorical
 
+## Released Full/XS encoding
+
+`field_Ethnicity_heartage` is a single-choice question. Alaska Native, American Indian and Pacific Islander responses are mapped to Other. The release retains six categories:
+
+| Released dictionary code | Stored category name |
+|---|---|
+| 0 | Asian |
+| 1 | Black |
+| 2 | Hispanic |
+| 3 | White |
+| 4 | Other |
+| 5 | I prefer not to indicate an ethnicity |
+
+Responses are stored as category-name strings; the codes above are dictionary codes. Missing responses remain missing.
+
 ## Source
 - Obj-C constant declaration: `CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m` line 48
 - Used in Framingham calculation: `APHHeartAgeAndRiskFactors.m` lines 178, 180–184, 187, 263, 277, 316, 363
@@ -15,7 +30,7 @@
 ## Question
 > Ethnicity
 
-## Answer options
+## Original survey answer options
 | Value | Label |
 |-------|-------|
 | I prefer not to indicate an ethnicity | I prefer not to indicate an ethnicity |
@@ -30,24 +45,20 @@
 
 **Notes on values**: Nine localized string options are presented to the user. However, only two categories are used internally for the Framingham calculation: "African-American" (when user selects "Black") and "Other" (all other selections, including prefer-not-to-answer).
 
-## Observed values
+## Observed values (released data)
 
-**Total observations**: 10,210 — **type-enforced**: 10,210 (**unique**: 9) — raw Python types seen: `str` (10,210).
-**Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
+Responses are available for **3,769 participants in Full** and **182 in XS**.
 
-| value | count | pct |
-|-------|------:|----:|
-| `6` (White) | 7,891 | 77.3% |
-| `2` (Asian) | 862 | 8.4% |
-| `4` (Hispanic) | 688 | 6.7% |
-| `3` (Black) | 320 | 3.1% |
-| `7` (Other) | 253 | 2.5% |
-| `8` (I prefer not to indicate an ethnicity) | 115 | 1.1% |
-| `1` (American Indian) | 46 | 0.5% |
-| `5` (Pacific Islander) | 30 | 0.3% |
-| `0` (Alaska Native) | 5 | 0.0% |
+| Ethnicity category | Full participants | XS participants |
+|---|---:|---:|
+| Asian | 233 | 14 |
+| Black | 109 | 3 |
+| Hispanic | 195 | 12 |
+| White | 3,104 | 148 |
+| Other | 109 | 5 |
+| I prefer not to indicate an ethnicity | 19 | 0 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Source: Full/XS `data/labels/context_labels.json` and `ordinal_dictionary.json`, checked 29 October 2026._
 
 ## Git history
 - .h/.m commits: `06a6f76`, `0869e98`

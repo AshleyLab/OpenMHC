@@ -5,6 +5,18 @@
 **Role**: context
 **Type**: ordinal
 
+## Released Full/XS encoding
+
+`field_ethnicity` is a single-choice Hispanic/Latino-origin question. The release uses three categories:
+
+| Released code | Exact dictionary label | Original codes mapped here |
+|---|---|---|
+| 1 | No, not Spanish/Hispanic/Latino | 1 |
+| 2 | Yes, Mexican, Mexican American, or Chicano | 3 |
+| 3 | Yes, other Spanish/Hispanic/Latina | 2 (Puerto Rican), 4 (Cuban), 5 (other Spanish/Hispanic/Latina) |
+
+Puerto Rican and Cuban responses are grouped with the existing other Hispanic/Latino category. Missing responses remain missing.
+
 ## Source
 - File: `CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json`
 - Line: ~214
@@ -13,7 +25,7 @@
 ## Question
 > Are you Spanish/Hispanic/Latino? Choose the best answer.
 
-## Answer options
+## Original survey answer options
 | Value | Label |
 |-------|-------|
 | 1 | No, not Spanish/Hispanic/Latino |
@@ -26,20 +38,17 @@
 **UI Hint**: MultiValueConstraints
 **Allow multiple**: false
 
-## Observed values
+## Observed values (released data)
 
-**Total observations**: 11,636 — **type-enforced**: 11,636 (**unique**: 5) — raw Python types seen: `float` (11,636).
-**Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
+Responses are available for **6,682 participants in Full** and **337 in XS**.
 
-| value | count | pct |
-|-------|------:|----:|
-| `1` | 10,700 | 92.0% |
-| `5` | 429 | 3.7% |
-| `3` | 317 | 2.7% |
-| `2` | 118 | 1.0% |
-| `4` | 72 | 0.6% |
+| Hispanic/Latino-origin category | Full participants | XS participants |
+|---|---:|---:|
+| No, not Spanish/Hispanic/Latino | 6,192 | 305 |
+| Yes, Mexican, Mexican American, or Chicano | 170 | 13 |
+| Yes, other Spanish/Hispanic/Latina | 320 | 19 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Source: Full/XS `data/labels/context_labels.json` and `ordinal_dictionary.json`, checked 29 October 2026._
 
 ## Git history (file-level)
 - Commits touching cardio_CVhealth_survey.json: 8
