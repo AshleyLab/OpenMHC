@@ -8,16 +8,17 @@ metric breakdowns in imputation evaluation.
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter
 
 import pandas as pd
 
-from labels.api import STORE, LabelsStore, years_between_birth_year
+from labels.api import STORE, LabelsStore
 
 logger = logging.getLogger(__name__)
 
 
-def bin_age(age: int, age_bins: list[int]) -> str:
+def bin_age(age: float | None, age_bins: list[int]) -> str:
     """Bin an age into a decade-style label.
 
     Args:
@@ -27,6 +28,8 @@ def bin_age(age: int, age_bins: list[int]) -> str:
     Returns:
         Bin label, e.g. "30-39" or "60+".
     """
+    if age is None or not math.isfinite(age):
+        return "unknown"
     for i in range(len(age_bins) - 1):
         if age_bins[i] <= age < age_bins[i + 1]:
             return f"{age_bins[i]}-{age_bins[i + 1] - 1}"
@@ -39,26 +42,23 @@ def get_user_demographics(
     store: LabelsStore,
     user_ids: list[str],
 ) -> dict[str, dict[str, object]]:
-    """Look up birth year and biological sex for each user.
+    """Look up stored enrollment age and biological sex for each user.
 
     Args:
         store: Labels store for data access.
         user_ids: Unique user identifiers (health codes).
 
     Returns:
-        Dict mapping user_id -> {"birth_year": int | None, "sex": str}.
+        Dict mapping user_id -> {"age": float | None, "sex": str}.
         Sex is "male", "female", or "unknown".
     """
     demographics: dict[str, dict[str, object]] = {}
 
     for uid in user_ids:
-        birth_year = None
         sex = "unknown"
 
-        try:
-            birth_year = store.enrollment.get_birth_year(uid)
-        except KeyError:
-            pass
+        enrollment = store.enrollment.get(uid) or {}
+        age = enrollment.get("age")
 
         try:
             series = store.labels_index.get_series("BiologicalSex", uid)
@@ -75,19 +75,13 @@ def get_user_demographics(
         except (KeyError, LookupError):
             pass
 
-        demographics[uid] = {"birth_year": birth_year, "sex": sex}
+        demographics[uid] = {"age": age, "sex": sex}
 
-    # Surface the case where age fairness will be silently empty downstream:
-    # if the enrollment payload omits ``birth_year`` for every user, the age
-    # subgroup map collapses to "unknown" and the Phase 2 aggregator drops
-    # those rows from fairness_summary_bootstrap.csv with no error. The cli
-    # log line is the only way an operator notices unless we warn here.
-    if user_ids and all(v["birth_year"] is None for v in demographics.values()):
+    if user_ids and all(v["age"] is None for v in demographics.values()):
         logger.warning(
-            "Age fairness will be empty: 0/%d users have birth_year. Check "
-            "that the enrollment_info.json payload includes a 'birth_year' "
-            "field (the canonical Dataverse schema). Sex fairness still "
-            "works if BiologicalSex labels are present.",
+            "Age fairness will be empty: 0/%d users have stored age. Check "
+            "that enrollment_info.json includes an 'age' field. Sex fairness "
+            "still works if BiologicalSex labels are present.",
             len(user_ids),
         )
 
@@ -106,7 +100,7 @@ def build_subgroup_mapping(
     demographic attributes (age_group, sex).
 
     Args:
-        hf_dataset: HuggingFace dataset with user_id and date columns.
+        hf_dataset: HuggingFace dataset with a user_id column.
         split_indices: Maps split name -> list of global HF dataset indices.
         age_bins: Sorted list of age bin edges, e.g. [18, 30, 40, 50, 60].
         store: Optional LabelsStore instance (uses global STORE if None).
@@ -122,7 +116,6 @@ def build_subgroup_mapping(
     # "values" array per row, which under cgroups v1 faults ~46 GB of Arrow
     # page cache into memory for ~427 K samples).
     all_user_ids = list(hf_dataset["user_id"])
-    all_dates = list(hf_dataset["date"])
 
     # Collect unique user IDs across val+test splits
     eval_user_ids: set[str] = set()
@@ -147,20 +140,9 @@ def build_subgroup_mapping(
 
         for local_idx, global_idx in enumerate(indices):
             user_id = all_user_ids[global_idx]
-            date_str = all_dates[global_idx]
 
-            demo = user_demographics.get(user_id, {"birth_year": None, "sex": "unknown"})
-
-            # Compute age group
-            age_group = "unknown"
-            birth_year = demo["birth_year"]
-            if birth_year is not None:
-                try:
-                    sample_date = pd.Timestamp(date_str)
-                    age = years_between_birth_year(birth_year, sample_date)
-                    age_group = bin_age(age, age_bins)
-                except Exception:
-                    pass
+            demo = user_demographics.get(user_id, {"age": None, "sex": "unknown"})
+            age_group = bin_age(demo["age"], age_bins)
 
             split_mapping[local_idx] = {
                 "age_group": age_group,
