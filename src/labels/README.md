@@ -1,6 +1,6 @@
 # Labels API
 
-This module exposes a fast, in-memory lookup for label values and age computation with automatic type enforcement.
+This module exposes a fast, in-memory lookup for label values with automatic type enforcement.
 
 ## Public surface
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
@@ -18,11 +18,11 @@ This module exposes a fast, in-memory lookup for label values and age computatio
 ## Data sources
 - `last_labels.json`: per-label → healthCode → `timestamps`/`values`.
 - `context_labels.json`: context-label payload merged into the same lookup index when available.
-- `enrollment_info.json`: per-healthCode metadata with de-identified `birth_year`.
+- `enrollment_info.json`: per-healthCode metadata with stored `age`; missing ages are null.
 - `label_types.json`: maps each label to its semantic type (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
 
 ## Variable dictionary
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for a per-variable reference (question text, answer options, observed value distributions, iOS source) covering all 169 labels.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for variable definitions, original survey options, release mappings, observed values and iOS sources.
 
 Small schema metadata (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) is bundled in the repo under `data/labels/`. Large payload files resolve from your explicit dataset root (`data_dir=` / `MHC_DATA_DIR`) unless you override them per file:
 ```bash
@@ -52,7 +52,7 @@ result = get_labels(
 )
 print(result.matched_timestamp, result.value)  # value is bool
 
-# compute age at timestamp (returns float)
+# look up the stored age label (returns float)
 age = get_labels(
     health_code="user-123",
     timestamp=pd.Timestamp("2020-01-14"),
@@ -148,7 +148,7 @@ work                      bool         0.00         1.00         1.00         2
 
 ## Behavior
 - For labels in `labels.json`, the closest timestamp is chosen; ties favor the earlier point.
-- `age` is stored as a static value in `last_labels.json` (calendar-year age at the user's last survey timestamp).
+- Age lookups return the stored `age` label value from `last_labels.json`.
 
 Recent local throughput (from `PYTHONPATH=src pytest src/labels/test_api.py -k performance`):
 - Label lookups: ~762,936.5 per second
