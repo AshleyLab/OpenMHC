@@ -63,7 +63,7 @@ $MHC_DATA_DIR/
 │   ├── daily_hourly_hf/          # daily ×24h sensor tensors (HuggingFace Arrow) — Track 1
 │   ├── daily_hf/                 # daily ×1440min sensor tensors (HuggingFace Arrow) — Track 2
 │   ├── window_index_w7_s7_d5.parquet         # 7-day weekly window index — Track 1
-│   ├── weekly_labels_lookup_stride7_windowed.parquet  # weekly labels lookup (per-task forward window baked in) — Track 1
+│   ├── weekly_labels_lookup_stride7_full_history.parquet  # full-history weekly lookup for WBM — Track 1
 │   ├── daily_labels_lookup.parquet           # daily labels lookup (windowed; forward-window cap baked in) — Track 1
 │   ├── daily_labels_lookup_full_history.parquet  # daily labels lookup (full history; no forward cap; from-raw/xgboost/lsm2) — Track 1
 │   └── normalization_stats_hourly.json       # global z-score statistics
@@ -107,7 +107,7 @@ with values being participant IDs (strings).
 
 A (user, label) pair is "valid" if the user has at least one filtered day of wearable data in the label's time window (the `single_day` rule — it maximises the participant pool, and every Track 1 method shares it).
 
-Validity is **baked into the shipped labels lookups** — a non-sentinel cell in `daily_labels_lookup.parquet` / `weekly_labels_lookup_stride7_windowed.parquet` already marks a valid `(user, day/week)` inside the task window, so the downstream eval reads validity straight from the lookups. (The standalone `label_validity.json` still ships under `labels/` and is consumed separately by the LabelsAPI's `get_labels(return_valid_only=True)`; `label_validity.parquet` is a convenience mirror and `validity_config.json` holds the validity-window thresholds.)
+Label validity is **baked into the labels lookups**. The default daily and WBM weekly lookups use full history while retaining label-validity and sensor-quality criteria. WBM requires `weekly_labels_lookup_stride7_full_history.parquet`; datasets containing only the older windowed weekly lookup need the rebuilt artifact. Renaming the old file does not restore excluded entries. The standalone `label_validity.json` is also consumed by `get_labels(return_valid_only=True)`; `label_validity.parquet` mirrors it and `validity_config.json` holds the validity-window thresholds.
 
 ## Data Use Agreement
 The MHC dataset is shared under a Data Use Agreement (DUA) covering responsible-use terms for participant-derived health data. Downloading from the Hub triggers a click-through DUA acceptance.

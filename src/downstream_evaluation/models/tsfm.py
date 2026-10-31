@@ -17,26 +17,34 @@ A concrete encoder (Toto, Chronos-2) supplies the two model-specific pieces:
 Both stages run from raw data: on a cold run the per-(split, task) HDF5 is
 regenerated from the shared :class:`~downstream_evaluation.data.loader.DataLoader`
 (one ``daily_hourly_hf`` read per run, injected by ``run_eval`` via ``set_loader``)
-rather than from a prebuilt cache. The window is anchored to the label date at
-extraction time, so the eval's temporal-window knob does not apply — features are
-aligned to the per-task cohort as produced.
+rather than from a prebuilt cache. The temporal-window policy is applied at
+extraction time and recorded in cache identity, so features from a different
+policy cannot silently be reused.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 from urllib.parse import quote
 
 import numpy as np
 
+from downstream_evaluation.models._cache_identity import (
+    embedding_identity,
+    validate_identity,
+    validate_loader,
+)
 from downstream_evaluation.models._feature_align import aligned_feature_matrix
 
 logger = logging.getLogger(__name__)
 
 HOURS_PER_DAY = 24
+INPUT_PREPROCESSING_VERSION = "canonical_hourly_mask_v1"
 
 # The 32 headline cross-sectional tasks.
 FINAL_TASKS = [
@@ -82,20 +90,15 @@ def build_user_timeline(values: np.ndarray, dates: list[str], n_channels: int):
     """Build a continuous hourly timeline from one user's day rows (date-ascending).
 
     ``values`` / ``dates`` are the loader's per-user days (``DataLoader.user_days``):
-    ``(n_days, 24, 19)`` time-first with NaN at masked positions. The model's
-    missing-data heuristics (``ZeroToNaNTransform``: per-channel rules for HR,
-    all-zero wear channels, short sleep) are defined on the **raw zero-filled form**
-    the dataset stores, so each day is zero-filled back before the transform —
-    byte-identical input to reading the raw rows directly.
+    ``(n_days, 24, 19)`` time-first with NaN at masked positions. The hourly
+    dataset already encodes the upstream cleaning decisions. Preserve its
+    values and missingness; applying minute-level zero-to-NaN rules again
+    would discard the stored mask and use the wrong units for sleep.
     """
     import pandas as pd
-    import torch
-
-    from data.transforms.nan_transforms import ZeroToNaNTransform
 
     if len(dates) == 0:
         return None
-    zero_to_nan = ZeroToNaNTransform()
 
     first_date = pd.Timestamp(dates[0])
     last_date = pd.Timestamp(dates[-1])
@@ -105,10 +108,7 @@ def build_user_timeline(values: np.ndarray, dates: list[str], n_channels: int):
     for day_values, day in zip(values, dates):
         day_offset = int((pd.Timestamp(day) - first_date).days)
         start = day_offset * HOURS_PER_DAY
-        # (24, 19) NaN-at-masked → (19, 24) zero-filled, exactly as stored on disk.
-        raw = np.ascontiguousarray(np.nan_to_num(day_values, nan=0.0).T)
-        day_cf = zero_to_nan(torch.from_numpy(raw)).numpy()
-        timeline[start : start + HOURS_PER_DAY, :] = day_cf.T
+        timeline[start : start + HOURS_PER_DAY, :] = day_values
 
     observed_hours = ~np.isnan(timeline).all(axis=1)
     return UserTimeline(start_date=first_date, values=timeline, observed_hours=observed_hours)
@@ -238,9 +238,10 @@ class _TaskWriter:
         self.dates_ds[start:end] = dates
         self.n_rows = end
 
-    def close(self):
+    def close(self, complete=True):
         if self.file is not None:
             self.file.attrs["n_rows"] = self.n_rows
+            self.file.attrs["cache_complete"] = complete
             self.file.close()
             self.file = None
 
@@ -255,7 +256,9 @@ class TSFMEncoder:
     (build-on-miss extraction over raw ``daily_hourly_hf``, GPU), read the task file,
     mean-pool across the 19 channels, align to the cohort ``user_ids``, and run the
     uniform :class:`openmhc.LinearProbe`. Subclasses override ``_load_model`` and
-    ``_run_batch``.
+    ``_run_batch``. New caches record the hourly-mask preprocessing version.
+    Cache reads require matching checkpoint, dataset and extraction settings,
+    plus a completion marker. Legacy caches must be regenerated in a fresh directory.
     """
 
     name = "tsfm"  # overridden
@@ -283,10 +286,13 @@ class TSFMEncoder:
     def set_temporal_window(self, temporal) -> None:
         """Receive the runner's forward-window policy (``run_eval`` injects this)."""
         self._temporal = temporal
+        self._built.clear()
+        self._task_cache.clear()
 
     def set_loader(self, loader) -> None:
         """Receive the shared :class:`DataLoader`; cache-miss extraction reads each
         user's raw days from it (``run_eval`` injects it; standalone use builds one)."""
+        validate_loader(loader, self._data_dir, "hourly")
         self._loader = loader
 
     def set_context(self, ctx) -> None:
@@ -317,6 +323,36 @@ class TSFMEncoder:
     def _checkpoint_ref(self) -> str:
         return getattr(self, "checkpoint", "unknown")
 
+    def _extraction_settings(self) -> dict:
+        """Subclass-specific encoder settings, available before loading weights."""
+        return {}
+
+    @cached_property
+    def _embedding_identity(self) -> dict:
+        from downstream_evaluation.config import LABEL_REFERENCE_DATE
+
+        return embedding_identity(
+            self.name, self._checkpoint_ref(), self._data_dir, "hourly",
+            relative_to=Path(__file__).resolve().parents[3],
+            preprocessing=INPUT_PREPROCESSING_VERSION, pooling=self.pooling_label,
+            label_reference_date=str(LABEL_REFERENCE_DATE), seed=self.seed,
+            **self._extraction_settings(),
+        )
+
+    def _task_identity(self, split: str, task: str) -> dict:
+        return {**self._embedding_identity, "split": split, "task": task,
+                "weeks_after": self._weeks_after(task)}
+
+    def _validate_cache(self, handle, path: Path, split: str, task: str) -> None:
+        self._validate_cache_preprocessing(handle, path)
+        try:
+            actual = json.loads(handle.attrs.get("cache_identity", "null"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Invalid cache identity at {path}; use a fresh cache_dir.") from exc
+        validate_identity(actual, self._task_identity(split, task), path)
+        if not handle.attrs.get("cache_complete", False):
+            raise ValueError(f"Incomplete embedding cache {path}; use a fresh cache_dir.")
+
     # ----- cache location ---------------------------------------------------
     def _resolve_cache_dir(self) -> Path:
         if self._cache_dir is not None:
@@ -326,10 +362,35 @@ class TSFMEncoder:
         # no policy injected yet, fall back to the full-history default.
         full_history = self._temporal is None or self._temporal.is_full_history
         variant = "from_raw_full_history" if full_history else "from_raw"
-        return Path("results") / f"{self.name}_embeddings" / variant
+        return Path("results") / f"{self.name}_embeddings" / variant / INPUT_PREPROCESSING_VERSION
 
     def _task_file(self, split: str, task: str) -> Path:
         return self._resolve_cache_dir() / split / f"{safe_task_filename(task)}.h5"
+
+    @staticmethod
+    def _validate_cache_preprocessing(handle, path: Path) -> None:
+        """Require embeddings produced with the current hourly mask policy."""
+        version = handle.attrs.get("input_preprocessing")
+        if version != INPUT_PREPROCESSING_VERSION:
+            raise ValueError(
+                f"Incompatible TSFM embedding cache {path}: input_preprocessing={version!r}; "
+                f"expected {INPUT_PREPROCESSING_VERSION!r}. Use a fresh cache_dir to regenerate "
+                "embeddings with the preserved hourly mask. Existing files have not been changed."
+            )
+
+    def _pending_tasks(self, split: str, tasks: list[str]) -> list[str]:
+        """Reject incompatible/incomplete caches before model loading or new writes."""
+        import h5py
+
+        pending = []
+        for task in tasks:
+            path = self._task_file(split, task)
+            if not path.exists():
+                pending.append(task)
+                continue
+            with h5py.File(path, "r") as handle:
+                self._validate_cache(handle, path, split, task)
+        return pending
 
     # ----- stage 1: build-on-miss extraction (GPU) --------------------------
     def _ensure_loaded(self):
@@ -370,10 +431,11 @@ class TSFMEncoder:
         reference_ts = pd.Timestamp(LABEL_REFERENCE_DATE)
         user_list = self._grouped.get(split, [])
 
-        pending = [t for t in tasks if not self._task_file(split, t).exists()]
+        pending = self._pending_tasks(split, tasks)
         if not pending:
             return
         attrs_common = {
+            "input_preprocessing": INPUT_PREPROCESSING_VERSION,
             "checkpoint_ref": self._checkpoint_ref(),
             "window_hours": int(self._window_hours),
             "pooling": self.pooling_label,
@@ -381,7 +443,10 @@ class TSFMEncoder:
             "source_dataset": str(_DatasetPaths_root(self._data_dir)),
         }
         writers = {
-            t: _TaskWriter(self._task_file(split, t), n_channels, {**attrs_common, "task_name": t})
+            t: _TaskWriter(self._task_file(split, t), n_channels, {
+                **attrs_common, "task_name": t,
+                "cache_identity": json.dumps(self._task_identity(split, t), sort_keys=True),
+            })
             for t in pending
         }
         batches: dict[str, list] = {t: [] for t in pending}
@@ -399,6 +464,7 @@ class TSFMEncoder:
             written[task] += int(emb.shape[0])
             batches[task] = []
 
+        complete = False
         try:
             for user_id in tqdm(user_list, desc=f"{self.name}:{split}", unit="user"):
                 day_values, day_dates = self._loader.user_days(user_id)
@@ -422,16 +488,19 @@ class TSFMEncoder:
                         flush(task)
             for task in pending:
                 flush(task)
+            complete = True
         finally:
             for w in writers.values():
-                w.close()
+                w.close(complete=complete)
         logger.info("%s[%s] wrote %s", self.name, split, dict(written))
 
     def _ensure_split(self, split: str) -> None:
         if split in self._built:
             return
-        self._ensure_loaded()
-        self._build_split(split, FINAL_TASKS)
+        pending = self._pending_tasks(split, FINAL_TASKS)
+        if pending:
+            self._ensure_loaded()
+            self._build_split(split, pending)
         self._built.add(split)
 
     # ----- stage 2: read + channel mean-pool --------------------------------
@@ -447,6 +516,7 @@ class TSFMEncoder:
             self._task_cache[key] = {}
             return {}
         with h5py.File(path, "r") as f:
+            self._validate_cache(f, path, split, task)
             emb = f["embeddings"][:]  # (N, 19, D)
             uids = f["user_ids"][:].astype(str)
         pooled = emb.mean(axis=1)  # channel mean-pool → (N, D)

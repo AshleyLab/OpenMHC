@@ -19,6 +19,14 @@ from pathlib import Path
 
 import numpy as np
 
+from downstream_evaluation.models._cache_identity import (
+    embedding_identity,
+    file_digest,
+    numpy_cache_ready,
+    validate_loader,
+    write_numpy_cache,
+)
+
 logger = logging.getLogger(__name__)
 
 N_CHANNELS = 19
@@ -30,6 +38,18 @@ _ARCH = dict(in_dim=38, embed_dim=256, hidden_dim=64, num_layers=4, proj_dim=128
 # the bundle's openmhc_manifest.json provenance). The resolver auto-selects the single
 # .ckpt; set WBM_CHECKPOINT to override with a local/W&B ref.
 DEFAULT_CHECKPOINT = "hf://MyHeartCounts/openmhc-wbm-dp"
+CACHE_FILES = ("embeddings.npy", "user_ids.npy", "week_starts.npy")
+
+
+def _cache_identity(checkpoint, data_dir, seed, normalization_stats_path=None):
+    stats = None
+    if normalization_stats_path is not None:
+        path = Path(normalization_stats_path).resolve()
+        stats = {"path": str(path), "sha256": file_digest(path)}
+    return embedding_identity(
+        "wbm", checkpoint, data_dir, "hourly", preprocessing="weekly_dense_v1",
+        seed=seed, normalization_override=stats,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -142,14 +162,17 @@ def extract_wbm_embeddings(
     under ``output_dir``. ``normalization_stats_path`` overrides the dataset's canonical
     normalization constants (e.g. a copy bundled in a published release).
     """
+    validate_loader(loader, data_dir, "hourly")
+    identity = _cache_identity(checkpoint, data_dir, seed, normalization_stats_path)
+    if numpy_cache_ready(Path(output_dir), identity, CACHE_FILES):
+        return
     import torch
     from tqdm import tqdm
 
     from data.datasets.indexed_week_dataset import IndexedWeekDataset
     from data.processing.build_window_index import load_window_index
-    from openmhc._evaluate import _DatasetPaths
-
     from downstream_evaluation.data.loader import DataLoader
+    from openmhc._evaluate import _DatasetPaths
 
     torch.manual_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -184,10 +207,9 @@ def extract_wbm_embeddings(
     emb = np.concatenate(embeddings, axis=0).astype(np.float32)
 
     out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    np.save(out / "embeddings.npy", emb)
-    np.save(out / "user_ids.npy", user_ids)
-    np.save(out / "week_starts.npy", week_starts)
+    write_numpy_cache(out, identity, {
+        "embeddings.npy": emb, "user_ids.npy": user_ids, "week_starts.npy": week_starts,
+    })
     logger.info("wrote %d WBM embeddings (dim=%d) -> %s", len(emb), emb.shape[1], out)
 
 
@@ -232,6 +254,7 @@ class WBM:
     def set_loader(self, loader) -> None:
         """Receive the shared :class:`DataLoader`; cache-miss extraction assembles its
         weekly windows from it instead of opening the dataset itself."""
+        validate_loader(loader, self._data_dir, "hourly")
         self._loader = loader
 
     def _resolve_cache_dir(self) -> Path:
@@ -243,7 +266,10 @@ class WBM:
         if self._by_key is not None:
             return
         cache = self._resolve_cache_dir()
-        if not (cache / "embeddings.npy").exists():
+        identity = _cache_identity(
+            self._checkpoint, self._data_dir, self.seed, self._normalization_stats_path,
+        )
+        if not numpy_cache_ready(cache, identity, CACHE_FILES):
             logger.info("WBM embeddings cache miss at %s — extracting from raw (GPU)", cache)
             extract_wbm_embeddings(
                 output_dir=str(cache),
@@ -253,9 +279,15 @@ class WBM:
                 loader=self._loader,
                 normalization_stats_path=self._normalization_stats_path,
             )
+            if not numpy_cache_ready(cache, identity, CACHE_FILES):
+                raise ValueError(f"Extraction did not create a complete cache at {cache}")
         emb = np.load(cache / "embeddings.npy")
         uids = np.load(cache / "user_ids.npy", allow_pickle=True)
         weeks = np.load(cache / "week_starts.npy", allow_pickle=True)
+        if emb.ndim != 2 or uids.ndim != 1 or weeks.ndim != 1 or not (
+            len(emb) == len(uids) == len(weeks)
+        ):
+            raise ValueError(f"Invalid embedding cache shapes at {cache}; use a fresh cache_dir.")
         self._by_key = {(str(u), str(w)): e for u, w, e in zip(uids, weeks, emb)}
         self._dim = int(emb.shape[1])
         logger.info("WBM embeddings ready: %d segments, dim=%d", len(emb), self._dim)
@@ -326,6 +358,7 @@ class WBMProbe:
         checkpoint: str = DEFAULT_CHECKPOINT,
         seed: int = 42,
         normalization_stats_path: str | None = None,
+        cache_dir: str | None = None,
     ):
         """Store the data root, checkpoint, and seed; the encoder loads lazily on use.
 
@@ -340,6 +373,7 @@ class WBMProbe:
             checkpoint=checkpoint,
             seed=seed,
             normalization_stats_path=normalization_stats_path,
+            cache_dir=cache_dir,
         )
         self._weekly_provider = None
         self._probe = None
@@ -360,20 +394,29 @@ class WBMProbe:
     def _weekly_td(self, task: str, split: str):
         """Weekly cohort + eligible week_starts for ``task`` (the encoder's cohort)."""
         if self._weekly_provider is None:
-            from openmhc._evaluate import _DatasetPaths
-
             from downstream_evaluation.data.provider import (
-                LOOKUP_BY_GRANULARITY,
                 TaskDataProvider,
+                lookup_filename,
             )
             from downstream_evaluation.data.splits import load_split_file
+            from openmhc._evaluate import _DatasetPaths
 
             paths = _DatasetPaths.from_root(self._data_dir)
-            lookup = str(paths.root / "processed" / LOOKUP_BY_GRANULARITY["weekly"])
+            lookup = paths.root / "processed" / lookup_filename("weekly", full_history=True)
+            if not lookup.is_file():
+                raise FileNotFoundError(
+                    f"WBM requires the full-history weekly lookup: {lookup}. "
+                    "Install the rebuilt lookup; the legacy windowed lookup cannot be reused or renamed."
+                )
             self._weekly_provider = TaskDataProvider(
-                lookup, load_split_file(paths.splits_file), granularity="weekly"
+                str(lookup), load_split_file(paths.splits_file), granularity="weekly"
             )
         return self._weekly_provider.task_data(task, split)
+
+    def set_temporal_window(self, temporal) -> None:
+        """Require full history for WBM evaluation."""
+        if not temporal.is_full_history:
+            raise ValueError("WBM requires full-history evaluation; the legacy 52/156-week cutoff was removed.")
 
     def fit(self, data, labels, task_type) -> None:
         # ``data`` (the daily cohort) is unused here — the encoder self-serves its

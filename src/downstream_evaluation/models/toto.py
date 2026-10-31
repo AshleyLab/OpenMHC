@@ -203,6 +203,12 @@ class Toto(TSFMEncoder):
         self.base_checkpoint = base_checkpoint
         self.lora_alpha = lora_alpha
 
+    def _extraction_settings(self) -> dict:
+        from downstream_evaluation.models._cache_identity import checkpoint_identity
+
+        return {"base_checkpoint": checkpoint_identity(self.base_checkpoint),
+                "lora_alpha": self.lora_alpha, "window_hours": WINDOW_HOURS}
+
     def _load_model(self, device):
         backbone = _load_toto_backbone(
             self.checkpoint, device, self.base_checkpoint, self.lora_alpha

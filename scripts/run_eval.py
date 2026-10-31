@@ -9,27 +9,34 @@ the old ``run_*_eval.py`` drivers.
 """
 
 import os
+from pathlib import Path
 
 from openmhc._constants import BENCHMARK_TASKS
 
 
 def build_model(method: str, data_dir: str):
     """Instantiate a bundled baseline by name."""
+    cache_root = os.environ.get("CACHE_ROOT")
+    cache_method = "wbm" if method == "hybrid" else method
+    cache_dir = str(Path(cache_root) / cache_method) if cache_root else None
     if method in ("wbm", "hybrid"):
         from downstream_evaluation.models.wbm import WBMProbe
         # WBM_CHECKPOINT overrides the default wandb SSL ref with a local .ckpt path
         # (e.g. the wandb-cached copy) so the run needs no network on the compute node.
         ckpt = os.environ.get("WBM_CHECKPOINT")
-        return WBMProbe(data_dir, checkpoint=ckpt) if ckpt else WBMProbe(data_dir)
+        kwargs = {"cache_dir": cache_dir}
+        if ckpt:
+            kwargs["checkpoint"] = ckpt
+        return WBMProbe(data_dir, **kwargs)
     if method == "linear":
         from downstream_evaluation.models.linear import Linear
         return Linear(data_dir=data_dir)
     if method == "toto":
         from downstream_evaluation.models.toto import Toto
-        return Toto(data_dir=data_dir)
+        return Toto(data_dir=data_dir, cache_dir=cache_dir)
     if method == "chronos2":
         from downstream_evaluation.models.chronos2 import Chronos2
-        return Chronos2(data_dir=data_dir)
+        return Chronos2(data_dir=data_dir, cache_dir=cache_dir)
     if method == "multirocket":
         from downstream_evaluation.models.multirocket import MultiRocket
         return MultiRocket(data_dir=data_dir, tasks=BENCHMARK_TASKS)
@@ -38,7 +45,10 @@ def build_model(method: str, data_dir: str):
         # LSM2_CHECKPOINT overrides the default registry ref with a local .ckpt path
         # (or an alternate wandb ref) — e.g. when the registry is access-restricted.
         ckpt = os.environ.get("LSM2_CHECKPOINT")
-        return LSM2(data_dir=data_dir, checkpoint=ckpt) if ckpt else LSM2(data_dir=data_dir)
+        kwargs = {"cache_dir": cache_dir}
+        if ckpt:
+            kwargs["checkpoint"] = ckpt
+        return LSM2(data_dir=data_dir, **kwargs)
     if method == "xgboost":
         from downstream_evaluation.models.xgboost import XGBoost
         return XGBoost(data_dir=data_dir)
@@ -54,7 +64,8 @@ def main() -> None:
     Env vars: ``METHOD`` (default ``linear``), ``VERSION`` (``xs``|``full``, default
     ``full``), ``MHC_DATA_DIR``, ``PREDICTIONS_DIR`` (optional), ``OUTPUT_DIR``
     (optional — write the leaderboard substrate ``<OUTPUT_DIR>/<METHOD>.parquet``),
-    ``OUT_CSV`` (default ``eval_<METHOD>.csv``).
+    ``OUT_CSV`` (default ``eval_<METHOD>.csv``), ``CACHE_ROOT`` (optional parent
+    directory; LSM2/WBM/Toto/Chronos-2 each use their own method subdirectory).
     """
     import openmhc
     from openmhc._evaluate import _DatasetPaths

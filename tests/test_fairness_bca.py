@@ -150,7 +150,8 @@ def test_jackknife_point_matches_draws_point():
     aligned, subgroup_map, uids = _synthetic_cohort()
     base = "linear"
     draws = compute_per_draw_errors(
-        aligned, n_bootstrap=3, seed=0, subgroup_map=subgroup_map, subgroup_attributes=list(ATTRS)
+        aligned, n_bootstrap=3, seed=0, subgroup_map=subgroup_map, subgroup_attributes=list(ATTRS),
+        test_uids=uids,
     )
     methods = sorted(draws["method"].unique())
     expected = _draws_path_point(draws, methods, base)

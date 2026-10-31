@@ -1,7 +1,7 @@
 #!/bin/bash
 # Hydra-CLI downstream eval (PBS / GPU) — runs `mhc-downstream-eval` (here as
 # `python -m downstream_evaluation.hydra.cli`) on a GPU node for the encoder
-# methods whose from-raw extraction runs a neural encoder: mae, wbm. The GPU
+# methods whose from-raw extraction runs a neural encoder: lsm2, wbm. The GPU
 # twin of run_downstream_eval.pbs; replaces the env-var run_eval_gpu.pbs.
 #
 # Unlike the CPU launcher, these read the minute store (daily_hf) lazily (mmap,
@@ -9,13 +9,13 @@
 # enough — the cost is the GPU embedding pass on a cache miss (cached after).
 #
 # Usage (submit from the repo root):
-#   qsub -v METHOD=mae,MHC_DATA_DIR=$HOME/yuze_mhc_ws/data jobs/imperial/pbs/run_downstream_eval_gpu.pbs
+#   qsub -v METHOD=lsm2,MHC_DATA_DIR=$HOME/yuze_mhc_ws/data jobs/imperial/pbs/run_downstream_eval_gpu.pbs
 #
-# NOTE (mae): the default checkpoint is the public HF ref
+# NOTE (lsm2): the default checkpoint is the public HF ref
 # hf://MyHeartCounts/openmhc-lsm2-daily, fetched on a cache miss (needs internet;
 # HF_HUB_DISABLE_XET=1 is set below for the RDS filesystem). To run fully offline
 # pass a LOCAL .ckpt via CHECKPOINT:
-#   qsub -v METHOD=mae,MHC_DATA_DIR=$HOME/yuze_mhc_ws/data,CHECKPOINT=$HOME/yuze_mhc_ws/models/mae_lsm2.ckpt \
+#   qsub -v METHOD=lsm2,MHC_DATA_DIR=$HOME/yuze_mhc_ws/data,CHECKPOINT=$HOME/yuze_mhc_ws/models/lsm2.ckpt \
 #        jobs/imperial/pbs/run_downstream_eval_gpu.pbs
 # (Avoid '=' in the .ckpt filename — qsub -v parses VAR=VALUE on '='.)
 #PBS -N downstream_eval_gpu
@@ -28,7 +28,7 @@ set -eo pipefail
 
 cd "${PBS_O_WORKDIR:-.}"
 mkdir -p logs
-echo "=== downstream eval (PBS/GPU, Hydra CLI): METHOD=${METHOD:-mae} ==="
+echo "=== downstream eval (PBS/GPU, Hydra CLI): METHOD=${METHOD:-lsm2} ==="
 echo "Node: $(hostname) | Job: ${PBS_JOBID:-local} | PWD: $(pwd) | Date: $(date)"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader || true
 
@@ -44,16 +44,19 @@ export HF_HOME="${HF_HOME:-$TMPDIR/hf_cache}"
 export HF_HUB_DISABLE_XET=1
 mkdir -p "$HF_HOME"
 
-export METHOD="${METHOD:-mae}"
+export METHOD="${METHOD:-lsm2}"
 : "${MHC_DATA_DIR:?set MHC_DATA_DIR to the dataset root (e.g. \$HOME/yuze_mhc_ws/data)}"
 
 overrides=( "method=${METHOD}" "data.data_dir=${MHC_DATA_DIR}" )
 if [[ -n "${TASKS:-}" ]];            then overrides+=( "evaluation.tasks=[${TASKS}]" ); fi
 if [[ -n "${RESULTS_DIR:-}" ]];      then overrides+=( "output.results_dir=${RESULTS_DIR}" ); fi
 if [[ -n "${PREDICTIONS_DIR:-}" ]];  then overrides+=( "output.predictions_dir=${PREDICTIONS_DIR}" ); fi
-# CHECKPOINT: local .ckpt for mae/wbm; unset = the model's default (HF ref for mae).
+# CHECKPOINT: local .ckpt for lsm2/wbm; unset = the model's default (HF ref for lsm2).
 if [[ -n "${CHECKPOINT:-}" ]];       then overrides+=( "method.checkpoint=${CHECKPOINT}" ); fi
-echo "MAE/WBM checkpoint=${CHECKPOINT:-(model default)}"
+# CACHE_DIR (lsm2): use a fresh directory for changed checkpoints/datasets.
+# Incompatible or legacy caches fail validation; existing files are preserved.
+if [[ -n "${CACHE_DIR:-}" ]];        then overrides+=( "method.cache_dir=${CACHE_DIR}" ); fi
+echo "LSM-2/WBM checkpoint=${CHECKPOINT:-(model default)} cache_dir=${CACHE_DIR:-(model default)}"
 
 echo "CLI: python -m downstream_evaluation.hydra.cli ${overrides[*]}"
 python -m downstream_evaluation.hydra.cli "${overrides[@]}"

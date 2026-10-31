@@ -13,8 +13,10 @@
 # METHOD (the same call an external submitter makes), building features/embeddings
 # from raw on a cache miss. One driver for every method — pick it with METHOD.
 #
-#   METHOD ∈ { linear, multirocket, gru_d,   # CPU
-#              toto, chronos2, wbm }          # GPU (first-run extraction); wbm = hybrid SSL
+#   METHOD ∈ { linear, multirocket, gru_d, xgboost, lsm2, toto, chronos2, wbm }
+#   lsm2/toto/chronos2/wbm need a GPU for first-run embedding extraction.
+#   CACHE_ROOT optionally selects a fresh cache parent; each encoder gets its
+#   own method subdirectory. Existing incompatible/legacy caches are rejected.
 #
 # Usage (set MHC_DATA_DIR to the dataset root; add --gres=gpu:1 for GPU methods):
 #   METHOD=linear   MHC_DATA_DIR=/path/to/data sbatch               jobs/imperial/slurm/run_eval.slurm
@@ -54,13 +56,8 @@ mkdir -p "$HF_HOME"
 
 : "${MHC_DATA_DIR:?set MHC_DATA_DIR to the dataset root}"
 
-# Model artifacts for the foundation models (external deps). For validation these
-# point at the private copies; public release sets them to the submodule + HF/W&B refs.
-PRIV="${PRIV:-/home/yb525/yuze_mhc_ws}"
-export TOTO_REPO="${TOTO_REPO:-$PRIV/external/toto}"
-export TOTO_CHECKPOINT="${TOTO_CHECKPOINT:-$PRIV/models/final/toto_FT/toto-epoch=24-step=116225-val_loss=-1.3597.ckpt}"
-export CHRONOS_REPO="${CHRONOS_REPO:-$PRIV/external/chronos-forecasting}"
-export CHRONOS2_CHECKPOINT="${CHRONOS2_CHECKPOINT:-$PRIV/models/final/chronos2_FT}"
+# The Python models default to public Hugging Face releases. Explicit exported
+# TOTO_CHECKPOINT / CHRONOS2_CHECKPOINT overrides are inherited unchanged.
 
 export OUT_CSV="${OUT_CSV:-eval_${METHOD}.csv}"
 

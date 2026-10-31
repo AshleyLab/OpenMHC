@@ -77,6 +77,8 @@ def _phase0_eval(cfg: dict, methods: list[str], dry_run: bool) -> None:
         }
         if cfg.get("data_dir"):
             env["MHC_DATA_DIR"] = str(cfg["data_dir"])
+        if cfg.get("cache_root"):
+            env["CACHE_ROOT"] = str(cfg["cache_root"])
         log.info("phase 0 — eval method=%s -> %s (+ predictions/)", m, env["OUT_CSV"])
         _run([sys.executable, str(REPO_ROOT / "scripts" / "run_eval.py")], dry_run, env=env)
 
@@ -91,6 +93,10 @@ def _phase1_bootstrap(cfg: dict, draws: Path, methods: list[str], dry_run: bool)
             "--methods", *methods,
             "--n_bootstrap", str(cfg["n_bootstrap"]),
             "--seed", str(cfg["seed"]),
+            "--baseline", cfg.get("baseline_method", "linear"),
+            "--version", str(cfg.get("version", "full")),
+            *(["--data-dir", str(cfg["data_dir"])] if cfg.get("data_dir") else []),
+            *(["--split-file", str(cfg["split_file"])] if cfg.get("split_file") else []),
             "--fairness_attributes", *cfg.get("fairness_attributes", ["age_group", "sex"]),
             "--output", str(draws),
         ],

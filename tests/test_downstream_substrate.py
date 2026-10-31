@@ -1,4 +1,4 @@
-"""Track-1 leaderboard substrate — per-user prediction pairs (supervisor ask + #39).
+"""Track-1 leaderboard substrate — per-user prediction pairs (issue #39).
 
 Builds the substrate from synthetic per-(method, task) prediction files, so it
 needs no dataset. Verifies the schema, subgroup expansion, and parquet round-trip.

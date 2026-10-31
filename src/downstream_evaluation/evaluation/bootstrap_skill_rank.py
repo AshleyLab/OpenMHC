@@ -2,10 +2,9 @@ r"""Paired user-level bootstrap of the headline downstream benchmark stats (libr
 
 Two-phase, mirroring the imputation paper-metrics pipeline:
 
-* Phase 1 — :func:`compute_per_draw_errors` draws B paired bootstrap resamples on
-  the per-(method, task) prediction parquets (for each task, sample N test users
-  with replacement, the **same** indices reused across methods → paired
-  comparisons), recomputes every method's per-task primary metric, and records the
+* Phase 1 — :func:`compute_per_draw_errors` samples the declared test participants
+  with replacement, sharing each draw across all tasks and methods. It recomputes
+  every method's per-task primary metric on eligible participants and records the
   error ``E = 1 − metric`` globally and per demographic subgroup as a long-format
   draws frame (:func:`write_draws_parquet` persists it).
 
@@ -24,8 +23,10 @@ without it only the global (``subgroup_attr="all"``) rows are produced.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from statistics import NormalDist
 
@@ -159,6 +160,10 @@ def align_across_methods(
 
     aligned: dict[str, dict[str, dict]] = {m: {} for m in methods}
     for task in sorted(common_tasks):
+        for m in methods:
+            uids = method_tasks[m][task]["uids"]
+            if len(set(uids)) != len(uids):
+                raise ValueError(f"Duplicate participant IDs for {m}/{task}")
         uid_sets = [set(method_tasks[m][task]["uids"]) for m in methods]
         common_uids = set.intersection(*uid_sets)
         if not common_uids:
@@ -179,12 +184,7 @@ def align_across_methods(
         ref_y = aligned[methods[0]][task]["y_true"]
         for m in methods[1:]:
             if not np.array_equal(aligned[m][task]["y_true"], ref_y):
-                log.warning(
-                    "Task '%s': y_true mismatch between '%s' and '%s' on shared uids",
-                    task,
-                    methods[0],
-                    m,
-                )
+                raise ValueError(f"Task {task!r}: y_true mismatch between {methods[0]!r} and {m!r}")
     return aligned
 
 
@@ -198,6 +198,52 @@ def load_subgroup_map(predictions_dir: Path) -> dict[str, dict[str, str]] | None
         sg = json.load(f)
     log.info("Loaded subgroup map for %d users from %s", len(sg), path)
     return sg
+
+
+def _test_population(test_uids: Sequence[str]) -> np.ndarray:
+    if isinstance(test_uids, (str, bytes)):
+        raise ValueError("test_uids must contain participant IDs, not a filename or string")
+    users = np.asarray(list(test_uids))
+    if users.ndim != 1 or users.size == 0 or pd.isna(users).any():
+        raise ValueError("The declared test population must be nonempty and one-dimensional")
+    users = users.astype(str)
+    if len(set(users)) != len(users):
+        raise ValueError("The declared test population contains duplicate participant IDs")
+    return np.sort(users)
+
+
+def load_bootstrap_test_users(
+    split_file: str | Path | None = None,
+    *,
+    data_dir: str | Path | None = None,
+    version: str = "full",
+) -> tuple[np.ndarray, dict]:
+    """Load the entire declared test split and its provenance, independently of predictions."""
+    if split_file is None:
+        from openmhc._evaluate import _DatasetPaths
+
+        split_file = _DatasetPaths.resolve(data_dir, version=version).splits_file
+    path = Path(split_file).resolve()
+    contents = path.read_bytes()
+    split = json.loads(contents)
+    if not isinstance(split, dict):
+        raise ValueError(f"Split file must contain a train/validation/test mapping: {path}")
+    groups = {}
+    for name in ("train", "validation", "test"):
+        if not isinstance(split.get(name), list):
+            raise ValueError(f"Split file must contain a {name!r} participant list: {path}")
+        values = split[name]
+        if any(v is None for v in values):
+            raise ValueError(f"Missing participant ID in {name!r}: {path}")
+        groups[name] = set(map(str, values))
+        if len(groups[name]) != len(values):
+            raise ValueError(f"Duplicate participant IDs in {name!r}: {path}")
+    if any(groups[a] & groups[b] for a, b in
+           (("train", "validation"), ("train", "test"), ("validation", "test"))):
+        raise ValueError(f"Train, validation and test participants must be disjoint: {path}")
+    return _test_population(split["test"]), {
+        "split_file": str(path), "split_sha256": hashlib.sha256(contents).hexdigest(),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -429,20 +475,60 @@ def compute_per_draw_errors(
     subgroup_map: dict[str, dict[str, str]] | None = None,
     subgroup_attributes: list[str] | None = None,
     domain_map: dict[str, str] = TASK_DOMAIN_MAP,
+    *,
+    test_uids: Sequence[str],
 ) -> pd.DataFrame:
     """Phase 1: per-(method, task, subgroup, draw) error ``E = 1 - metric``.
 
-    Draws B paired bootstrap resamples (same per-task user indices reused across
-    methods) and records each method's per-task primary-metric error, globally
-    (``subgroup_attr="all"``) and per demographic subgroup. The long-format frame
-    (columns :data:`DRAW_COLS`) is the phase-2 input.
+    Each replicate samples the full ``test_uids`` population once. Its participant
+    multiplicities are shared across tasks, methods and demographic subgroups;
+    task eligibility is fixed and the resampled task sizes can vary. The original
+    eligible cohorts supply the point estimates. Protocol metadata is attached
+    to the returned frame and persisted by :func:`write_draws_parquet`.
     """
     methods = list(aligned.keys())
+    if not methods or not aligned[methods[0]]:
+        raise ValueError("At least one method and task are required")
+    if not isinstance(n_bootstrap, (int, np.integer)) or n_bootstrap < 0:
+        raise ValueError("n_bootstrap must be a nonnegative integer")
     tasks = sorted(aligned[methods[0]].keys())
     task_type = {t: aligned[methods[0]][t]["task_type"] for t in tasks}
+    users = _test_population(test_uids)
+    user_index = {u: i for i, u in enumerate(users)}
+    task_positions = {}
+    for m in methods:
+        if set(aligned[m]) != set(tasks):
+            raise ValueError("All methods must have the same aligned tasks")
+    for t in tasks:
+        reference = aligned[methods[0]][t]
+        uids = np.asarray(reference["uids"]).astype(str)
+        if uids.ndim != 1 or len(set(uids)) != len(uids):
+            raise ValueError(f"Task {t!r} must have unique one-dimensional participant IDs")
+        if not set(uids) <= user_index.keys():
+            raise ValueError(f"Task {t!r} contains participants outside the declared test split")
+        if task_type[t] not in PRIMARY_METRIC_FN:
+            raise ValueError(f"Unsupported task type for {t!r}: {task_type[t]!r}")
+        for m in methods:
+            payload = aligned[m][t]
+            if payload["task_type"] != task_type[t] or not np.array_equal(
+                np.asarray(payload["uids"]).astype(str), uids
+            ) or not np.array_equal(payload["y_true"], reference["y_true"]):
+                raise ValueError(f"Participant order, targets and task type must align for {t!r}")
+            for key in ("y_true", "y_pred", "y_proba"):
+                if np.asarray(payload[key]).shape != (len(uids),):
+                    raise ValueError(f"Expected one-dimensional {key} for {m}/{t}")
+            metric_key = "y_proba" if task_type[t] == "binary" else "y_pred"
+            if not np.isfinite(payload["y_true"]).all() or not np.isfinite(payload[metric_key]).all():
+                raise ValueError(f"Nonfinite targets or primary-metric predictions for {m}/{t}")
+        if task_type[t] == "binary" and not set(np.unique(reference["y_true"])) <= {0, 1}:
+            raise ValueError(f"Binary task {t!r} must use labels 0 and 1")
+        task_positions[t] = np.array([user_index[u] for u in uids], dtype=int)
     rng = np.random.default_rng(seed)
     task_n = {t: len(aligned[methods[0]][t]["uids"]) for t in tasks}
-    task_indices = {t: rng.integers(0, task_n[t], size=(n_bootstrap, task_n[t])) for t in tasks}
+    count_dtype = np.int16 if len(users) <= np.iinfo(np.int16).max else np.int64
+    counts = np.empty((n_bootstrap, len(users)), dtype=count_dtype)
+    for b in range(n_bootstrap):
+        counts[b] = np.bincount(rng.integers(len(users), size=len(users)), minlength=len(users))
 
     do_fairness = subgroup_map is not None and subgroup_attributes
     attribute_masks = (
@@ -452,12 +538,15 @@ def compute_per_draw_errors(
     )
 
     rows: list[dict] = []
+    omitted = {"all": 0, "subgroups": 0}
+    global_omissions = []
 
     def _emit(per_task: dict[str, dict[str, float]], attr: str, value: str, b: int) -> None:
         for t, method_vals in per_task.items():
             dom = domain_map.get(t)
             for m, metric in method_vals.items():
                 if metric is None or not np.isfinite(metric):
+                    omitted["all" if attr == "all" else "subgroups"] += 1
                     continue
                 rows.append(
                     {
@@ -475,6 +564,11 @@ def compute_per_draw_errors(
     def _emit_for_indices(idx_b: dict[str, np.ndarray], b: int) -> None:
         """Emit global + per-subgroup errors for one set of row indices (draw ``b``)."""
         per_task_global = _per_task_metric_on_indices(aligned, methods, tasks, idx_b)
+        for t, values in per_task_global.items():
+            missing = [m for m, value in values.items() if not np.isfinite(value)]
+            if missing:
+                global_omissions.append({"task": t, "draw": b, "methods": missing,
+                                         "sample_size": len(idx_b[t])})
         _emit(per_task_global, "all", "all", b)
         if do_fairness:
             for attr in subgroup_attributes:
@@ -504,19 +598,42 @@ def compute_per_draw_errors(
     # paired bootstrap resamples that quantify its standard error.
     _emit_for_indices({t: np.arange(task_n[t]) for t in tasks}, POINT_DRAW)
     for b in range(n_bootstrap):
-        _emit_for_indices({t: task_indices[t][b] for t in tasks}, b)
+        indices = {t: np.repeat(np.arange(task_n[t]), counts[b, task_positions[t]]) for t in tasks}
+        _emit_for_indices(indices, b)
 
-    return pd.DataFrame(rows, columns=DRAW_COLS)
+    result = pd.DataFrame(rows, columns=DRAW_COLS)
+    result.attrs["bootstrap"] = {
+        "protocol": "shared_participant_v1", "n_boot": int(n_bootstrap), "seed": int(seed),
+        "sampling_unit": "participant", "sampling_population": "entire declared test split",
+        "sampling_population_n": len(users),
+        "test_users_sha256": hashlib.sha256("\0".join(users).encode()).hexdigest(),
+        "eligible_union_n": len(set().union(*(set(p) for p in task_positions.values()))),
+        "shared_across": "all tasks and methods", "task_sample_sizes": "vary by replicate",
+        "counts_sha256": hashlib.sha256(counts.tobytes()).hexdigest(),
+        "counts_dtype": str(counts.dtype), "counts_shape": list(counts.shape),
+        "point_draw": POINT_DRAW, "error_storage_dtype": "float32",
+        "subgroup_sampling": "restrict each shared participant draw to fixed subgroup membership",
+        "undefined_policy": "omit nonfinite metric cells; single-class targets omitted across all methods",
+        "undefined_metric_cells": omitted, "global_omissions": global_omissions,
+    }
+    return result
 
 
 def write_draws_parquet(df: pd.DataFrame, path: Path, meta: dict | None = None) -> None:
     """Write the phase-1 draws frame to parquet (zstd) + optional sidecar meta JSON."""
+    protocol = df.attrs.get("bootstrap", {})
+    metadata = dict(meta or {})
+    for key, value in protocol.items():
+        if key in metadata and metadata[key] != value:
+            raise ValueError(f"Metadata disagrees with computed bootstrap field {key!r}")
+        metadata[key] = value
     df = df.copy()
+    df.attrs.clear()
     df["E"] = df["E"].astype("float32")
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, compression="zstd")
-    if meta is not None:
-        path.with_suffix(".meta.json").write_text(json.dumps(meta, indent=2))
+    if metadata:
+        path.with_suffix(".meta.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
 def read_draws_parquet(path: Path) -> tuple[pd.DataFrame, dict | None]:
