@@ -47,17 +47,20 @@ Three steps: data, baselines, paper pipeline.
 
 **1. Get the dataset** (see `DATASET.md`) and point `MHC_DATA_DIR` at its root.
 
-**2. Run the eight baselines.** One driver for every method; predictions are the paper pipeline's input, so set `PREDICTIONS_DIR`:
+**2. Run the eight baselines.** From the repository root, use the same driver for each method. Install the dependencies for that method first (see the optional dependencies in `pyproject.toml`); Toto uses a separate environment. Run each method in its appropriate environment, keeping the same output directories:
 
 ```bash
-for M in linear multirocket gru_d xgboost mae toto chronos2 wbm; do
-  METHOD=$M MHC_DATA_DIR=path/to/mhc-data \
-  PREDICTIONS_DIR=results/eval/final/predictions \
-  OUT_CSV=results/eval/final/eval_$M.csv \
-  sbatch jobs/imperial/slurm/run_eval.slurm        # add --gres=gpu:1 for toto/chronos2/wbm/lsm2/gru_d
-done
+export MHC_DATA_DIR=/path/to/mhc-data
+mkdir -p results/eval/final
+M=linear  # repeat for multirocket, gru_d, xgboost, lsm2, toto, chronos2, wbm
+METHOD="$M" PREDICTIONS_DIR=results/eval/final/predictions \
+  OUT_CSV="results/eval/final/eval_${M}.csv" \
+  PYTHONPATH=src python scripts/run_eval.py
 ```
 
+On a SLURM cluster, replace `PYTHONPATH=src python scripts/run_eval.py` with
+`sbatch jobs/imperial/slurm/run_eval.slurm` and adapt its environment setup to your
+cluster. Request a GPU with `sbatch --gres=gpu:1` when needed by the selected method.
 
 | METHOD          | Model                                           | Notes                          |
 | --------------- | ----------------------------------------------- | ------------------------------ |
@@ -65,10 +68,9 @@ done
 | multirocket     | random convolutional kernels                    | CPU                            |
 | gru_d           | end-to-end GRU-D (trains per run)               | GPU; see reproducibility below |
 | xgboost         | gradient-boosted trees on minute-level features | CPU; needs `daily_hf`          |
-| mae             | masked-autoencoder embeddings                   | GPU on cache miss; `daily_hf`  |
+| lsm2            | masked-autoencoder embeddings                   | GPU on cache miss; `daily_hf`  |
 | toto / chronos2 | time-series foundation-model embeddings         | GPU on cache miss              |
 | wbm             | self-supervised weekly encoder; linear fallback | GPU on cache miss              |
-
 
 WBM pools all eligible weeks from `processed/weekly_labels_lookup_stride7_full_history.parquet`.
 Its seven-day stride and weekly wear-time criteria still apply. Install the rebuilt
@@ -98,10 +100,43 @@ are not detected by these offline checks.
 
 ```bash
 PYTHONPATH=src python scripts/paper_results/downstream/run_paper_pipeline.py \
-    --config configs/paper/downstream_paper.yaml
+    --config configs/paper/downstream_paper.yaml --skip-eval
 ```
 
-`configs/paper/downstream_paper.yaml` records the methods, bootstrap count/seed, baseline, and the fairness knobs — the single provenance of the published numbers. Re-aggregate without re-bootstrapping via `--skip-phase1`.
+`--skip-eval` uses the predictions from step 2. The config records input/output
+directories, methods, bootstrap count/seed, baseline, and fairness settings. Keep
+`MHC_DATA_DIR` set to the same dataset used for evaluation: bootstrap samples its
+declared test split. Use `split_file` only to select the exact split used by those
+predictions. To reuse existing bootstrap draws too, add `--skip-phase1`.
+
+### Generate Track 1 tables
+
+After running the paper pipeline, generate the main and per-task tables from
+its aggregate output directory (`output_dir` in the pipeline config):
+
+```bash
+PYTHONPATH=src python scripts/paper_results/downstream/make_downstream_latex_tables.py \
+    --results-dir results/paper
+```
+
+The exporter reads `skill_scores_bootstrap.csv`, `avg_rankings_bootstrap.csv`,
+and `task_metrics_bootstrap.csv` from that directory. If a `manifest.json` with
+`files_sha256` is present, it also checks the three input hashes. It writes
+`tables/downstream_main_results_table.tex` and
+`tables/downstream_per_task_results_table.tex` beneath the selected results
+directory. The main table contains overall rank, overall skill and five domain
+skills, with methods ranked within their classes. The per-task table contains
+all 32 tasks, domain summaries and overall summaries. Point estimates and
+percentile intervals use the same rounding as the verified paper tables.
+
+Use `--results-dir` with a new run's aggregate directory to export your results;
+all eight benchmark methods and 32 tasks are required. `--output-dir` selects a
+different table directory, and `--dry-run` prints both tables without writing.
+The fragments require `booktabs`, `graphicx`, and `\usepackage[table]{xcolor}`.
+Their captions and styling are portable; they do not edit the manuscript or
+depend on its citations and revision commands. Results and generated tables
+remain local under ignored `results/`; no paper-result snapshot is bundled in
+this repository.
 
 ### Reference checkpoint (WBM on the Hub)
 
