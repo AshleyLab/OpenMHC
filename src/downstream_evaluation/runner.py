@@ -75,9 +75,7 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
             model.set_loader(loader)
         loader_for_run = loader if needs_segments else None
 
-    # Hand the temporal-window policy to models that build their own windows from raw
-    # (Toto/Chronos-2); cohort/lookup models ignore it (their window is baked into the
-    # lookup parquet). Duck-typed so new from-raw models opt in with one method.
+    # Let models apply or validate the temporal policy.
     if hasattr(model, "set_temporal_window"):
         model.set_temporal_window(config.temporal)
 

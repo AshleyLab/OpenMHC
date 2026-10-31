@@ -3,3 +3,7 @@ type: lsm2
 # Was the LSM2_CHECKPOINT env var. Default = the public HF checkpoint; override
 # with a local .ckpt path or an alternate ref when the registry is restricted.
 checkpoint: hf://MyHeartCounts/openmhc-lsm2-daily
+# Embedding cache for the checkpoint above. null = the model default
+# (results/lsm2_embeddings/from_raw). Changed inputs require a fresh directory;
+# incompatible or legacy caches are rejected without overwriting their contents.
+cache_dir: null

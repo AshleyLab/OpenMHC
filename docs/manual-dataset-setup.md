@@ -200,7 +200,7 @@ $CACHE/
 │   ├── window_index_w7_s7_d5.parquet
 │   ├── daily_labels_lookup.parquet
 │   ├── daily_labels_lookup_full_history.parquet
-│   └── weekly_labels_lookup_stride7_windowed.parquet
+│   └── weekly_labels_lookup_stride7_full_history.parquet
 ├── forecasting_sample_index/                  # Track 3
 │   ├── sample_index_P_24_M_H_7_3_S_100.json   # used by evaluate_forecasting (horizon 24)
 │   ├── day_remain_mask.json

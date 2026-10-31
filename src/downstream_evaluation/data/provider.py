@@ -39,7 +39,7 @@ _KEY_COLS = {"user_id", "date", "week_start", "n_valid_days", "n_valid_hours"}
 # Granularity → lookup filename (relative to the dataset's processed/ dir).
 LOOKUP_BY_GRANULARITY: dict[str, str] = {
     "daily": "daily_labels_lookup.parquet",
-    "weekly": "weekly_labels_lookup_stride7_windowed.parquet",
+    "weekly": "weekly_labels_lookup_stride7_full_history.parquet",
     # series eligibility = valid days (daily lookup), broadcast to the timeline.
     "series": "daily_labels_lookup.parquet",
 }
@@ -53,6 +53,10 @@ def lookup_filename(granularity: str, full_history: bool = False) -> str:
     criteria still apply — only the forward window is dropped.
     """
     name = LOOKUP_BY_GRANULARITY[granularity]
+    if granularity == "weekly":
+        if not full_history:
+            raise ValueError("Weekly evaluation requires full history; the legacy WBM cutoff is no longer supported.")
+        return name
     return name.replace(".parquet", "_full_history.parquet") if full_history else name
 
 

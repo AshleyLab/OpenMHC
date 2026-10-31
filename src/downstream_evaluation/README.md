@@ -38,7 +38,7 @@ Quality gating happens once, upstream, when `daily_hourly_hf` is built; eligibil
 | Regression | Pearson r  | age, BMI_values, WeightKilograms      |
 
 
-**Missing predictions.** A model may leave part of the cohort unscored — WBM, for one, only embeds participants with a full weekly window. When `predict` returns non-finite values for some participants, the harness scores those against the `linear` baseline (fit on the same train cohort) before metrics, so every participant counts exactly once. This needs the model to expose the segments and `fit` the baseline requires, so today WBM is the only bundled model that triggers it; the substituted fraction is reported as `PredictionResults.overall_fallback_rate` (per task in `.fallback_rate`).
+**Missing predictions.** A model may leave part of the cohort unscored — WBM, for one, only embeds participants with a full weekly window. When `predict` returns non-finite values for some participants, the harness scores those against the `linear` baseline (fit on the same train cohort) before metrics, so every participant counts exactly once. Missing entries receive the corresponding Linear baseline prediction. This needs the model to expose the segments and `fit` the baseline requires, so today WBM is the only bundled model that triggers it; the substituted fraction is reported as `PredictionResults.overall_fallback_rate` (per task in `.fallback_rate`).
 
 
 ## Reproduce the paper results
@@ -68,6 +68,30 @@ done
 | mae             | masked-autoencoder embeddings                   | GPU on cache miss; `daily_hf`  |
 | toto / chronos2 | time-series foundation-model embeddings         | GPU on cache miss              |
 | wbm             | self-supervised weekly encoder; linear fallback | GPU on cache miss              |
+
+
+WBM pools all eligible weeks from `processed/weekly_labels_lookup_stride7_full_history.parquet`.
+Its seven-day stride and weekly wear-time criteria still apply. Install the rebuilt
+full-history lookup when using an older dataset; renaming the windowed lookup is
+insufficient. Weekly embeddings with matching cache provenance can be reused after
+checking coverage of all required weeks. Participant pooling, PCA and prediction
+heads must be refit.
+
+LSM-2, WBM, Toto and Chronos-2 validate embedding-cache provenance before reuse.
+Changing the checkpoint, dataset or extraction settings requires a fresh cache
+directory; mismatched, incomplete and legacy caches without identity metadata
+raise an error without overwriting the existing files. Legacy caches must be
+regenerated once, rather than relabelled with new metadata. For example, use
+`method.cache_dir=results/lsm2_embeddings/my_run` for a new LSM-2 run.
+
+Local checkpoint files/directories are SHA-256 hashed. Dataset identity includes
+the canonical root, release marker and source-file paths, sizes and modification
+times; it does not hash every raw tensor. Keep dataset/checkpoint inputs immutable
+during a run. Remote checkpoint references are compared verbatim without network
+access on a cache hit: pin an immutable revision (for example,
+`hf://ORG/REPO@COMMIT`) or use a local checkpoint. Updates behind an unchanged
+remote alias, and dataset edits that preserve file sizes and modification times,
+are not detected by these offline checks.
 
 
 **3. Run the paper pipeline** (bootstrap CIs, skill/rank/fairness aggregates) — one config drives every phase:

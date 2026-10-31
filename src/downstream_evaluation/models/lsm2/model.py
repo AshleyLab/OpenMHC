@@ -25,6 +25,12 @@ from pathlib import Path
 
 import numpy as np
 
+from downstream_evaluation.models._cache_identity import (
+    embedding_identity,
+    numpy_cache_ready,
+    validate_loader,
+    write_numpy_cache,
+)
 from downstream_evaluation.models._feature_align import raise_if_missing
 
 logger = logging.getLogger(__name__)
@@ -39,6 +45,13 @@ MAX_NONWEAR_MINUTES = 720
 # fresh user with no W&B account / no local copy can still fetch it. Override with a
 # local .ckpt path (or any wandb:/hf:// ref) via the LSM2_CHECKPOINT env var.
 DEFAULT_CHECKPOINT = os.environ.get("LSM2_CHECKPOINT", "hf://MyHeartCounts/openmhc-lsm2-daily")
+CACHE_FILES = ("embeddings.npy", "user_ids.npy", "dates.npy")
+
+
+def _cache_identity(checkpoint, data_dir, seed):
+    return embedding_identity(
+        "lsm2", checkpoint, data_dir, "minute", preprocessing="minute_dense_v1", seed=seed,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -51,9 +64,8 @@ def _load_lsm2_model(checkpoint: str, device):
     checkpoint's saved hyperparameters and loads the weights; ``.model`` is the
     ``LSM2ViT1D`` encoder. Frozen + eval for inference-only feature extraction.
     """
-    from utils.checkpoints import resolve_checkpoint_path
-
     from openmhc.models.lsm2.modules import LSM2Module
+    from utils.checkpoints import resolve_checkpoint_path
 
     resolved = resolve_checkpoint_path(checkpoint)
     logger.info("loading LSM2 checkpoint: %s", resolved)
@@ -74,6 +86,7 @@ def _build_transforms(stats_path: Path):
     import torch
 
     from data.normalization import load_global_normalization_stats
+
     # public data/transforms/__init__.py is empty → import the submodule directly.
     from data.transforms.nan_transforms import HybridNaNAwareNormalize, ZeroToNaNTransform
 
@@ -114,16 +127,19 @@ def extract_lsm2_embeddings(
     not a re-derived wear/variance filter); the raw minute tensors are fetched through the
     shared minute-resolution :class:`DataLoader` (``loader``; one is built if not injected).
     """
+    validate_loader(loader, data_dir, "minute")
+    identity = _cache_identity(checkpoint, data_dir, seed)
+    if numpy_cache_ready(Path(output_dir), identity, CACHE_FILES):
+        return
     from collections import defaultdict
 
     import pandas as pd
     import torch
     from tqdm import tqdm
 
-    from openmhc._evaluate import _DatasetPaths
-
     from downstream_evaluation.data.provider import lookup_filename
     from downstream_evaluation.data.splits import load_split_file
+    from openmhc._evaluate import _DatasetPaths
     from openmhc.models.lsm2.utils import create_inherited_mask
 
     torch.manual_seed(seed)
@@ -193,15 +209,16 @@ def extract_lsm2_embeddings(
                     date_list.append(d)
 
     out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
     emb = (
         np.stack(emb_list).astype(np.float32)
         if emb_list
         else np.empty((0, EMBED_DIM), dtype=np.float32)
     )
-    np.save(out / "embeddings.npy", emb)
-    np.save(out / "user_ids.npy", np.array(uid_list, dtype=object))
-    np.save(out / "dates.npy", np.array(date_list, dtype=object))
+    write_numpy_cache(out, identity, {
+        "embeddings.npy": emb,
+        "user_ids.npy": np.array(uid_list, dtype=object),
+        "dates.npy": np.array(date_list, dtype=object),
+    })
     logger.info("wrote %d LSM2 day-embeddings (dim=%d) -> %s", len(emb), EMBED_DIM, out)
 
 
@@ -250,6 +267,7 @@ class LSM2:
         """Receive the shared minute-resolution :class:`DataLoader`; cache-miss extraction
         fetches each user's eligible-day minute tensors from it (``run_eval`` injects it;
         standalone use builds its own)."""
+        validate_loader(loader, self._data_dir, "minute")
         self._loader = loader
 
     def _resolve_cache_dir(self) -> Path:
@@ -261,7 +279,8 @@ class LSM2:
         if self._by_key is not None:
             return
         cache = self._resolve_cache_dir()
-        if not (cache / "embeddings.npy").exists():
+        identity = _cache_identity(self._checkpoint, self._data_dir, self.seed)
+        if not numpy_cache_ready(cache, identity, CACHE_FILES):
             logger.info("LSM2 embeddings cache miss at %s — extracting from raw (GPU)", cache)
             extract_lsm2_embeddings(
                 output_dir=str(cache),
@@ -271,9 +290,15 @@ class LSM2:
                 seed=self.seed,
                 loader=self._loader,
             )
+            if not numpy_cache_ready(cache, identity, CACHE_FILES):
+                raise ValueError(f"Extraction did not create a complete cache at {cache}")
         emb = np.load(cache / "embeddings.npy")
         uids = np.load(cache / "user_ids.npy", allow_pickle=True)
         dates = np.load(cache / "dates.npy", allow_pickle=True)
+        if emb.ndim != 2 or uids.ndim != 1 or dates.ndim != 1 or not (
+            len(emb) == len(uids) == len(dates)
+        ):
+            raise ValueError(f"Invalid embedding cache shapes at {cache}; use a fresh cache_dir.")
         self._by_key = {(str(u), str(d)[:10]): e for u, d, e in zip(uids, dates, emb)}
         if emb.size:
             self._dim = int(emb.shape[1])

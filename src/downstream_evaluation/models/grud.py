@@ -36,6 +36,21 @@ PATIENCE = 5
 LR = 1e-3
 
 
+def _ordinal_class_prediction(threshold_probs):
+    """Match the benchmark's Frank-Hall wrappers: differences, then argmax.
+
+    No monotonic projection or clipping is added here: the existing logistic
+    and XGBoost ordinal wrappers also use the raw threshold differences.
+    """
+    q = np.asarray(threshold_probs)
+    probs = np.zeros((q.shape[0], q.shape[1] + 1))
+    probs[:, 0] = 1 - q[:, 0]
+    for i in range(1, q.shape[1]):
+        probs[:, i] = q[:, i - 1] - q[:, i]
+    probs[:, -1] = q[:, -1]
+    return probs.argmax(axis=1).astype(int)
+
+
 def _scatter_mean(src, index, n_groups):
     """Mean-pool ``src`` (M, D) into ``n_groups`` rows by ``index`` (M,)."""
     import torch
@@ -298,6 +313,8 @@ class _Trainer:
         coll = lambda b: _collate(b, self.task_names)  # noqa: E731
         loader = DataLoader(ds, batch_size=BATCH_SIZE, shuffle=False, collate_fn=coll)
         preds = []
+        ordinal_thresholds = []
+        ordinal_expected = []
         with torch.no_grad():
             for batch in loader:
                 batch = {k: (v.to(self.device) if torch.is_tensor(v) else v) for k, v in batch.items()}
@@ -305,12 +322,23 @@ class _Trainer:
                 if task_type == "binary":
                     preds.append(torch.softmax(out, dim=1)[:, 1].cpu().numpy())
                 elif task_type == "ordinal":
-                    # expected level = sum of P(y > k) over the K-1 cumulative logits
-                    preds.append(torch.sigmoid(out).sum(dim=1).cpu().numpy())
+                    thresholds = torch.sigmoid(out)
+                    threshold_probs = thresholds.cpu().numpy()
+                    ordinal_thresholds.append(threshold_probs)
+                    ordinal_expected.append(thresholds.sum(dim=1).cpu().numpy())
+                    preds.append(_ordinal_class_prediction(threshold_probs))
                 elif task_type == "multiclass":
                     preds.append(out.argmax(dim=1).cpu().numpy())
                 else:  # regression
                     preds.append(out.squeeze(-1).cpu().numpy())
+        if task_type == "ordinal":
+            if not hasattr(self, "ordinal_prediction_audit"):
+                self.ordinal_prediction_audit = {}
+            self.ordinal_prediction_audit[task] = {
+                "user_ids": list(ds.user_ids),
+                "threshold_probs": np.concatenate(ordinal_thresholds),
+                "expected_level": np.concatenate(ordinal_expected),
+            }
         return np.concatenate(preds)
 
 

@@ -100,12 +100,14 @@ class MethodConfig:
 
     ``type`` selects the registry builder. The remaining fields are the
     per-method options that used to be env vars / constructor args: ``checkpoint``
-    (MAE / WBM), ``features_dir`` + ``max_future_days`` (XGBoost). Builders ignore
-    the fields they don't read.
+    and ``cache_dir`` (LSM2 / WBM / Toto / Chronos-2; incompatible cache identities
+    are rejected, so changed inputs need a fresh directory), ``features_dir`` +
+    ``max_future_days`` (XGBoost). Builders ignore the fields they don't read.
     """
 
     type: str = "linear"
     checkpoint: str | None = None
+    cache_dir: str | None = None
     features_dir: str | None = None
     max_future_days: int = 0
 

@@ -1,87 +1,42 @@
-"""Missing-prediction fallback (Track 1, issue #38).
-
-The harness substitutes the Linear baseline for participants a model leaves
-non-finite, reproducing the per-user routing the ``Hybrid`` (WBM) model used to
-do internally. These tests pin the *combine* algorithm byte-identical to that
-former internal logic (so reported WBM numbers cannot move) without needing the
-dataset — the end-to-end byte-parity vs the golden is a separate cluster run.
-"""
-
+"""Direct Linear substitution preserves scores and participant alignment."""
 from __future__ import annotations
-
 import numpy as np
 import pytest
-from scipy.stats import rankdata
-
 from downstream_evaluation.evaluation.evaluator import _combine_with_fallback
 from openmhc import PredictionResults
 
 
-def _hybrid_reference(ssl_by_user, fb_by_user, daily_users, ssl_users, ttype):
-    """Verbatim re-implementation of the pre-#38 ``Hybrid.predict`` branch combine.
-
-    The ``Hybrid`` model was removed in #38 (its routing moved to the harness);
-    this copy is preserved as the parity oracle so any drift in the harness
-    ``_combine_with_fallback`` helper is caught.
-    """
-    ssl_set = set(ssl_users)
-    is_ssl = np.array([u in ssl_set for u in daily_users])
-    out = np.zeros(len(daily_users), dtype=np.float64)
-    ssl_idx = np.where(is_ssl)[0]
-    fb_idx = np.where(~is_ssl)[0]
-    ssl_vals = np.array([ssl_by_user[daily_users[i]] for i in ssl_idx], dtype=np.float64)
-    fb_vals = np.array([fb_by_user[daily_users[i]] for i in fb_idx], dtype=np.float64)
-    if ttype in ("binary", "ordinal") and len(ssl_idx) and len(fb_idx):
-        ssl_vals = rankdata(ssl_vals) / max(len(ssl_vals), 1)
-        fb_vals = rankdata(fb_vals) / max(len(fb_vals), 1)
-    out[ssl_idx] = ssl_vals
-    out[fb_idx] = fb_vals
-    return out
+@pytest.mark.parametrize("ttype", ["binary", "ordinal", "regression", "multiclass"])
+def test_direct_substitution_preserves_values_and_inputs(ttype):
+    native = np.array([0.10, 0.40, 0.80, np.nan, np.inf, -np.inf])
+    baseline = np.array([0.99, 0.99, 0.99, 0.20, 0.30, 0.15])
+    original = native.copy()
+    out, count = _combine_with_fallback(native, baseline, ttype)
+    np.testing.assert_array_equal(out, [0.10, 0.40, 0.80, 0.20, 0.30, 0.15])
+    np.testing.assert_array_equal(native, original)
+    np.testing.assert_array_equal(baseline, [0.99, 0.99, 0.99, 0.20, 0.30, 0.15])
+    assert count == 3
+    # Routing must not depend on unrelated participants or their ordering.
+    ix = [4, 1, 3]
+    subset, subset_count = _combine_with_fallback(native[ix], baseline[ix], ttype)
+    np.testing.assert_array_equal(subset, out[ix])
+    assert subset_count == 2
 
 
 @pytest.mark.parametrize("ttype", ["binary", "ordinal", "regression", "multiclass"])
-@pytest.mark.parametrize("seed", [0, 1, 7, 42, 123])
-def test_combine_matches_hybrid_reference(ttype, seed):
-    """The harness combine reproduces Hybrid's per-branch rank-then-merge."""
-    rng = np.random.default_rng(seed)
-    n = 60
-    daily_users = [f"u{i}" for i in range(n)]
-    # Random SSL cohort = a subset with weekly embeddings.
-    is_ssl = rng.random(n) < 0.6
-    ssl_users = [daily_users[i] for i in range(n) if is_ssl[i]]
-
-    ssl_raw = rng.normal(size=n)
-    fb_raw = rng.normal(size=n)
-    ssl_by_user = {daily_users[i]: ssl_raw[i] for i in range(n) if is_ssl[i]}
-    fb_by_user = {daily_users[i]: fb_raw[i] for i in range(n)}
-
-    expected = _hybrid_reference(ssl_by_user, fb_by_user, daily_users, ssl_users, ttype)
-
-    # Harness inputs: y_pred = SSL prediction where available else NaN; fb =
-    # Linear baseline for every user (the harness only reads its non-finite rows).
-    y_pred = np.where(is_ssl, ssl_raw, np.nan)
-    out, n_sub = _combine_with_fallback(y_pred, fb_raw, ttype)
-
-    assert np.array_equal(out, expected)
-    assert n_sub == int((~is_ssl).sum())
-
-
-@pytest.mark.parametrize("ttype", ["binary", "ordinal", "regression"])
 def test_combine_all_fallback_no_rank(ttype):
-    """No finite cohort → raw baseline substitution, no ranking (matches Hybrid)."""
-    y_pred = np.full(10, np.nan)
-    fb = np.arange(10, dtype=np.float64)
-    out, n_sub = _combine_with_fallback(y_pred, fb, ttype)
-    assert np.array_equal(out, fb)
-    assert n_sub == 10
+    native = np.full(4, np.nan)
+    baseline = np.array([.13, .81, .27, .81])
+    out, count = _combine_with_fallback(native, baseline, ttype)
+    np.testing.assert_array_equal(out, baseline)
+    assert count == 4
 
 
 def test_combine_no_nonfinite_is_identity():
-    """All-finite predictions are returned unchanged with zero substitutions."""
-    y_pred = np.array([0.1, 0.9, 0.5, 0.3])
-    out, n_sub = _combine_with_fallback(y_pred, np.zeros(4), "binary")
-    assert np.array_equal(out, y_pred)
-    assert n_sub == 0
+    native = np.array([.13, .81, .27, .81])
+    out, count = _combine_with_fallback(native, np.zeros(4), "binary")
+    np.testing.assert_array_equal(out, native)
+    assert count == 0
 
 
 def test_wbmprobe_predict_aligns_and_nans_missing():

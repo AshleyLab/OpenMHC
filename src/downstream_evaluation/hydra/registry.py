@@ -38,29 +38,39 @@ def _xgboost(method: MethodConfig, data: DataConfig):
 def _lsm2(method: MethodConfig, data: DataConfig):
     from downstream_evaluation.models.lsm2 import LSM2
 
+    kwargs = {}
     if method.checkpoint:
-        return LSM2(data_dir=data.data_dir, checkpoint=method.checkpoint), None
-    return LSM2(data_dir=data.data_dir), None
+        kwargs["checkpoint"] = method.checkpoint
+    if method.cache_dir:
+        kwargs["cache_dir"] = method.cache_dir
+    return LSM2(data_dir=data.data_dir, **kwargs), None
 
 
 def _wbm(method: MethodConfig, data: DataConfig):
     from downstream_evaluation.models.wbm import WBMProbe
 
+    kwargs = {"cache_dir": method.cache_dir}
     if method.checkpoint:
-        return WBMProbe(data.data_dir, checkpoint=method.checkpoint), None
-    return WBMProbe(data.data_dir), None
+        kwargs["checkpoint"] = method.checkpoint
+    return WBMProbe(data.data_dir, **kwargs), None
 
 
 def _toto(method: MethodConfig, data: DataConfig):
     from downstream_evaluation.models.toto import Toto
 
-    return Toto(data_dir=data.data_dir), None
+    kwargs = {"cache_dir": method.cache_dir}
+    if method.checkpoint:
+        kwargs["checkpoint"] = method.checkpoint
+    return Toto(data_dir=data.data_dir, **kwargs), None
 
 
 def _chronos2(method: MethodConfig, data: DataConfig):
     from downstream_evaluation.models.chronos2 import Chronos2
 
-    return Chronos2(data_dir=data.data_dir), None
+    kwargs = {"cache_dir": method.cache_dir}
+    if method.checkpoint:
+        kwargs["checkpoint"] = method.checkpoint
+    return Chronos2(data_dir=data.data_dir, **kwargs), None
 
 
 def _multirocket(method: MethodConfig, data: DataConfig):
