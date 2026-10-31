@@ -47,9 +47,8 @@ from forecasting_evaluation.metrics.skill_score_summary import (  # noqa: E402
 DEFAULT_AGE_BINS = (18, 30, 40, 50, 60)
 DEFAULT_DEMOGRAPHIC_ATTRS = ("age_group", "sex")
 
-# Enrollment exposes only a birth *year*, so age is anchored to a single
-# reference date shared with Track 1 (downstream_evaluation.config.LABEL_REFERENCE_DATE),
-# i.e. age = AGE_REFERENCE_DATE.year − birth_year for every user.
+# Retained for callers using the legacy reference_date argument; stored age
+# does not depend on a reference date.
 AGE_REFERENCE_DATE = "2020-06-01"
 
 
@@ -104,9 +103,9 @@ def load_user_demographics(
 ) -> dict[str, dict[str, str]]:
     """Load age-group and sex labels for the requested users.
 
-    Age is ``reference_date.year − birth_year`` (enrollment exposes only a birth
-    *year*), anchoring every user to the same reference as Track 1. Sex is the
-    latest ``BiologicalSex`` label value.
+    Age is read directly from enrollment_info.json; missing ages stay unknown.
+    The legacy ``reference_date`` argument is ignored. Sex is the latest
+    ``BiologicalSex`` label value.
     """
     labels_file = Path(labels_path)
     enrollment_file = Path(enrollment_path)
@@ -115,14 +114,12 @@ def load_user_demographics(
     with enrollment_file.open("r", encoding="utf-8") as file:
         enrollment = json.load(file)
 
-    reference_year = pd.Timestamp(reference_date).year
     sex_entries = labels_data.get("BiologicalSex", {})
 
     demographics: dict[str, dict[str, str]] = {}
     for user_id in sorted(user_ids):
         record = enrollment.get(user_id)
-        birth_year = record.get("birth_year") if isinstance(record, dict) else None
-        age = reference_year - int(birth_year) if birth_year else None
+        age = record.get("age") if isinstance(record, dict) else None
         sex_value = _last_value(sex_entries, user_id)
         demographics[user_id] = {
             "age_group": bin_age(age, age_bins=age_bins),

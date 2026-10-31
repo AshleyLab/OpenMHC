@@ -210,21 +210,16 @@ def _build_subgroup_mapping(
 ) -> dict[int, dict[str, str]] | None:
     """Build {sample_idx: {age_group, sex}} mapping from a method's manifest.
 
-    Mirrors the inline pattern in ``imputation_evaluation.sensitivity``: openmhc's
-    ``get_user_demographics`` returns ``{"birth_year": int | None, "sex": str}``
-    per user (post the labels-api privacy migration), and
-    ``years_between_birth_year(birth_year, sample_date)`` yields a whole-year
-    age that we then pass through ``bin_age``.
+    Uses stored enrollment age, matching the online sensitivity mapping.
     """
     manifest = load_sample_manifest(pairs_dir, split)
     if manifest is None:
         return None
     from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE, years_between_birth_year
+    from labels.api import STORE
 
     sample_idxs = manifest.column("sample_idx").to_numpy()
     user_ids = manifest.column("user_id").to_pylist()
-    dates = manifest.column("date").to_pylist()
     unique_users = sorted(set(user_ids))
     logger.info(
         "[split=%s] looking up demographics for %d users …",
@@ -234,21 +229,9 @@ def _build_subgroup_mapping(
     user_demographics = get_user_demographics(STORE, unique_users)
 
     out: dict[int, dict[str, str]] = {}
-    for sidx, uid, date_str in zip(sample_idxs, user_ids, dates):
-        # ``get_user_demographics`` returns ``{"birth_year": int | None, "sex": str}``
-        # after the labels-api privacy migration (commit 1e8795b on main). The
-        # Dataverse ``enrollment_info.json`` ships year-precision birthdates,
-        # which ``years_between_birth_year`` synthesizes into ages.
-        demo = user_demographics.get(uid, {"birth_year": None, "sex": "unknown"})
-        age_group = "unknown"
-        birth_year = demo["birth_year"]
-        if birth_year is not None:
-            try:
-                sample_date = pd.Timestamp(date_str)
-                age = years_between_birth_year(birth_year, sample_date)
-                age_group = bin_age(age, age_bins)
-            except Exception:
-                pass
+    for sidx, uid in zip(sample_idxs, user_ids):
+        demo = user_demographics.get(uid, {"age": None, "sex": "unknown"})
+        age_group = bin_age(demo["age"], age_bins)
         out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
     return out
 

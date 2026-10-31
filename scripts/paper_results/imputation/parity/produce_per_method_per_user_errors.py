@@ -20,8 +20,6 @@ import logging
 import sys
 from pathlib import Path
 
-import pandas as pd
-
 from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
 from imputation_evaluation.evaluation.per_user_errors import (
     build_per_user_errors,
@@ -58,27 +56,18 @@ def _build_subgroup_mapping(
     if manifest is None:
         return None
     from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE, years_between_birth_year
+    from labels.api import STORE
 
     sample_idxs = manifest.column("sample_idx").to_numpy()
     user_ids = manifest.column("user_id").to_pylist()
-    dates = manifest.column("date").to_pylist()
     unique_users = sorted(set(user_ids))
     logger.info("[split=%s] looking up demographics for %d users", split, len(unique_users))
     user_demographics = get_user_demographics(STORE, unique_users)
 
     out: dict[int, dict[str, str]] = {}
-    for sidx, uid, date_str in zip(sample_idxs, user_ids, dates):
-        demo = user_demographics.get(uid, {"birth_year": None, "sex": "unknown"})
-        age_group = "unknown"
-        birth_year = demo["birth_year"]
-        if birth_year is not None:
-            try:
-                sample_date = pd.Timestamp(date_str)
-                age = years_between_birth_year(birth_year, sample_date)
-                age_group = bin_age(age, age_bins)
-            except Exception:
-                pass
+    for sidx, uid in zip(sample_idxs, user_ids):
+        demo = user_demographics.get(uid, {"age": None, "sex": "unknown"})
+        age_group = bin_age(demo["age"], age_bins)
         out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
     return out
 
