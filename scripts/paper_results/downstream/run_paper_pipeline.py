@@ -77,6 +77,8 @@ def _phase0_eval(cfg: dict, methods: list[str], dry_run: bool) -> None:
         }
         if cfg.get("data_dir"):
             env["MHC_DATA_DIR"] = str(cfg["data_dir"])
+        if cfg.get("cache_root"):
+            env["CACHE_ROOT"] = str(cfg["cache_root"])
         log.info("phase 0 — eval method=%s -> %s (+ predictions/)", m, env["OUT_CSV"])
         _run([sys.executable, str(REPO_ROOT / "scripts" / "run_eval.py")], dry_run, env=env)
 

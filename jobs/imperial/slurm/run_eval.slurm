@@ -15,6 +15,8 @@
 #
 #   METHOD ∈ { linear, multirocket, gru_d, xgboost, lsm2, toto, chronos2, wbm }
 #   lsm2/toto/chronos2/wbm need a GPU for first-run embedding extraction.
+#   CACHE_ROOT optionally selects a fresh cache parent; each encoder gets its
+#   own method subdirectory. Existing incompatible/legacy caches are rejected.
 #
 # Usage (set MHC_DATA_DIR to the dataset root; add --gres=gpu:1 for GPU methods):
 #   METHOD=linear   MHC_DATA_DIR=/path/to/data sbatch               jobs/imperial/slurm/run_eval.slurm

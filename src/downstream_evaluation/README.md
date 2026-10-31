@@ -51,6 +51,7 @@ Three steps: data, baselines, paper pipeline.
 
 ```bash
 export MHC_DATA_DIR=/path/to/mhc-data
+export CACHE_ROOT=results/embeddings/reproduction_v1
 mkdir -p results/eval/final
 M=linear  # repeat for multirocket, gru_d, xgboost, lsm2, toto, chronos2, wbm
 METHOD="$M" PREDICTIONS_DIR=results/eval/final/predictions \
@@ -83,7 +84,11 @@ LSM-2, WBM, Toto and Chronos-2 validate embedding-cache provenance before reuse.
 Changing the checkpoint, dataset or extraction settings requires a fresh cache
 directory; mismatched, incomplete and legacy caches without identity metadata
 raise an error without overwriting the existing files. Legacy caches must be
-regenerated once, rather than relabelled with new metadata. For example, use
+regenerated once, rather than relabelled with new metadata. The `CACHE_ROOT`
+setting above gives each encoder its own subdirectory. Choose a new root for
+changed inputs, and reuse it for unchanged runs. `scripts/run_eval.py` and its
+SLURM launcher inherit this variable. For pipeline phase 0, set `cache_root` in
+the YAML config or export `CACHE_ROOT`. With the separate Hydra CLI, use
 `method.cache_dir=results/lsm2_embeddings/my_run` for a new LSM-2 run.
 
 Local checkpoint files/directories are SHA-256 hashed. Dataset identity includes

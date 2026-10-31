@@ -10,6 +10,9 @@
 # Phase 0 (eval) — dataset root + release. data_dir: null -> MHC_DATA_DIR.
 data_dir: null
 version: full
+# Optional fresh embedding-cache parent for phase 0; null inherits CACHE_ROOT.
+# Each encoder gets its own subdirectory. Unset keeps model defaults.
+cache_root: null
 
 # Inputs — eval predictions + their metric CSVs (frozen, or written by phase 0).
 predictions_dir: results/eval/final/predictions
