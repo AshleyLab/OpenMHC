@@ -27,7 +27,8 @@ methods:
   - wbm
   - gru_d
 
-# Phase 1 — paired bootstrap (bootstrap_downstream_draws.py).
+# Phase 1 — shared participant bootstrap (bootstrap_downstream_draws.py).
+split_file: null  # null -> declared split from data_dir / MHC_DATA_DIR and version
 n_bootstrap: 1000
 seed: 42
 fairness_attributes: [age_group, sex]

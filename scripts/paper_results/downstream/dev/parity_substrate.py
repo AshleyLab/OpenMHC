@@ -42,6 +42,7 @@ if str(SRC_ROOT) not in sys.path:
 from downstream_evaluation.evaluation.bootstrap_skill_rank import (  # noqa: E402
     align_across_methods,
     compute_per_draw_errors,
+    load_bootstrap_test_users,
 )
 from downstream_evaluation.evaluation.per_user_pairs import build_per_user_pairs  # noqa: E402
 from downstream_evaluation.evaluation.predictions_io import _safe_task  # noqa: E402
@@ -134,7 +135,7 @@ def _method_tasks_from_substrate(sub: pd.DataFrame) -> dict[str, dict]:
     return out
 
 
-def gate_c(rep: Report, subs: dict[str, pd.DataFrame], paper_draws: Path, atol: float) -> None:
+def gate_c(rep: Report, subs: dict[str, pd.DataFrame], paper_draws: Path, atol: float, test_uids) -> None:
     """Substrate-driven bootstrap reproduces the committed draws (float32 tolerance)."""
     gt = pd.read_parquet(paper_draws)
     n_boot = int(gt["draw"].nunique()) - 1  # committed draws = point (-1) + n_boot resamples
@@ -147,6 +148,7 @@ def gate_c(rep: Report, subs: dict[str, pd.DataFrame], paper_draws: Path, atol: 
         subgroup_map=subgroup_map,
         subgroup_attributes=["age_group", "sex"],
         domain_map=TASK_DOMAIN_MAP,
+        test_uids=test_uids,
     )
 
     def norm(df: pd.DataFrame) -> pd.DataFrame:
@@ -183,6 +185,9 @@ def main() -> int:
     p.add_argument("--paper-draws", type=Path, default=REPO_ROOT / "results/paper/bootstrap_draws.parquet")
     p.add_argument("--atol", type=float, default=1e-4, help="float32 tolerance for Gate C E values")
     p.add_argument("--skip-bootstrap", action="store_true", help="Gate B only (skip the heavy Gate C)")
+    p.add_argument("--split-file", type=Path, default=None)
+    p.add_argument("--data-dir", type=Path, default=None)
+    p.add_argument("--version", choices=["full", "xs"], default="full")
     args = p.parse_args()
 
     print(f"predictions-dir={args.predictions_dir}")
@@ -190,7 +195,8 @@ def main() -> int:
     rep = Report()
     gate_b(rep, subs, args.predictions_dir)
     if not args.skip_bootstrap:
-        gate_c(rep, subs, args.paper_draws, args.atol)
+        test_uids, _ = load_bootstrap_test_users(args.split_file, data_dir=args.data_dir, version=args.version)
+        gate_c(rep, subs, args.paper_draws, args.atol, test_uids)
     else:
         print("  (skipped Gate C — bootstrap)")
     print(rep.summary())

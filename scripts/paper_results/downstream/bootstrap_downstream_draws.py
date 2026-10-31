@@ -2,9 +2,9 @@
 r"""Phase 1 of the downstream paper-metrics bootstrap.
 
 Reads per-(method, task) prediction parquets emitted by the eval pipeline when
-``--output.save_predictions true`` is set, runs B paired bootstrap resamples
-(for each task, sample N test users with replacement — the **same** indices
-reused across methods → paired comparisons), and writes ``bootstrap_draws.parquet``:
+``--output.save_predictions true`` is set, samples the declared test split once
+per replicate with participant multiplicities shared across tasks and methods,
+and writes ``bootstrap_draws.parquet``:
 a long-format frame of per-(method, task, subgroup, draw) error ``E = 1 − metric``.
 
 Phase 2 (``aggregate_downstream_paper_metrics.py``) turns those draws into the
@@ -33,6 +33,7 @@ from pathlib import Path
 from downstream_evaluation.evaluation.bootstrap_skill_rank import (
     align_across_methods,
     compute_per_draw_errors,
+    load_bootstrap_test_users,
     load_method_predictions,
     load_subgroup_map,
     write_draws_parquet,
@@ -61,8 +62,15 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--baseline", default="linear", help="Skill / fairness baseline method (recorded in the meta sidecar).")
     p.add_argument("--output", type=Path, required=True, help="bootstrap_draws.parquet path")
-    p.add_argument("--fairness_attributes", nargs="+", default=["age_group", "sex"])
+    p.add_argument("--split-file", type=Path, help="Explicit train/validation/test split JSON; overrides dataset resolution.")
+    p.add_argument("--data-dir", type=Path, help="Dataset root; defaults to MHC_DATA_DIR when --split-file is absent.")
+    p.add_argument("--version", choices=["full", "xs"], default="full")
+    p.add_argument("--fairness_attributes", nargs="*", default=["age_group", "sex"])
     args = p.parse_args()
+
+    test_uids, split_meta = load_bootstrap_test_users(
+        args.split_file, data_dir=args.data_dir, version=args.version
+    )
 
     aligned = align_across_methods(
         {m: load_method_predictions(args.predictions_dir, m, args.csvs_dir) for m in args.methods}
@@ -83,6 +91,7 @@ def main() -> None:
         subgroup_map=subgroup_map,
         subgroup_attributes=attributes,
         domain_map=TASK_DOMAIN_MAP,
+        test_uids=test_uids,
     )
     meta = {
         "n_boot": args.n_bootstrap,
@@ -91,6 +100,7 @@ def main() -> None:
         "methods": list(args.methods),
         "n_tasks": int(draws["task"].nunique()),
         "fairness_attributes": list(attributes) if attributes else [],
+        **split_meta,
     }
     write_draws_parquet(draws, args.output, meta)
     log.info("Wrote %s (%d rows, %d draws)", args.output, len(draws), draws["draw"].nunique())
