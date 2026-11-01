@@ -7,7 +7,6 @@ import runpy
 import subprocess
 import sys
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -161,7 +160,7 @@ def test_missing_schema_environment_override_is_rejected(tmp_path, monkeypatch):
     a = write_dataset(tmp_path / "a", 20, "context_a")
     api.configure(paths=a)
     monkeypatch.setenv("LABEL_TYPES_PATH", str(tmp_path / "missing.json"))
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(ValueError, match="Unset LABEL_TYPES_PATH"):
         api.configure(data_dir=tmp_path / "b")
     assert api._PATHS == a
 
@@ -172,10 +171,11 @@ def test_bad_ordinal_mapping_is_rejected_before_switch(tmp_path):
 
     a = write_dataset(tmp_path / "a", 20, "context_a")
     api.configure(paths=a)
-    broken = tmp_path / "broken.json"
+    b = write_dataset(tmp_path / "b", 40, "context_b")
+    broken = b.ordinal_dictionary
     broken.write_text('{"age": []}')
     with pytest.raises(ValueError):
-        api.configure(paths=replace(a, ordinal_dictionary=broken))
+        api.configure(paths=b)
     assert api._PATHS == a
 
 
@@ -256,7 +256,7 @@ def test_fingerprint_uses_actual_paths_and_covariate_helper(tmp_path, monkeypatc
     assert all(value == ["age", "extra"] for value in result["covariate_exclusions"].values())
 
 
-def test_configuration_fixture_restores_explicit_state_and_environment(tmp_path, monkeypatch):
+def test_configuration_fixture_restores_explicit_state_and_environment(tmp_path, monkeypatch, write_label_schemas):
     """Teardown restores A and warm caches even when the saved environment says B."""
     from devices import api as devices
     from labels import api
@@ -268,7 +268,7 @@ def test_configuration_fixture_restores_explicit_state_and_environment(tmp_path,
     index, timelines = api.STORE._labels_index, devices.STORE._timelines
     monkeypatch.setenv("MHC_DATA_DIR", str(tmp_path / "b"))
     with pytest.MonkeyPatch.context() as nested:
-        fixture = clean_configuration.__wrapped__(nested)
+        fixture = clean_configuration.__wrapped__(nested, tmp_path, write_label_schemas)
         next(fixture)
         assert "MHC_DATA_DIR" not in os.environ
         with pytest.raises(StopIteration):

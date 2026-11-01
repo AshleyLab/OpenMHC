@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 from pathlib import Path
@@ -10,9 +9,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-_REAL_ORDINAL_DICT = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "labels" / "ordinal_dictionary.json"
-)
+pytestmark = pytest.mark.usefixtures("label_schema_environment")
 
 
 def _load_context_api(
@@ -21,8 +18,8 @@ def _load_context_api(
     context_data: dict,
     last_labels_data: dict | None = None,
 ):
-    """Reload context.api with given fixture files."""
-    lt_path = tmp_path / "label_types.json"
+    """Configure context.api with given fixture files."""
+    lt_path = Path(os.environ["MHC_DATA_DIR"]) / "labels/label_types.json"
     lt_path.write_text(json.dumps(label_types))
 
     labels_path = tmp_path / "last_labels.json"
@@ -36,20 +33,15 @@ def _load_context_api(
 
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(lt_path)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(_REAL_ORDINAL_DICT)
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nope.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nope.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(context_path)
 
-    # Reload labels.api first so STORE picks up the new env vars,
-    # then reload context.api which imports from labels.api.
+    import context.api
     import labels.api
 
-    importlib.reload(labels.api)
-    import context.api
-
-    return importlib.reload(context.api)
+    labels.api.configure()
+    return context.api
 
 
 def test_get_context_returns_label_result(tmp_path: Path) -> None:

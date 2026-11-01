@@ -14,11 +14,7 @@ from typing import Any
 
 import pandas as pd
 
-from openmhc._dataset import bundled_metadata_dir as _bundled_metadata_dir
 from openmhc._label_paths import LabelPaths
-
-BUNDLED_METADATA_DIR = _bundled_metadata_dir()
-DATA_DIR = BUNDLED_METADATA_DIR
 
 
 def _require_dataset_payload_path(
@@ -74,9 +70,16 @@ def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, A
     return types, meta
 
 
-LABEL_TYPES: dict[str, str]
-_LABEL_META: dict[str, dict[str, Any]]
-LABEL_TYPES, _LABEL_META = _load_label_types(_PATHS.label_types)
+# Metadata is populated by configure() or the first label query.
+LABEL_TYPES: dict[str, str] = {}
+_LABEL_META: dict[str, dict[str, Any]] = {}
+_SCHEMAS_CONFIGURED = False
+
+
+def _ensure_configured() -> None:
+    """Configure lazily so imports work before an explicit dataset is selected."""
+    if not _SCHEMAS_CONFIGURED:
+        configure()
 
 
 class LabelTypeError(Exception):
@@ -716,10 +719,20 @@ STORE = LabelsStore(_PATHS)
 
 def _load_schemas(resolved: LabelPaths) -> tuple[dict, dict]:
     """Validate all small schemas without mutating live state or payload caches."""
-    types, meta = _load_label_types(resolved.label_types)
-    _load_ordinal_dictionary(resolved.ordinal_dictionary)
-    with resolved.validity_config.open() as handle:
-        validity = json.load(handle)
+    resolved.require_schemas()
+    try:
+        types, meta = _load_label_types(resolved.label_types)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid label schema {resolved.label_types}: {exc}") from exc
+    try:
+        _load_ordinal_dictionary(resolved.ordinal_dictionary)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid label schema {resolved.ordinal_dictionary}: {exc}") from exc
+    try:
+        with resolved.validity_config.open() as handle:
+            validity = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid label schema {resolved.validity_config}: {exc}") from exc
     if not isinstance(validity, dict) or any(
         value is not None and (
             isinstance(value, bool) or not isinstance(value, (int, float))
@@ -733,7 +746,9 @@ def _load_schemas(resolved: LabelPaths) -> tuple[dict, dict]:
 def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = None) -> None:
     """Select a dataset for labels and devices; refresh metadata and lazy caches.
 
-    Explicit per-file environment overrides are resolved by ``LabelPaths``.
+    All three schemas come from the selected dataset's ``labels/`` directory.
+    Conflicting schema environment paths raise an error. Payload overrides
+    are resolved by ``LabelPaths``.
     Call before querying/evaluating a new dataset. References imported with
     ``from labels.api import STORE, LABEL_TYPES, CONTEXT_NAMES`` stay valid.
     Configuration is process-global; concurrent evaluations of different
@@ -745,13 +760,14 @@ def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = 
     # Validate before changing metadata or either store.
     types, meta = _load_schemas(resolved)
 
-    global _PATHS
+    global _PATHS, _SCHEMAS_CONFIGURED
     _PATHS = resolved
     _apply_metadata(types, meta)
     STORE.configure(resolved)
     from devices import api as devices_api
 
     devices_api.configure(paths=resolved)
+    _SCHEMAS_CONFIGURED = True
 
 
 def get_labels(
@@ -791,6 +807,7 @@ def get_labels(
         LabelValueError: If value is None or NaN
         LabelTypeError: If value cannot be converted to expected type
     """
+    _ensure_configured()
     if label not in LABEL_NAMES:
         raise ValueError(f"Unknown label: {label}")
 
@@ -852,6 +869,7 @@ def get_labels_windowed(
         ValueError: If label is unknown or aggregation method is invalid.
         KeyError: If healthCode not found or no measurements in window.
     """
+    _ensure_configured()
     if label not in LABEL_NAMES and label not in DAILY_LABELS:
         raise ValueError(f"Unknown label: {label}")
 
@@ -902,6 +920,7 @@ def get_labels_one_hot(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_one_hot only supports multi_categorical labels, "
@@ -942,6 +961,7 @@ def get_labels_count(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_count only supports multi_categorical labels, "
@@ -981,6 +1001,7 @@ def get_labels_contains(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_contains only supports multi_categorical labels, "
@@ -1002,6 +1023,7 @@ def get_labels_statistics() -> pd.DataFrame:
     For each label, includes: data type, min value, max value, median value,
     and count of unique values.
     """
+    _ensure_configured()
     labels_data = _load_labels(
         _require_dataset_payload_path(
             _PATHS.labels,

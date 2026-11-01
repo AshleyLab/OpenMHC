@@ -48,11 +48,15 @@ def describe(path: Path | None) -> dict:
 
 def main() -> None:
     """Emit a deterministic fingerprint (no timestamps or participant data)."""
+    if hasattr(api, "_ensure_configured"):
+        api._ensure_configured()
     if hasattr(api, "_PATHS"):
         paths = api._PATHS
         # Enumerate the actual resolver fields so new paths cannot be omitted.
-        files = {FILE_KEYS[field.name]: describe(getattr(paths, field.name))
-                 for field in fields(paths)}
+        names = [name for field in fields(paths)
+                 for name in (("label_types", "ordinal_dictionary", "validity_config")
+                              if field.name == "schema_dir" else (field.name,))]
+        files = {FILE_KEYS[name]: describe(getattr(paths, name)) for name in names}
     else:
         # The comparison baseline predates LabelPaths. Read its actual paths,
         # including the old repository-owned device path.

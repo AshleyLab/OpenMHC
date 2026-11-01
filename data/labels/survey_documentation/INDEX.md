@@ -1,6 +1,6 @@
 # MHC Variable Index
 
-169 variables used by the MHC-benchmark project (41 targets + 128 contexts), mapped to their source definitions in the iOS codebase. These are exactly the canonical benchmark labels in `data/labels/label_types.json`: the `survey_documentation/` tree has one variable `.md` per label (169 docs), plus a `summary.md` landing page per category and this index.
+169 variables used by the MHC-benchmark project (41 targets + 128 contexts), mapped to their source definitions in the iOS codebase. This index describes the historical 169-variable schema; the authoritative label set for a release is its `<dataset_root>/labels/label_types.json`. In this index, the `survey_documentation/` tree has one variable `.md` per label (169 docs), plus a `summary.md` landing page per category and this index.
 
 - **Filename convention**: `<category>/<raw_identifier>.md`. The `field_` prefix used in the benchmark dataset is stripped from filenames but recorded inside each file.
 - **Role**: target = model prediction target; context = model input feature
@@ -8,7 +8,7 @@
 
 ## By category
 
-Variables are grouped into 16 semantic subdirectories. Each subdirectory contains its own `summary.md` landing page. The `Labels` column counts entries in `label_types.json`.
+Variables are grouped into 16 semantic subdirectories. Each subdirectory contains its own `summary.md` landing page. The `Labels` column counts entries in the historical schema documented here.
 
 | Category | Labels | Contents |
 |----------|--------|----------|
@@ -223,9 +223,9 @@ These have no single survey field — each is documented in its own `.md` file w
 
 ## Summary
 
-- **Targets**: 41 (canonical, from `label_types.json`).
-- **Contexts**: 128 (canonical, from `label_types.json`).
-- **Total files in `survey_documentation/`**: 169 variable docs + 16 per-category `summary.md` + this `INDEX.md` = 186 `.md` files. The 169 variable docs are exactly the benchmark labels in `label_types.json` (one per label). Raw survey fields that are not released as labels — e.g. the `heart_disease` / `vascular` multi-selects that derived targets such as CAD and Afib are computed from — are referenced inline where relevant but are not separately documented.
+- **Targets**: 41 (in the historical schema documented here).
+- **Contexts**: 128 (in the historical schema documented here).
+- **Total files in `survey_documentation/`**: 169 variable docs + 16 per-category `summary.md` + this `INDEX.md` = 186 `.md` files. The 169 variable docs correspond to that historical schema (one per label). Raw survey fields that are not released as labels — e.g. the `heart_disease` / `vascular` multi-selects that derived targets such as CAD and Afib are computed from — are referenced inline where relevant but are not separately documented.
 
 All survey identifiers are exact string matches from JSON survey definitions. Heart Age variables map to Objective-C constants in `APHHeartAgeAndRiskFactors.m` and `APHHeartAgeTaskViewController.m`. HealthKit variables map to `HKQuantityTypeIdentifier`/`HKCharacteristicTypeIdentifier` constants in `APHAppDelegate.m`. PAR-Q variables map to static NSString constants in `APHDynamicParQQuizTask.m`. The `field_` prefix from the benchmark dataset is stripped from all filenames but recorded in each file's frontmatter as the "Benchmark column".
 

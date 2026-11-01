@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy.stats import rankdata, spearmanr
 from sklearn.metrics import average_precision_score
 
@@ -19,6 +20,8 @@ from downstream_evaluation.evaluation.evaluator import _metrics_for
 from downstream_evaluation.evaluation.metrics import compute_binary_metrics, get_task_type
 from downstream_evaluation.evaluation.predictions_io import write_task_predictions
 from labels.api import LABEL_NAMES
+
+pytestmark = pytest.mark.usefixtures("label_schema_environment")
 
 
 def _an_ordinal_task() -> str:
