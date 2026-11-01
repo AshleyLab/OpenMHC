@@ -32,6 +32,7 @@ def describe(path: Path | None) -> dict:
 
 def main() -> None:
     """Emit a deterministic fingerprint (no timestamps or participant data)."""
+    api.configure()
     names = (
         "LABELS_PATH",
         "CONTEXT_LABELS_PATH",

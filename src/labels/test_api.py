@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
+import sys
 from pathlib import Path
 from time import perf_counter
 
@@ -50,38 +50,49 @@ def _write_enrollment(path: Path) -> None:
     path.write_text(json.dumps(sample))
 
 
-_REAL_LABEL_TYPES = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "labels" / "label_types.json"
-)
-_REAL_ORDINAL_DICT = (
-    Path(__file__).resolve().parent.parent.parent / "data" / "labels" / "ordinal_dictionary.json"
-)
+_TEST_LABEL_TYPES: Path | None = None
+_TEST_ORDINAL_DICT: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def schema_paths(label_schema_environment, monkeypatch):
+    """Supply synthetic schemas to the existing API behavior tests."""
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_TEST_LABEL_TYPES",
+        label_schema_environment / "label_types.json",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "_TEST_ORDINAL_DICT",
+        label_schema_environment / "ordinal_dictionary.json",
+        raising=False,
+    )
 
 
 def _load_api(tmp_path: Path):
     os.environ["LABELS_DATA_PATH"] = str(tmp_path / "last_labels.json")
     os.environ["ENROLLMENT_DATA_PATH"] = str(tmp_path / "enrollment_info.json")
-    os.environ["LABEL_TYPES_PATH"] = str(_REAL_LABEL_TYPES)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(_REAL_ORDINAL_DICT)
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nonexistent_validity.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nonexistent_daily.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(tmp_path / "nonexistent_context.json")
     import labels.api as api
 
-    return importlib.reload(api)
+    api.configure()
+    return api
 
 
 def _load_api_with_paths(labels_path: Path, enrollment_path: Path):
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(_REAL_LABEL_TYPES)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(_REAL_ORDINAL_DICT)
     os.environ["LABEL_VALIDITY_PATH"] = str(labels_path.parent / "nonexistent_validity.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(labels_path.parent / "nonexistent_daily.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(labels_path.parent / "nonexistent_context.json")
     import labels.api as api
 
-    return importlib.reload(api)
+    api.configure()
+    return api
 
 
 def test_nearest_prefers_earlier_on_tie(tmp_path: Path) -> None:
@@ -753,14 +764,13 @@ def _write_validity(path: Path, data: dict) -> None:
 def _load_api_with_validity(labels_path: Path, enrollment_path: Path, validity_path: Path):
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(_REAL_LABEL_TYPES)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(_REAL_ORDINAL_DICT)
     os.environ["LABEL_VALIDITY_PATH"] = str(validity_path)
     os.environ["HEALTHKIT_DAILY_PATH"] = str(labels_path.parent / "nonexistent_daily.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(labels_path.parent / "nonexistent_context.json")
     import labels.api as api
 
-    return importlib.reload(api)
+    api.configure()
+    return api
 
 
 def _make_validity_fixtures(tmp_path: Path):
@@ -975,14 +985,13 @@ def _load_api_with_daily(
 ):
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(_REAL_LABEL_TYPES)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(_REAL_ORDINAL_DICT)
     os.environ["LABEL_VALIDITY_PATH"] = str(labels_path.parent / "nonexistent.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(daily_path)
     os.environ["CONTEXT_LABELS_PATH"] = str(labels_path.parent / "nonexistent_context.json")
     import labels.api as api
 
-    return importlib.reload(api)
+    api.configure()
+    return api
 
 
 def _make_windowed_fixtures(tmp_path: Path):
@@ -1188,14 +1197,15 @@ def _load_api_with_context(
 ):
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(label_types_path or _REAL_LABEL_TYPES)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(_REAL_ORDINAL_DICT)
+    if label_types_path is not None:
+        _TEST_LABEL_TYPES.write_bytes(label_types_path.read_bytes())
     os.environ["LABEL_VALIDITY_PATH"] = str(labels_path.parent / "nonexistent.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(labels_path.parent / "nonexistent.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(context_path)
     import labels.api as api
 
-    return importlib.reload(api)
+    api.configure()
+    return api
 
 
 def test_target_names_and_context_names_partition(tmp_path: Path) -> None:
@@ -1215,13 +1225,13 @@ def test_target_names_and_context_names_partition(tmp_path: Path) -> None:
 
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(lt_path)
+    _TEST_LABEL_TYPES.write_bytes(lt_path.read_bytes())
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nope.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nope.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(tmp_path / "nope.json")
     import labels.api as api
 
-    api = importlib.reload(api)
+    api.configure()
 
     assert set(api.TARGET_NAMES) | set(api.CONTEXT_NAMES) == set(api.LABEL_NAMES)
     assert set(api.TARGET_NAMES) & set(api.CONTEXT_NAMES) == set()
@@ -1397,13 +1407,13 @@ def test_backward_compat_old_label_types_format(tmp_path: Path) -> None:
 
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(lt_path)
+    _TEST_LABEL_TYPES.write_bytes(lt_path.read_bytes())
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nope.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nope.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(tmp_path / "nope.json")
     import labels.api as api
 
-    api = importlib.reload(api)
+    api.configure()
 
     assert api.LABEL_TYPES == {"Diabetes": "binary", "age": "continuous"}
     assert api.TARGET_NAMES == ["Diabetes", "age"]
@@ -1501,13 +1511,13 @@ def test_enforce_type_multi_categorical_dispatches_to_tuple(tmp_path: Path) -> N
 
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(lt_path)
+    _TEST_LABEL_TYPES.write_bytes(lt_path.read_bytes())
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nope.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nope.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(tmp_path / "nope.json")
     import labels.api as api
 
-    api = importlib.reload(api)
+    api.configure()
 
     assert api._enforce_type("field_race", [1, 3]) == (1, 3)
 
@@ -1529,13 +1539,13 @@ def test_multi_categorical_names_export_is_derived_from_label_types(tmp_path: Pa
 
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(lt_path)
+    _TEST_LABEL_TYPES.write_bytes(lt_path.read_bytes())
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nope.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nope.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(tmp_path / "nope.json")
     import labels.api as api
 
-    api = importlib.reload(api)
+    api.configure()
 
     assert sorted(api.MULTI_CATEGORICAL_NAMES) == sorted(["field_race", "field_family_history"])
 
@@ -1589,14 +1599,15 @@ def _setup_helpers_api(tmp_path: Path):
 
     os.environ["LABELS_DATA_PATH"] = str(labels_path)
     os.environ["ENROLLMENT_DATA_PATH"] = str(enrollment_path)
-    os.environ["LABEL_TYPES_PATH"] = str(lt_path)
-    os.environ["ORDINAL_DICTIONARY_PATH"] = str(od_path)
+    _TEST_LABEL_TYPES.write_bytes(lt_path.read_bytes())
+    _TEST_ORDINAL_DICT.write_bytes(od_path.read_bytes())
     os.environ["LABEL_VALIDITY_PATH"] = str(tmp_path / "nope.json")
     os.environ["HEALTHKIT_DAILY_PATH"] = str(tmp_path / "nope.json")
     os.environ["CONTEXT_LABELS_PATH"] = str(tmp_path / "nope.json")
     import labels.api as api
 
-    return importlib.reload(api)
+    api.configure()
+    return api
 
 
 def test_get_labels_one_hot_returns_per_option_bool(tmp_path: Path) -> None:
@@ -1736,26 +1747,3 @@ def test_years_between_birth_year_export_present() -> None:
     import labels
 
     assert hasattr(labels, "years_between_birth_year")
-
-
-def test_shipped_multi_categorical_fields_have_ordinal_dictionary_entries() -> None:
-    """Every label declared ``multi_categorical`` must have an ordinal_dictionary entry.
-
-    Regression test for the silent schema drift between the initial public scaffold
-    and the labels-API port: ``api.py`` decodes ``multi_categorical`` values via
-    ``ordinal_dictionary.json``, so a missing entry breaks ``_to_tuple_of_int``.
-    """
-    repo_root = Path(__file__).resolve().parents[2]
-    types = json.loads((repo_root / "data/labels/label_types.json").read_text())
-    ords = json.loads((repo_root / "data/labels/ordinal_dictionary.json").read_text())
-    missing = [
-        k for k, v in types.items() if v.get("type") == "multi_categorical" and k not in ords
-    ]
-    assert not missing, f"multi_categorical fields missing from ordinal_dictionary: {missing}"
-
-
-def test_shipped_label_types_target_count_is_pinned() -> None:
-    """Pin the target count at 41 so silent target/context promotion fails CI."""
-    repo_root = Path(__file__).resolve().parents[2]
-    types = json.loads((repo_root / "data/labels/label_types.json").read_text())
-    assert sum(1 for v in types.values() if v.get("target")) == 41

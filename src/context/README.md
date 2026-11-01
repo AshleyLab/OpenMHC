@@ -19,7 +19,10 @@ target, so accidental category mix-ups fail loudly instead of silently.
 
 ```python
 import pandas as pd
+from labels import configure
 from context import get_context, CONTEXT_NAMES
+
+configure(data_dir="/path/to/dataset")
 
 # Look up the user's smoking status nearest to the query date
 result = get_context(
@@ -32,9 +35,13 @@ print(result.matched_timestamp, result.value)
 
 ## Data sources
 
-Reads from `data/labels/context_labels.json` via the shared `LabelsStore` in
-`labels.api`. No additional data files.
+Reads from the selected dataset's `labels/context_labels.json` via the shared
+`LabelsStore` in `labels.api`. Context names and types come from that dataset's
+schema set. Call `labels.configure()` before inspecting `CONTEXT_NAMES` or
+switching datasets; a first context query can configure from `MHC_DATA_DIR`.
 
 ## Variable dictionary
 
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) — per-variable reference (question text, answer options, observed value distributions, iOS source) for all 128 context labels.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md)
+for historical survey definitions and observed distributions. The selected
+dataset's schema and release documentation define its available context labels.

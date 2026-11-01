@@ -21,7 +21,7 @@ import numpy as np
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import accuracy_score, average_precision_score, r2_score
 
-from labels.api import LABEL_NAMES, LABEL_TYPES
+from labels.api import LABEL_NAMES, LABEL_TYPES, _ensure_configured
 
 # ---------------------------------------------------------------------------
 # Bootstrap standard error
@@ -74,6 +74,7 @@ def get_task_type(task_name: str) -> str:
     Raises:
         ValueError: If task_name is not found in LABEL_TYPES.
     """
+    _ensure_configured()
     label_type = LABEL_TYPES.get(task_name)
 
     if label_type is None:

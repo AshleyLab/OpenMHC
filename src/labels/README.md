@@ -1,6 +1,6 @@
 # Labels API
 
-This module exposes a fast, in-memory lookup for label values and age computation with automatic type enforcement.
+This module exposes an in-memory lookup for stored label values with automatic type enforcement.
 
 ## Public surface
 - `labels.configure(data_dir=None)`: select a dataset and refresh metadata and cached payloads in place.
@@ -23,9 +23,11 @@ This module exposes a fast, in-memory lookup for label values and age computatio
 - `label_types.json`: maps each label to its semantic type (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
 
 ## Variable dictionary
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for a per-variable reference (question text, answer options, observed value distributions, iOS source) covering all 169 labels.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for a per-variable reference (question text, answer options, observed value distributions, iOS source) covering the historical 169-variable schema. The dataset schema determines the labels available in a selected release.
 
-Small schema metadata (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) is bundled in the repo under `data/labels/`. Large payload files resolve from your explicit dataset root (`data_dir=` / `MHC_DATA_DIR`) unless you override them per file:
+All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`. Configuration requires the complete schema set; missing files or invalid JSON raise an error, with no repository fallback. The legacy variables `LABEL_TYPES_PATH`, `ORDINAL_DICTIONARY_PATH` and `VALIDITY_CONFIG_PATH` cannot redirect schemas: configuration raises an error if any points elsewhere. Unset those variables and select a dataset root instead.
+
+Participant payloads also default to `<dataset_root>/labels/` and support explicit per-file overrides:
 ```bash
 export MHC_DATA_DIR=/path/to/openmhc-dataset
 export LABELS_DATA_PATH=/path/to/last_labels.json
@@ -33,8 +35,8 @@ export ENROLLMENT_DATA_PATH=/path/to/enrollment_info.json
 ```
 
 For direct API calls, use `labels.configure(data_dir="/path/to/dataset")` before
-querying or switching datasets. Evaluation entry points configure this
-automatically. An explicit `data_dir=` overrides `MHC_DATA_DIR`; explicit per-file
+querying, inspecting `LABEL_NAMES` / `TARGET_NAMES` / `CONTEXT_NAMES`, or switching datasets. Metadata containers are empty until configuration. A first label query can configure lazily from `MHC_DATA_DIR`. Evaluation entry points configure this
+automatically. An explicit `data_dir=` overrides `MHC_DATA_DIR`; explicit payload
 overrides take precedence over either root.
 
 Configuration refreshes metadata in place and clears cached payloads without
@@ -46,6 +48,7 @@ for concurrent evaluations of different datasets.
 ```python
 import pandas as pd
 from labels import (
+    configure,
     get_labels,
     LABEL_NAMES,
     LABEL_TYPES,
@@ -55,6 +58,8 @@ from labels import (
     print_labels_statistics,
 )
 
+configure(data_dir="/path/to/dataset")
+
 # lookup nearest label value (returns enforced type)
 result = get_labels(
     health_code="user-123",
@@ -63,7 +68,7 @@ result = get_labels(
 )
 print(result.matched_timestamp, result.value)  # value is bool
 
-# compute age at timestamp (returns float)
+# look up the stored age label nearest to the query timestamp (returns float)
 age = get_labels(
     health_code="user-123",
     timestamp=pd.Timestamp("2020-01-14"),
