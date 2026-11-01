@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import statistics
 from bisect import bisect_left, bisect_right
 from collections import Counter
@@ -16,32 +15,10 @@ from typing import Any
 import pandas as pd
 
 from openmhc._dataset import bundled_metadata_dir as _bundled_metadata_dir
-from openmhc._dataset import data_dir as _resolve_dataset_root
+from openmhc._label_paths import LabelPaths
 
 BUNDLED_METADATA_DIR = _bundled_metadata_dir()
 DATA_DIR = BUNDLED_METADATA_DIR
-
-
-def _normalize_path(path: str | Path) -> Path:
-    return Path(path).expanduser().resolve()
-
-
-def _resolve_bundled_metadata_path(env_var: str, filename: str) -> Path:
-    override = os.getenv(env_var)
-    if override:
-        return _normalize_path(override)
-    return (BUNDLED_METADATA_DIR / filename).resolve()
-
-
-def _resolve_dataset_payload_path(env_var: str, filename: str) -> Path | None:
-    override = os.getenv(env_var)
-    if override:
-        return _normalize_path(override)
-    try:
-        root = _resolve_dataset_root()
-    except ValueError:
-        return None
-    return root / "labels" / filename
 
 
 def _require_dataset_payload_path(
@@ -59,21 +36,18 @@ def _require_dataset_payload_path(
     )
 
 
-LABELS_PATH = _resolve_dataset_payload_path("LABELS_DATA_PATH", "last_labels.json")
-CONTEXT_LABELS_PATH = _resolve_dataset_payload_path("CONTEXT_LABELS_PATH", "context_labels.json")
-ORDINAL_DICTIONARY_PATH = _resolve_bundled_metadata_path(
-    "ORDINAL_DICTIONARY_PATH", "ordinal_dictionary.json"
-)
-ENROLLMENT_PATH = _resolve_dataset_payload_path("ENROLLMENT_DATA_PATH", "enrollment_info.json")
-LABEL_TYPES_PATH = _resolve_bundled_metadata_path("LABEL_TYPES_PATH", "label_types.json")
-LABEL_VALIDITY_PATH = _resolve_dataset_payload_path("LABEL_VALIDITY_PATH", "label_validity.json")
-HEALTHKIT_DAILY_PATH = _resolve_dataset_payload_path("HEALTHKIT_DAILY_PATH", "healthkit_daily.json")
-VALIDITY_CONFIG_PATH = _resolve_bundled_metadata_path(
-    "VALIDITY_CONFIG_PATH", "validity_config.json"
-)
+_PATHS = LabelPaths.resolve()
+LABELS_PATH = _PATHS.labels
+CONTEXT_LABELS_PATH = _PATHS.context
+ORDINAL_DICTIONARY_PATH = _PATHS.ordinal_dictionary
+ENROLLMENT_PATH = _PATHS.enrollment
+LABEL_TYPES_PATH = _PATHS.label_types
+LABEL_VALIDITY_PATH = _PATHS.validity
+HEALTHKIT_DAILY_PATH = _PATHS.daily
+VALIDITY_CONFIG_PATH = _PATHS.validity_config
 
 
-def _load_label_types() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     """Load label type mappings from label_types.json.
 
     Handles both old flat format (``{"Diabetes": "binary"}``) and new
@@ -84,9 +58,9 @@ def _load_label_types() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         string for backward compatibility, and meta_dict maps label→full
         metadata dict.
     """
-    if not LABEL_TYPES_PATH.exists():
+    if not path.exists():
         return {}, {}
-    with LABEL_TYPES_PATH.open("r") as handle:
+    with path.open("r") as handle:
         raw = json.load(handle)
     types: dict[str, str] = {}
     meta: dict[str, dict[str, Any]] = {}
@@ -104,7 +78,7 @@ def _load_label_types() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
 
 LABEL_TYPES: dict[str, str]
 _LABEL_META: dict[str, dict[str, Any]]
-LABEL_TYPES, _LABEL_META = _load_label_types()
+LABEL_TYPES, _LABEL_META = _load_label_types(LABEL_TYPES_PATH)
 
 
 class LabelTypeError(Exception):
@@ -544,6 +518,18 @@ class LabelsStore:
         self._validity_attached: bool = False
         self._daily_index: LabelsIndex | None = None
 
+    def configure(self, paths: LabelPaths) -> None:
+        """Replace paths and discard all cached payloads, keeping this store."""
+        self.labels_path = paths.labels
+        self.enrollment_path = paths.enrollment
+        self.validity_path = paths.validity
+        self.healthkit_daily_path = paths.daily
+        self.context_labels_path = paths.context
+        self._labels_index = None
+        self._enrollment = None
+        self._validity_attached = False
+        self._daily_index = None
+
     def get_labels(self, health_code: str, timestamp: pd.Timestamp, label: str) -> LabelResult:
         """Get label value for a health code at a specific timestamp.
 
@@ -723,6 +709,47 @@ STORE = LabelsStore(
     healthkit_daily_path=HEALTHKIT_DAILY_PATH,
     context_labels_path=CONTEXT_LABELS_PATH,
 )
+
+
+def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = None) -> None:
+    """Select a dataset and refresh metadata and lazy payload caches in place.
+
+    Explicit per-file environment overrides are resolved by ``LabelPaths``.
+    Call before querying/evaluating a new dataset. References imported with
+    ``from labels.api import STORE, LABEL_TYPES, CONTEXT_NAMES`` stay valid.
+    Configuration is process-global; concurrent evaluations of different
+    datasets require separate processes.
+    """
+    if paths is not None and data_dir is not None:
+        raise ValueError("Pass data_dir or paths, not both")
+    resolved = paths if paths is not None else LabelPaths.resolve(data_dir)
+    # Parse before changing any live state, so invalid metadata cannot leave
+    # imported consumers partly configured for a different dataset.
+    types, meta = _load_label_types(resolved.label_types)
+
+    global _PATHS, LABELS_PATH, CONTEXT_LABELS_PATH, ENROLLMENT_PATH
+    global LABEL_VALIDITY_PATH, HEALTHKIT_DAILY_PATH, LABEL_TYPES_PATH
+    global ORDINAL_DICTIONARY_PATH, VALIDITY_CONFIG_PATH
+    _PATHS = resolved
+    LABELS_PATH = resolved.labels
+    CONTEXT_LABELS_PATH = resolved.context
+    ENROLLMENT_PATH = resolved.enrollment
+    LABEL_VALIDITY_PATH = resolved.validity
+    HEALTHKIT_DAILY_PATH = resolved.daily
+    LABEL_TYPES_PATH = resolved.label_types
+    ORDINAL_DICTIONARY_PATH = resolved.ordinal_dictionary
+    VALIDITY_CONFIG_PATH = resolved.validity_config
+    LABEL_TYPES.clear()
+    LABEL_TYPES.update(types)
+    _LABEL_META.clear()
+    _LABEL_META.update(meta)
+    LABEL_NAMES[:] = types
+    TARGET_NAMES[:] = [k for k, v in meta.items() if v.get("target", True)]
+    CONTEXT_NAMES[:] = [k for k, v in meta.items() if not v.get("target", True)]
+    MULTI_CATEGORICAL_NAMES[:] = [
+        k for k, v in meta.items() if v.get("type") == "multi_categorical"
+    ]
+    STORE.configure(resolved)
 
 
 def get_labels(

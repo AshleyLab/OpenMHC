@@ -3,6 +3,7 @@
 This module exposes a fast, in-memory lookup for label values and age computation with automatic type enforcement.
 
 ## Public surface
+- `labels.configure(data_dir=None)`: select a dataset and refresh metadata and cached payloads in place.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
@@ -30,6 +31,16 @@ export MHC_DATA_DIR=/path/to/openmhc-dataset
 export LABELS_DATA_PATH=/path/to/last_labels.json
 export ENROLLMENT_DATA_PATH=/path/to/enrollment_info.json
 ```
+
+For direct API calls, use `labels.configure(data_dir="/path/to/dataset")` before
+querying or switching datasets. Evaluation entry points configure this
+automatically. An explicit `data_dir=` overrides `MHC_DATA_DIR`; explicit per-file
+overrides take precedence over either root.
+
+Configuration refreshes metadata in place and clears cached payloads without
+changing environment variables or reloading modules. Call `configure()` again
+after changing overrides. Configuration is process-global; use separate processes
+for concurrent evaluations of different datasets.
 
 ## Usage
 ```python

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +28,7 @@ from openmhc._dataset import (
 from openmhc._dataset import (
     data_dir as _resolve_dataset_root,
 )
+from openmhc._label_paths import LabelPaths
 from openmhc._results import ForecastingResults, ImputationResults, PredictionResults
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ class _DatasetPaths:
     norm_stats: Path
     clip_dates: Path
     labels_dir: Path
+    label_paths: LabelPaths
     hourly_trajectory: Path
     forecasting_sample_index_dir: Path
     version: str = "full"  # "xs" or "full"
@@ -159,6 +160,7 @@ class _DatasetPaths:
             norm_stats=root / "processed" / "normalization_stats_hourly.json",
             clip_dates=root / "labels" / "clip_dates.json",
             labels_dir=root / "labels",
+            label_paths=LabelPaths.resolve(root),
             hourly_trajectory=root / "hourly_trajectory",
             forecasting_sample_index_dir=root / "forecasting_sample_index",
             version=version,
@@ -239,40 +241,17 @@ class _DatasetPaths:
             )
 
 
-_LABELS_PAYLOAD_ENV_FILES = {
-    "LABELS_DATA_PATH": "last_labels.json",
-    "CONTEXT_LABELS_PATH": "context_labels.json",
-    "ENROLLMENT_DATA_PATH": "enrollment_info.json",
-    "LABEL_VALIDITY_PATH": "label_validity.json",
-    "HEALTHKIT_DAILY_PATH": "healthkit_daily.json",
-}
+def _ensure_labels_env(paths: LabelPaths) -> None:
+    """Configure shared stores without mutating the caller's environment.
 
-
-def _ensure_labels_env(labels_dir: Path) -> None:
-    """Point `labels.api` at a resolved dataset root for large label payloads.
-
-    `labels.api` reads its data-file paths from env vars at import time and
-    caches them in module-level Path constants. We set each var if the user
-    hasn't, then reload the module if it was already imported (e.g. via
-    ``openmhc.list_tasks()``) so the cached paths reflect the new values.
-
-    Without this, paths fall back to the repo-local ``data/labels/`` (which
-    ships only schema files), and `enrollment_info.json` / `label_validity.json`
-    silently load as empty — breaking the imputation sensitivity pathway and
-    the default ``return_valid_only=True`` behaviour of ``get_labels``.
+    The historical name is retained, but this no longer writes environment
+    variables or reloads modules. Existing imports keep their object identity.
     """
-    changed = False
-    for env_var, filename in _LABELS_PAYLOAD_ENV_FILES.items():
-        if not os.getenv(env_var):
-            os.environ[env_var] = str(labels_dir / filename)
-            changed = True
+    from devices import api as devices_api
+    from labels import api as labels_api
 
-    if changed:
-        import importlib
-        import sys
-
-        if "labels.api" in sys.modules:
-            importlib.reload(sys.modules["labels.api"])
+    labels_api.configure(paths=paths)
+    devices_api.configure(paths=paths)
 
 
 # ---------------------------------------------------------------------------
@@ -345,7 +324,7 @@ def evaluate_prediction(
         )
 
     paths = _DatasetPaths.resolve(data_dir, version=version)
-    _ensure_labels_env(paths.labels_dir)
+    _ensure_labels_env(paths.label_paths)
 
     from downstream_evaluation.data.splits import load_split_file
     from downstream_evaluation.evaluation.metrics import get_task_type
@@ -616,7 +595,7 @@ def evaluate_imputation(
 
     paths = _DatasetPaths.resolve(data_dir, version=version)
     paths.require("daily_hf", "splits_file", "labels_dir")
-    _ensure_labels_env(paths.labels_dir)
+    _ensure_labels_env(paths.label_paths)
 
     from imputation_evaluation.config import (
         DataConfig,
@@ -756,9 +735,7 @@ def evaluate_imputation(
                 (per_user_df["subgroup_attr"].astype(str) == "all")
                 & (per_user_df["subgroup_value"].astype(str) == "all")
             ].copy()
-            combined = pd.concat(
-                [this_method_df, baseline_df], ignore_index=True
-            )
+            combined = pd.concat([this_method_df, baseline_df], ignore_index=True)
             combined = combined.rename(columns={"E_per_user": "E"})
             for col in ("method", "scenario", "split", "channel", "channel_type", "user_id"):
                 combined[col] = combined[col].astype(str)
@@ -1012,7 +989,7 @@ def evaluate_forecasting(
         "splits_file",
         "labels_dir",
     )
-    _ensure_labels_env(paths.labels_dir)
+    _ensure_labels_env(paths.label_paths)
 
     from forecasting_evaluation.config import (
         DataConfig,
