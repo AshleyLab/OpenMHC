@@ -486,6 +486,53 @@ class EnrollmentIndex:
             return int(pd.Timestamp(birthdate).year)
         return int(birth_year)
 
+    def age_at(self, health_code: str, date: pd.Timestamp) -> int:
+        """Return calendar-year age at an explicit date from enrolment birth year.
+
+        The supplied timestamp's year is used without timezone conversion.
+        Missing participants or birth years raise KeyError. Invalid timestamps,
+        invalid birth years and dates before the birth year raise ValueError.
+        """
+        if not isinstance(date, pd.Timestamp) or pd.isna(date):
+            raise ValueError("date must be a valid pandas.Timestamp")
+        record = self.get(health_code)
+        if record is not None and not isinstance(record, dict):
+            raise ValueError("Invalid enrollment record")
+        raw_year = record.get("birth_year") if record is not None else None
+        if isinstance(raw_year, bool) or (
+            isinstance(raw_year, float) and not raw_year.is_integer()
+        ):
+            raise ValueError("Birth year must be an integer")
+        try:
+            birth_year = self.get_birth_year(health_code)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Invalid birth year in enrollment metadata") from exc
+        if not 1 <= birth_year <= 9999:
+            raise ValueError("Birth year must be between 1 and 9999")
+        if date.year < birth_year:
+            raise ValueError("date is before the participant's birth year")
+        return years_between_birth_year(birth_year, date)
+
+    def age_at_enrollment(self, health_code: str) -> int:
+        """Return calendar-year age at the participant's enrollment createdOn.
+
+        Missing records or createdOn raise KeyError; malformed dates raise
+        ValueError. Stored age is never used as a fallback.
+        """
+        record = self.get(health_code)
+        if record is not None and not isinstance(record, dict):
+            raise ValueError("Invalid enrollment record")
+        created_on = record.get("createdOn") if record is not None else None
+        if created_on is None:
+            raise KeyError(f"No enrollment createdOn for healthCode: {health_code}")
+        if not isinstance(created_on, (str, pd.Timestamp)):
+            raise ValueError("Enrollment createdOn must be a timestamp")
+        try:
+            date = pd.Timestamp(created_on)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Invalid enrollment createdOn") from exc
+        return self.age_at(health_code, date)
+
     def get_birthdate(self, health_code: str) -> pd.Timestamp:
         """Get a synthetic birthdate for compatibility.
 
@@ -750,6 +797,26 @@ def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = 
         k for k, v in meta.items() if v.get("type") == "multi_categorical"
     ]
     STORE.configure(resolved)
+
+
+def age_at(health_code: str, date: pd.Timestamp) -> int:
+    """Return calendar-year age at an explicitly supplied pandas.Timestamp.
+
+    Uses the configured dataset's enrolment birth year and returns
+    ``date.year - birth_year``; this is not birthday-based age. The enrolment
+    reader also accepts legacy records containing birthdate instead of birth_year.
+    Missing participants or birth years raise KeyError. Invalid dates or birth
+    years raise ValueError. Stored age labels are not read or modified.
+    """
+    return STORE.enrollment.age_at(health_code, date)
+
+
+def age_at_enrollment(health_code: str) -> int:
+    """Return age at enrollment createdOn using the configured birth year.
+
+    Missing metadata raises KeyError and invalid metadata raises ValueError.
+    """
+    return STORE.enrollment.age_at_enrollment(health_code)
 
 
 def get_labels(

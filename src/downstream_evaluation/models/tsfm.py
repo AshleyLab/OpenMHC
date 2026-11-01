@@ -177,6 +177,14 @@ def build_window(timeline: UserTimeline, user_id, task, label_date, window_hours
 def _label_timestamp(user_id, task, reference_ts):
     from labels.api import LabelTypeError, LabelValueError, get_labels
 
+    if task == "age":
+        from downstream_evaluation.data.provider import age_label_timestamp
+
+        try:
+            return age_label_timestamp(user_id)
+        except KeyError:
+            return None
+
     try:
         record = get_labels(user_id, reference_ts, task)
     except (KeyError, LabelValueError, LabelTypeError, ValueError):

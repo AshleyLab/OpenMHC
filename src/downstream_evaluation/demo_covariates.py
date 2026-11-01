@@ -76,14 +76,21 @@ def build_demo_user_lookup_from_labels_df(
     Takes the first value per user, with sentinels treated as missing. A user missing a
     covariate is imputed with 0.0 and the per-covariate count is logged, since 0.0 is out
     of distribution for age/BMI and collides with an encoded sex category. The labels
-    lookup carries the demographic columns (``age``/``BiologicalSex``/``BMI_values``), so
-    no separate data source is needed.
+    lookup supplies demographic availability. Available age covariates are
+    calculated through the configured Labels API at the existing age-label date;
+    enrollment ages are used only for subgroup membership.
     """
     _demo_df = labels_df[["user_id"] + demo_covariates].copy()
     for c in demo_covariates:
         sentinel = -1.0 if _demo_df[c].dtype in (np.float64, np.float32) else -1
         _demo_df.loc[_demo_df[c] == sentinel, c] = np.nan
     _user_demo = _demo_df.groupby("user_id")[demo_covariates].first()
+    if "age" in demo_covariates:
+        from downstream_evaluation.data.provider import age_target
+
+        # Keep the lookup's missingness and the target's original reference date.
+        for uid in _user_demo.index[_user_demo["age"].notna()]:
+            _user_demo.loc[uid, "age"] = age_target(str(uid))
     n_missing = _user_demo.isna().sum()
     if int(n_missing.sum()) > 0:
         per_cov = ", ".join(f"{c}={int(n_missing[c])}" for c in demo_covariates if n_missing[c])

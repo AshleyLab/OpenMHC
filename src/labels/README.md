@@ -4,6 +4,8 @@ This module exposes a fast, in-memory lookup for label values and age computatio
 
 ## Public surface
 - `labels.configure(data_dir=None)`: select a dataset and refresh metadata and cached payloads in place.
+- `labels.age_at(health_code, date)`: calculate calendar-year age at an explicit `pandas.Timestamp`.
+- `labels.age_at_enrollment(health_code)`: calculate calendar-year age at enrollment `createdOn`.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
@@ -46,6 +48,7 @@ for concurrent evaluations of different datasets.
 ```python
 import pandas as pd
 from labels import (
+    age_at,
     get_labels,
     LABEL_NAMES,
     LABEL_TYPES,
@@ -63,13 +66,17 @@ result = get_labels(
 )
 print(result.matched_timestamp, result.value)  # value is bool
 
-# compute age at timestamp (returns float)
-age = get_labels(
+# calculate calendar-year age at a specific date (returns int)
+age = age_at("user-123", pd.Timestamp("2020-01-14"))
+print(age)  # date.year - birth_year, not exact birthday-based age
+
+# retrieve the existing stored age label at its matched observation date
+stored_age = get_labels(
     health_code="user-123",
     timestamp=pd.Timestamp("2020-01-14"),
     label="age",
 )
-print(age.value)  # e.g., 25.0
+print(stored_age.matched_timestamp, stored_age.value)
 
 # handle type enforcement errors
 try:
@@ -86,6 +93,34 @@ print(stats_df.head())
 # print statistics table for all labels
 print_labels_statistics()
 ```
+
+`age_at` requires a valid `pandas.Timestamp` and uses its calendar year without
+timezone conversion. It raises `KeyError` for a missing participant or birth year
+and `ValueError` for invalid dates, invalid birth years, or dates before the birth
+year. The enrolment reader accepts a legacy `birthdate` field when `birth_year` is
+absent. The separate source-only birthdate JSON is not loaded by this function.
+This function does not change the stored-value behavior of `get_labels(..., label="age")`.
+
+The benchmark age convention is `reference_date.year - birth_year`. Use the
+existing age-label timestamp for the Track 1 target and enrollment `createdOn`
+for age subgroups across tracks. Evaluation callers now follow these references.
+`age_at_enrollment(health_code)` uses `createdOn` and the same age arithmetic;
+missing metadata raises `KeyError`, and invalid metadata raises `ValueError`. This convention does not count completed birthdays or divide elapsed days
+by a year length.
+
+Track 1 retains lookup cohorts and eligible days/weeks, including missing-target
+exclusions. Its age target requires one dated age observation per participant;
+missing or ambiguous metadata for an eligible target raises instead of silently
+changing the cohort. TSFM age anchors use that same observation. Linear's age
+covariate uses the age-label date and retains lookup missingness and zero filling.
+Subgroup callers retain participants with missing/invalid enrollment metadata as
+`unknown`. Imputation's saved-pair analysis also uses enrollment age.
+
+During release construction, shift the private full birthdate by the same offset
+as the reference dates, then retain its year. The age-preserving offset generator
+checks equality at enrollment and existing age-label timestamps; this does not
+guarantee equality at arbitrary other query dates. The API requires only the
+released birth year, not the private full-birthdate file.
 
 ## Type Enforcement
 

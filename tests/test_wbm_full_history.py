@@ -13,7 +13,18 @@ from openmhc._evaluate import _DatasetPaths
 
 
 @pytest.fixture
-def dataset(tmp_path, monkeypatch):
+def dataset(tmp_path, monkeypatch, age_label_environment):
+    # The provider now calculates age at the existing label timestamp. Configure
+    # real synthetic metadata so this pooling test also exercises that caller.
+    folder = age_label_environment
+    (folder / "last_labels.json").write_text(json.dumps({"age": {
+        user: {"timestamps": ["2020-01-01"], "values": [99]}
+        for user in ("u1", "u2")
+    }}))
+    (folder / "enrollment_info.json").write_text(json.dumps({
+        "u1": {"birth_year": 1970, "createdOn": "2015-01-01"},
+        "u2": {"birth_year": 1960, "createdOn": "2015-01-01"},
+    }))
     processed = tmp_path / "processed"
     processed.mkdir()
     splits = tmp_path / "splits.json"
@@ -38,6 +49,7 @@ def test_late_weeks_contribute_to_pooling_and_coverage(dataset, task):
     model.set_temporal_window(TemporalWindowConfig())
     td = model._weekly_td(task, "test")
     assert td.user_ids.tolist() == ["u1", "u2"]
+    assert td.labels.tolist() == ([50., 60.] if task == "age" else [1, 0])
     assert list(td.dates[0]) == ["2020-01-01", "2024-01-01"]
     model._wbm._by_key = {
         ("u1", "2020-01-01"): np.array([2.]),

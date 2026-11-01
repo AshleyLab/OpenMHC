@@ -1,12 +1,9 @@
-"""TaskDataProvider — derives each task's cohort, eligibility, and labels from the lookup.
+"""TaskDataProvider — derives each task's cohort and eligibility from the lookup.
 
-This is the single place the per-task cohort and temporal scope are decided, and it
-reads them from the **shipped labels lookup** rather than recomputing them from raw
-labels. A lookup cell is *non-sentinel* iff that segment is a valid wearable day that
-passes the data-quality inclusion criteria, within the lookup's temporal scope; the
-non-sentinel mask is therefore at once the cohort, the temporal scope, and the label
-value. Deriving everything from one lookup keeps every method on an identical,
-reproducible cohort.
+A non-sentinel lookup cell identifies an eligible wearable segment. These masks
+remain the source of task cohorts and temporal scope for every method. Most
+labels also come from the lookup; age is calculated through the Labels API at
+its existing age-label timestamp, without changing the lookup's eligibility.
 
 The benchmark's default lookup applies the inclusion criteria over each participant's
 full history; a forward-windowed ablation lookup additionally caps eligibility at
@@ -24,7 +21,7 @@ mask. Granularity controls only *which* lookup supplies eligibility:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
@@ -60,6 +57,36 @@ def lookup_filename(granularity: str, full_history: bool = False) -> str:
     return name.replace(".parquet", "_full_history.parquet") if full_history else name
 
 
+def age_label_timestamp(user_id: str) -> pd.Timestamp:
+    """Read the single recorded age-target date without recomputing eligibility.
+
+    The cross-sectional lookup does not identify an observation among repeated
+    age labels, so ambiguous series must be resolved before evaluation.
+    """
+    from labels.api import STORE
+
+    series = STORE.labels_index.get_series("age", user_id)
+    if len(series.timestamps_ns) != 1 or len(series.values) != 1:
+        raise ValueError(f"Expected exactly one dated age target for user {user_id}")
+    value = series.values[0]
+    if value is None or not np.isfinite(float(value)) or float(value) == _MISSING_FLOAT:
+        raise ValueError(f"Missing source age target for lookup-eligible user {user_id}")
+    timestamp = pd.Timestamp(series.timestamps_ns[0])
+    if pd.isna(timestamp):
+        raise ValueError(f"Missing age-label timestamp for user {user_id}")
+    return timestamp
+
+
+def age_target(user_id: str) -> int:
+    """Calculate an eligible user's target at their existing age-label timestamp."""
+    from labels.api import age_at
+
+    try:
+        return age_at(user_id, age_label_timestamp(user_id))
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ValueError(f"Cannot calculate age target for lookup-eligible user {user_id}") from exc
+
+
 @dataclass
 class TaskData:
     """Eligible data + labels for one ``(task, split)``, handed to a model.
@@ -81,7 +108,7 @@ class TaskData:
 
 
 class TaskDataProvider:
-    """Derive per-task cohort/labels/eligibility from the labels lookup."""
+    """Derive cohorts and eligible dates from the lookup, with API-based age targets."""
 
     def __init__(
         self,
@@ -89,10 +116,12 @@ class TaskDataProvider:
         split_users: dict[str, list[str] | set[str]],
         granularity: str = "series",
     ) -> None:
-        """Args:
-        lookup_path: path to the labels lookup parquet for this granularity.
-        split_users: ``{"train"/"validation"/"test": [user_id, ...]}``.
-        granularity: ``"daily"`` / ``"weekly"`` / ``"series"``.
+        """Initialize a provider for the configured label dataset.
+
+        Args:
+            lookup_path: path to the labels lookup parquet for this granularity.
+            split_users: ``{"train"/"validation"/"test": [user_id, ...]}``.
+            granularity: ``"daily"`` / ``"weekly"`` / ``"series"``.
         """
         if granularity not in LOOKUP_BY_GRANULARITY:
             raise ValueError(
@@ -117,7 +146,8 @@ class TaskDataProvider:
         inclusion criteria); the dates are those of the lookup rows where the cell is
         non-sentinel (within the lookup's temporal scope) — the user's eligible
         segments; the label is the constant non-sentinel value (true for the
-        cross-sectional tasks).
+        cross-sectional tasks). Age uses its recorded label date and birth year
+        instead of the cached value; missing or ambiguous source metadata raises.
         """
         if task in self._index_cache:
             return self._index_cache[task]
@@ -136,6 +166,9 @@ class TaskDataProvider:
         for uid, grp in sub.groupby("user_id", sort=False):
             raw = grp[task].iloc[0]
             label = float(raw) if is_float else int(raw)
+            if task == "age":
+                age = age_target(str(uid))
+                label = float(age) if is_float else int(age)
             index[str(uid)] = (label, grp[self._date_col].to_numpy())
         self._index_cache[task] = index
         return index
