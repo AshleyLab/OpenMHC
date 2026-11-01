@@ -733,8 +733,11 @@ def build_parser() -> argparse.ArgumentParser:
             "unweighted (legacy)."
         ),
     )
-    parser.add_argument("--labels-path", default="data/labels/last_labels.json")
-    parser.add_argument("--enrollment-path", default="data/labels/enrollment_info.json")
+    parser.add_argument("--data-dir", default=None, help="Dataset root (defaults to MHC_DATA_DIR).")
+    parser.add_argument("--labels-path", default=None, help="Explicit last_labels.json override.")
+    parser.add_argument(
+        "--enrollment-path", default=None, help="Explicit enrollment_info.json override."
+    )
     parser.add_argument("--output-dir", default="results/metrics_summary")
     parser.add_argument("--output-prefix", default="paper_forecasting_fairness_skill_score")
     return parser
@@ -743,6 +746,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     """Generate forecasting fairness skill score CSV outputs."""
     args = build_parser().parse_args()
+    from openmhc._label_paths import LabelPaths
+
+    paths = LabelPaths.resolve(
+        args.data_dir, labels=args.labels_path, enrollment=args.enrollment_path
+    )
+    if paths.labels is None or paths.enrollment is None:
+        raise ValueError(
+            "Provide --data-dir / MHC_DATA_DIR or explicit labels and enrollment paths"
+        )
     models = _load_models_dict(args)
     continuous_channel_indices = _parse_channel_indices(
         args.continuous_channel_indices,
@@ -764,8 +776,8 @@ def main() -> None:
             clip_lower=float(args.clip_lower),
             clip_upper=float(args.clip_upper),
             lambda_fairness=float(args.lambda_fairness),
-            labels_path=args.labels_path,
-            enrollment_path=args.enrollment_path,
+            labels_path=paths.labels,
+            enrollment_path=paths.enrollment,
             within_user_aggregation=str(args.within_user_aggregation),
         )
     )

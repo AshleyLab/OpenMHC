@@ -23,6 +23,7 @@ from openmhc._dataset import (
     write_dataset_marker,
 )
 from openmhc._evaluate import _DatasetPaths
+from openmhc._label_paths import LabelPaths
 
 
 def _write_minimal_split(root: Path, version: str = "full") -> None:
@@ -64,6 +65,7 @@ def _isolate_env(monkeypatch):
         "LABEL_TYPES_PATH",
         "ORDINAL_DICTIONARY_PATH",
         "VALIDITY_CONFIG_PATH",
+        "USER_DEVICE_INFO_PATH",
     ):
         monkeypatch.delenv(var, raising=False)
     yield
@@ -180,9 +182,7 @@ class TestDatasetPaths:
         assert paths.version == "xs"  # trusted from the marker, not asserted by the caller
         # daily_labels_lookup is the field the version merge dropped; the linear baseline
         # (and others) read it.
-        assert (
-            paths.daily_labels_lookup == tmp_path / "processed" / "daily_labels_lookup.parquet"
-        )
+        assert paths.daily_labels_lookup == tmp_path / "processed" / "daily_labels_lookup.parquet"
 
     def test_from_root_matches_resolve(self, tmp_path):
         """``from_root`` and ``resolve(version=...)`` derive identical sub-paths."""
@@ -191,35 +191,38 @@ class TestDatasetPaths:
 
 
 class TestLabelsEnvWiring:
-    """Verify the labels.api env-var bridge is set when missing."""
+    """Evaluation configures paths without persisting them in the environment."""
 
-    def test_sets_payload_paths_when_unset(self, monkeypatch, tmp_path):
-        """When unset, label payload env vars are pointed under the labels dir."""
+    def test_configures_payloads_without_writing_environment(self, tmp_path):
+        """Configure all participant payloads without persisting environment defaults."""
+        from labels import api
         from openmhc._evaluate import _ensure_labels_env
 
-        _ensure_labels_env(tmp_path / "labels")
-        assert os.environ["LABELS_DATA_PATH"] == str(tmp_path / "labels" / "last_labels.json")
-        assert os.environ["CONTEXT_LABELS_PATH"] == str(tmp_path / "labels" / "context_labels.json")
-        assert os.environ["ENROLLMENT_DATA_PATH"] == str(
-            tmp_path / "labels" / "enrollment_info.json"
-        )
-        assert os.environ["LABEL_VALIDITY_PATH"] == str(tmp_path / "labels" / "label_validity.json")
-        assert os.environ["HEALTHKIT_DAILY_PATH"] == str(
-            tmp_path / "labels" / "healthkit_daily.json"
-        )
+        before = dict(os.environ)
+        paths = LabelPaths.resolve(tmp_path)
+        _ensure_labels_env(paths)
+        assert dict(os.environ) == before
+        assert api.STORE.labels_path == paths.labels
+        assert api.STORE.context_labels_path == paths.context
+        assert api.STORE.enrollment_path == paths.enrollment
+        assert api.STORE.validity_path == paths.validity
+        assert api.STORE.healthkit_daily_path == paths.daily
 
     def test_respects_user_overrides(self, monkeypatch, tmp_path):
-        """Pre-set label env vars are left untouched; only unset ones are filled."""
+        """Retain explicit overrides while resolving remaining files from the root."""
         monkeypatch.setenv("LABELS_DATA_PATH", "/somewhere/else.json")
         monkeypatch.setenv("CONTEXT_LABELS_PATH", "/somewhere/ctx.json")
         monkeypatch.setenv("ENROLLMENT_DATA_PATH", "/somewhere/enrollment.json")
+        from labels import api
         from openmhc._evaluate import _ensure_labels_env
 
-        _ensure_labels_env(tmp_path / "labels")
-        assert os.environ["LABELS_DATA_PATH"] == "/somewhere/else.json"
-        assert os.environ["CONTEXT_LABELS_PATH"] == "/somewhere/ctx.json"
-        assert os.environ["ENROLLMENT_DATA_PATH"] == "/somewhere/enrollment.json"
-        assert os.environ["LABEL_VALIDITY_PATH"] == str(tmp_path / "labels" / "label_validity.json")
+        before = dict(os.environ)
+        _ensure_labels_env(LabelPaths.resolve(tmp_path))
+        assert dict(os.environ) == before
+        assert api.STORE.labels_path == Path("/somewhere/else.json")
+        assert api.STORE.context_labels_path == Path("/somewhere/ctx.json")
+        assert api.STORE.enrollment_path == Path("/somewhere/enrollment.json")
+        assert api.STORE.validity_path == tmp_path / "labels" / "label_validity.json"
 
 
 class TestLabelsApiResolution:

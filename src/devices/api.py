@@ -43,15 +43,15 @@ upstream build; an unrecognised string falls through to
 from __future__ import annotations
 
 import json
-import os
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "labels"
-USER_DEVICE_INFO_PATH = Path(os.getenv("USER_DEVICE_INFO_PATH", DATA_DIR / "user_device_info.json"))
+from openmhc._label_paths import LabelPaths
+
+USER_DEVICE_INFO_PATH = LabelPaths.resolve().devices
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ def _interval_at(
 class _DeviceStore:
     """Lazily loads ``user_device_info.json`` and serves per-user lookups."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path | None) -> None:
         self.path = path
         self._timelines: dict[str, DeviceTimeline] | None = None
 
@@ -156,6 +156,10 @@ class _DeviceStore:
     def timelines(self) -> dict[str, DeviceTimeline]:
         """All per-user timelines, loaded on first access."""
         if self._timelines is None:
+            if self.path is None:
+                raise ValueError(
+                    "Set MHC_DATA_DIR or USER_DEVICE_INFO_PATH, or call devices.api.configure(data_dir=...)."
+                )
             self._timelines = _load_device_info(self.path)
         return self._timelines
 
@@ -182,7 +186,8 @@ def _load_device_info(path: Path) -> dict[str, DeviceTimeline]:
         raise FileNotFoundError(
             f"user_device_info.json not found at {path}. "
             "This file ships separately from the labels bundle; "
-            "set USER_DEVICE_INFO_PATH or place it under data/labels/."
+            "set USER_DEVICE_INFO_PATH or use <dataset_root>/labels/user_device_info.json "
+            "if the dataset provides it."
         )
     with path.open("r") as handle:
         raw = json.load(handle)
@@ -222,6 +227,17 @@ def _parse_intervals(
 
 
 STORE = _DeviceStore(USER_DEVICE_INFO_PATH)
+
+
+def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = None) -> None:
+    """Select optional device data and clear cached timelines in place."""
+    if paths is not None and data_dir is not None:
+        raise ValueError("Pass data_dir or paths, not both")
+    resolved = paths if paths is not None else LabelPaths.resolve(data_dir)
+    global USER_DEVICE_INFO_PATH
+    USER_DEVICE_INFO_PATH = resolved.devices
+    STORE.path = resolved.devices
+    STORE._timelines = None
 
 
 def get_devices(health_code: str, timestamp: pd.Timestamp) -> DeviceSnapshot:
