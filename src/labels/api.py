@@ -14,11 +14,7 @@ from typing import Any
 
 import pandas as pd
 
-from openmhc._dataset import bundled_metadata_dir as _bundled_metadata_dir
 from openmhc._label_paths import LabelPaths
-
-BUNDLED_METADATA_DIR = _bundled_metadata_dir()
-DATA_DIR = BUNDLED_METADATA_DIR
 
 
 def _require_dataset_payload_path(
@@ -47,7 +43,7 @@ HEALTHKIT_DAILY_PATH = _PATHS.daily
 VALIDITY_CONFIG_PATH = _PATHS.validity_config
 
 
-def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+def _load_label_types(raw: dict[str, Any]) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     """Load label type mappings from label_types.json.
 
     Handles both old flat format (``{"Diabetes": "binary"}``) and new
@@ -58,10 +54,6 @@ def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, A
         string for backward compatibility, and meta_dict maps label→full
         metadata dict.
     """
-    if not path.exists():
-        return {}, {}
-    with path.open("r") as handle:
-        raw = json.load(handle)
     types: dict[str, str] = {}
     meta: dict[str, dict[str, Any]] = {}
     for key, value in raw.items():
@@ -76,9 +68,33 @@ def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, A
     return types, meta
 
 
-LABEL_TYPES: dict[str, str]
-_LABEL_META: dict[str, dict[str, Any]]
-LABEL_TYPES, _LABEL_META = _load_label_types(LABEL_TYPES_PATH)
+# Metadata is populated by configure() or the first label query.
+LABEL_TYPES: dict[str, str] = {}
+_LABEL_META: dict[str, dict[str, Any]] = {}
+_SCHEMAS_CONFIGURED = False
+
+
+def _read_schema_set(paths: LabelPaths) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    schemas = []
+    for path in paths.require_schemas():
+        try:
+            with path.open("r") as handle:
+                schema = json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid label schema {path}: {exc}") from exc
+        if not isinstance(schema, dict):
+            raise ValueError(f"Label schema must be a JSON object: {path}")
+        schemas.append(schema)
+    try:
+        return _load_label_types(schemas[0])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Invalid label type definitions in {paths.label_types}: {exc}") from exc
+
+
+def _ensure_configured() -> None:
+    """Configure lazily so imports work before an explicit dataset is selected."""
+    if not _SCHEMAS_CONFIGURED:
+        configure()
 
 
 class LabelTypeError(Exception):
@@ -714,7 +730,9 @@ STORE = LabelsStore(
 def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = None) -> None:
     """Select a dataset and refresh metadata and lazy payload caches in place.
 
-    Explicit per-file environment overrides are resolved by ``LabelPaths``.
+    All three schemas come from the selected dataset's ``labels/`` directory.
+    Conflicting schema environment paths raise an error. Payload overrides
+    are resolved by ``LabelPaths``.
     Call before querying/evaluating a new dataset. References imported with
     ``from labels.api import STORE, LABEL_TYPES, CONTEXT_NAMES`` stay valid.
     Configuration is process-global; concurrent evaluations of different
@@ -723,13 +741,12 @@ def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = 
     if paths is not None and data_dir is not None:
         raise ValueError("Pass data_dir or paths, not both")
     resolved = paths if paths is not None else LabelPaths.resolve(data_dir)
-    # Parse before changing any live state, so invalid metadata cannot leave
-    # imported consumers partly configured for a different dataset.
-    types, meta = _load_label_types(resolved.label_types)
+    # Validate all schemas before changing the active configuration.
+    types, meta = _read_schema_set(resolved)
 
     global _PATHS, LABELS_PATH, CONTEXT_LABELS_PATH, ENROLLMENT_PATH
     global LABEL_VALIDITY_PATH, HEALTHKIT_DAILY_PATH, LABEL_TYPES_PATH
-    global ORDINAL_DICTIONARY_PATH, VALIDITY_CONFIG_PATH
+    global ORDINAL_DICTIONARY_PATH, VALIDITY_CONFIG_PATH, _SCHEMAS_CONFIGURED
     _PATHS = resolved
     LABELS_PATH = resolved.labels
     CONTEXT_LABELS_PATH = resolved.context
@@ -750,6 +767,7 @@ def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = 
         k for k, v in meta.items() if v.get("type") == "multi_categorical"
     ]
     STORE.configure(resolved)
+    _SCHEMAS_CONFIGURED = True
 
 
 def get_labels(
@@ -789,6 +807,7 @@ def get_labels(
         LabelValueError: If value is None or NaN
         LabelTypeError: If value cannot be converted to expected type
     """
+    _ensure_configured()
     if label not in LABEL_NAMES:
         raise ValueError(f"Unknown label: {label}")
 
@@ -850,6 +869,7 @@ def get_labels_windowed(
         ValueError: If label is unknown or aggregation method is invalid.
         KeyError: If healthCode not found or no measurements in window.
     """
+    _ensure_configured()
     if label not in LABEL_NAMES and label not in DAILY_LABELS:
         raise ValueError(f"Unknown label: {label}")
 
@@ -900,6 +920,7 @@ def get_labels_one_hot(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_one_hot only supports multi_categorical labels, "
@@ -940,6 +961,7 @@ def get_labels_count(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_count only supports multi_categorical labels, "
@@ -979,6 +1001,7 @@ def get_labels_contains(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_contains only supports multi_categorical labels, "
@@ -1000,6 +1023,7 @@ def get_labels_statistics() -> pd.DataFrame:
     For each label, includes: data type, min value, max value, median value,
     and count of unique values.
     """
+    _ensure_configured()
     labels_data = _load_labels(
         _require_dataset_payload_path(
             LABELS_PATH,

@@ -7,18 +7,15 @@ lives. Without this, ``download_dataset`` would write to one location and
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 from pathlib import Path
 
-import pandas as pd
 import pytest
 
 import openmhc
 from openmhc._dataset import (
     DATASET_VERSION_FILENAME,
-    bundled_metadata_dir,
     data_dir,
     write_dataset_marker,
 )
@@ -193,11 +190,12 @@ class TestDatasetPaths:
 class TestLabelsEnvWiring:
     """Evaluation configures paths without persisting them in the environment."""
 
-    def test_configures_payloads_without_writing_environment(self, tmp_path):
+    def test_configures_payloads_without_writing_environment(self, tmp_path, write_label_schemas):
         """Configure all participant payloads without persisting environment defaults."""
         from labels import api
         from openmhc._evaluate import _ensure_labels_env
 
+        write_label_schemas(tmp_path)
         before = dict(os.environ)
         paths = LabelPaths.resolve(tmp_path)
         _ensure_labels_env(paths)
@@ -208,7 +206,7 @@ class TestLabelsEnvWiring:
         assert api.STORE.validity_path == paths.validity
         assert api.STORE.healthkit_daily_path == paths.daily
 
-    def test_respects_user_overrides(self, monkeypatch, tmp_path):
+    def test_respects_user_overrides(self, monkeypatch, tmp_path, write_label_schemas):
         """Retain explicit overrides while resolving remaining files from the root."""
         monkeypatch.setenv("LABELS_DATA_PATH", "/somewhere/else.json")
         monkeypatch.setenv("CONTEXT_LABELS_PATH", "/somewhere/ctx.json")
@@ -216,6 +214,7 @@ class TestLabelsEnvWiring:
         from labels import api
         from openmhc._evaluate import _ensure_labels_env
 
+        write_label_schemas(tmp_path)
         before = dict(os.environ)
         _ensure_labels_env(LabelPaths.resolve(tmp_path))
         assert dict(os.environ) == before
@@ -226,62 +225,44 @@ class TestLabelsEnvWiring:
 
 
 class TestLabelsApiResolution:
-    """How ``labels.api`` resolves bundled metadata vs. dataset-root payloads."""
+    """Resolve schemas and payloads from the selected dataset."""
 
-    def test_bundled_metadata_remains_repo_default(self):
-        """Bundled metadata paths default to the repo's bundled metadata dir."""
-        import labels.api as api
-
-        api = importlib.reload(api)
-
-        assert api.BUNDLED_METADATA_DIR == bundled_metadata_dir()
-        assert api.LABEL_TYPES_PATH == bundled_metadata_dir() / "label_types.json"
-        assert api.ORDINAL_DICTIONARY_PATH == bundled_metadata_dir() / "ordinal_dictionary.json"
-        assert api.VALIDITY_CONFIG_PATH == bundled_metadata_dir() / "validity_config.json"
-        assert api.LABELS_PATH is None
-        assert len(api.TARGET_NAMES) > 0
-
-    def test_large_payloads_resolve_from_dataset_root(self, monkeypatch, tmp_path):
-        """Large payload paths resolve under ``MHC_DATA_DIR``/labels when set."""
-        labels_dir = tmp_path / "labels"
-        labels_dir.mkdir()
+    def test_all_label_files_resolve_from_dataset_root(
+        self, monkeypatch, tmp_path, write_label_schemas
+    ):
+        """Configure every schema and payload from MHC_DATA_DIR."""
+        folder = write_label_schemas(tmp_path)
         monkeypatch.setenv("MHC_DATA_DIR", str(tmp_path))
-        import labels.api as api
+        from labels import api
 
-        api = importlib.reload(api)
+        api.configure()
+        assert api.LABELS_PATH == folder / "last_labels.json"
+        assert api.CONTEXT_LABELS_PATH == folder / "context_labels.json"
+        assert api.ENROLLMENT_PATH == folder / "enrollment_info.json"
+        assert api.LABEL_VALIDITY_PATH == folder / "label_validity.json"
+        assert api.HEALTHKIT_DAILY_PATH == folder / "healthkit_daily.json"
+        assert api.LABEL_TYPES_PATH == folder / "label_types.json"
+        assert api.ORDINAL_DICTIONARY_PATH == folder / "ordinal_dictionary.json"
+        assert api.VALIDITY_CONFIG_PATH == folder / "validity_config.json"
 
-        assert api.LABELS_PATH == labels_dir / "last_labels.json"
-        assert api.CONTEXT_LABELS_PATH == labels_dir / "context_labels.json"
-        assert api.ENROLLMENT_PATH == labels_dir / "enrollment_info.json"
-        assert api.LABEL_VALIDITY_PATH == labels_dir / "label_validity.json"
-        assert api.HEALTHKIT_DAILY_PATH == labels_dir / "healthkit_daily.json"
-        assert api.LABEL_TYPES_PATH == bundled_metadata_dir() / "label_types.json"
-
-    def test_per_file_env_overrides_dataset_root(self, monkeypatch, tmp_path):
-        """A per-file env var overrides the dataset root for that one payload."""
-        custom = tmp_path / "custom" / "labels.json"
-        custom.parent.mkdir(parents=True)
-        monkeypatch.setenv("MHC_DATA_DIR", str(tmp_path / "dataset"))
+    def test_per_file_env_overrides_dataset_root(self, monkeypatch, tmp_path, write_label_schemas):
+        """Explicit per-file overrides remain supported."""
+        root = tmp_path / "dataset"
+        write_label_schemas(root)
+        custom = tmp_path / "custom_labels.json"
         monkeypatch.setenv("LABELS_DATA_PATH", str(custom))
-        import labels.api as api
+        from labels import api
 
-        api = importlib.reload(api)
+        api.configure(root)
+        assert api.LABELS_PATH == custom
+        assert api.ENROLLMENT_PATH == root / "labels/enrollment_info.json"
 
-        assert api.LABELS_PATH == custom.resolve()
-        assert api.ENROLLMENT_PATH == (tmp_path / "dataset" / "labels" / "enrollment_info.json")
-
-    def test_large_payload_access_raises_without_explicit_root(self):
-        """Accessing a large payload with no configured root raises ``ValueError``."""
-        import labels.api as api
-
-        api = importlib.reload(api)
+    def test_configuration_requires_explicit_root(self):
+        """No selected dataset means no implicit repository fallback."""
+        from labels import api
 
         with pytest.raises(ValueError, match="data_dir=|MHC_DATA_DIR"):
-            api.get_labels(
-                health_code="user-123",
-                timestamp=pd.Timestamp("2020-01-01"),
-                label=api.TARGET_NAMES[0],
-            )
+            api.configure()
 
 
 class TestDownloadDatasetSurface:

@@ -91,7 +91,7 @@ The marker pins the version and expected user count so the resolver can fail lou
 
 ### Bundled vs. dataset-root files
 
-The schema-only registry files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) ship with this code repo at `data/labels/` and remain the default for bundled metadata. Large JSON label payloads such as `last_labels.json`, `context_labels.json`, `enrollment_info.json`, `label_validity.json`, and `healthkit_daily.json` must come from your explicit dataset root unless you override them with per-file env vars.
+The label schema files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, alongside the participant payloads. Label configuration requires all three schemas and raises an error if any is missing or invalid JSON; there is no repository fallback. Legacy schema environment variables that point outside the selected schema set raise an error; unset them and select the root with `data_dir=` or `MHC_DATA_DIR`. Per-file payload overrides remain supported. `task_feature_exclusions.json` stays in the repository because it defines benchmark behavior.
 
 ## Splits
 

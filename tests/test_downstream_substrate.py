@@ -19,6 +19,8 @@ from downstream_evaluation.evaluation.per_user_pairs import (
 )
 from downstream_evaluation.evaluation.predictions_io import _safe_task
 
+pytestmark = pytest.mark.usefixtures("label_schema_environment")
+
 
 def _write_task(pred_dir, method, task, df):
     d = pred_dir / method / _safe_task(task)
