@@ -47,12 +47,6 @@ from forecasting_evaluation.metrics.skill_score_summary import (  # noqa: E402
 DEFAULT_AGE_BINS = (18, 30, 40, 50, 60)
 DEFAULT_DEMOGRAPHIC_ATTRS = ("age_group", "sex")
 
-# Enrollment exposes only a birth *year*, so age is anchored to a single
-# reference date shared with Track 1 (downstream_evaluation.config.LABEL_REFERENCE_DATE),
-# i.e. age = AGE_REFERENCE_DATE.year − birth_year for every user.
-AGE_REFERENCE_DATE = "2020-06-01"
-
-
 def _last_value(entries: dict[str, Any], user_id: str) -> Any | None:
     item = entries.get(user_id)
     if not isinstance(item, dict):
@@ -100,14 +94,15 @@ def load_user_demographics(
     labels_path: str | Path,
     enrollment_path: str | Path,
     age_bins: tuple[int, ...] = DEFAULT_AGE_BINS,
-    reference_date: str = AGE_REFERENCE_DATE,
 ) -> dict[str, dict[str, str]]:
     """Load age-group and sex labels for the requested users.
 
-    Age is ``reference_date.year − birth_year`` (enrollment exposes only a birth
-    *year*), anchoring every user to the same reference as Track 1. Sex is the
-    latest ``BiologicalSex`` label value.
+    Age uses each user's enrollment createdOn and birth year. Missing or invalid
+    enrollment metadata gives an unknown age group. Sex is the latest
+    BiologicalSex label value.
     """
+    from labels.api import EnrollmentIndex
+
     labels_file = Path(labels_path)
     enrollment_file = Path(enrollment_path)
     with labels_file.open("r", encoding="utf-8") as file:
@@ -115,14 +110,15 @@ def load_user_demographics(
     with enrollment_file.open("r", encoding="utf-8") as file:
         enrollment = json.load(file)
 
-    reference_year = pd.Timestamp(reference_date).year
+    enrollment_index = EnrollmentIndex(enrollment)
     sex_entries = labels_data.get("BiologicalSex", {})
 
     demographics: dict[str, dict[str, str]] = {}
     for user_id in sorted(user_ids):
-        record = enrollment.get(user_id)
-        birth_year = record.get("birth_year") if isinstance(record, dict) else None
-        age = reference_year - int(birth_year) if birth_year else None
+        try:
+            age = enrollment_index.age_at_enrollment(user_id)
+        except (KeyError, ValueError):
+            age = None
         sex_value = _last_value(sex_entries, user_id)
         demographics[user_id] = {
             "age_group": bin_age(age, age_bins=age_bins),

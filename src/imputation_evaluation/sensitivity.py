@@ -12,7 +12,7 @@ from collections import Counter
 
 import pandas as pd
 
-from labels.api import STORE, LabelsStore, years_between_birth_year
+from labels.api import STORE, LabelsStore
 
 logger = logging.getLogger(__name__)
 
@@ -39,25 +39,30 @@ def get_user_demographics(
     store: LabelsStore,
     user_ids: list[str],
 ) -> dict[str, dict[str, object]]:
-    """Look up birth year and biological sex for each user.
+    """Look up enrollment age, birth year and biological sex for each user.
 
     Args:
         store: Labels store for data access.
         user_ids: Unique user identifiers (health codes).
 
     Returns:
-        Dict mapping user_id -> {"birth_year": int | None, "sex": str}.
+        Dict mapping user_id to birth_year, age_at_enrollment (or None), and sex.
         Sex is "male", "female", or "unknown".
     """
     demographics: dict[str, dict[str, object]] = {}
 
     for uid in user_ids:
         birth_year = None
+        age = None
         sex = "unknown"
 
         try:
             birth_year = store.enrollment.get_birth_year(uid)
-        except KeyError:
+        except (KeyError, ValueError, TypeError, OverflowError):
+            pass
+        try:
+            age = store.enrollment.age_at_enrollment(uid)
+        except (KeyError, ValueError):
             pass
 
         try:
@@ -75,19 +80,13 @@ def get_user_demographics(
         except (KeyError, LookupError):
             pass
 
-        demographics[uid] = {"birth_year": birth_year, "sex": sex}
+        demographics[uid] = {"birth_year": birth_year, "age_at_enrollment": age, "sex": sex}
 
-    # Surface the case where age fairness will be silently empty downstream:
-    # if the enrollment payload omits ``birth_year`` for every user, the age
-    # subgroup map collapses to "unknown" and the Phase 2 aggregator drops
-    # those rows from fairness_summary_bootstrap.csv with no error. The cli
-    # log line is the only way an operator notices unless we warn here.
-    if user_ids and all(v["birth_year"] is None for v in demographics.values()):
+    if user_ids and all(v["age_at_enrollment"] is None for v in demographics.values()):
         logger.warning(
-            "Age fairness will be empty: 0/%d users have birth_year. Check "
-            "that the enrollment_info.json payload includes a 'birth_year' "
-            "field (the canonical Dataverse schema). Sex fairness still "
-            "works if BiologicalSex labels are present.",
+            "Age fairness will be empty: 0/%d users have usable enrollment age. "
+            "Check birth_year and createdOn in enrollment_info.json. "
+            "Sex fairness still works if BiologicalSex labels are present.",
             len(user_ids),
         )
 
@@ -106,7 +105,7 @@ def build_subgroup_mapping(
     demographic attributes (age_group, sex).
 
     Args:
-        hf_dataset: HuggingFace dataset with user_id and date columns.
+        hf_dataset: HuggingFace dataset with a user_id column.
         split_indices: Maps split name -> list of global HF dataset indices.
         age_bins: Sorted list of age bin edges, e.g. [18, 30, 40, 50, 60].
         store: Optional LabelsStore instance (uses global STORE if None).
@@ -122,7 +121,6 @@ def build_subgroup_mapping(
     # "values" array per row, which under cgroups v1 faults ~46 GB of Arrow
     # page cache into memory for ~427 K samples).
     all_user_ids = list(hf_dataset["user_id"])
-    all_dates = list(hf_dataset["date"])
 
     # Collect unique user IDs across val+test splits
     eval_user_ids: set[str] = set()
@@ -147,20 +145,10 @@ def build_subgroup_mapping(
 
         for local_idx, global_idx in enumerate(indices):
             user_id = all_user_ids[global_idx]
-            date_str = all_dates[global_idx]
 
-            demo = user_demographics.get(user_id, {"birth_year": None, "sex": "unknown"})
-
-            # Compute age group
-            age_group = "unknown"
-            birth_year = demo["birth_year"]
-            if birth_year is not None:
-                try:
-                    sample_date = pd.Timestamp(date_str)
-                    age = years_between_birth_year(birth_year, sample_date)
-                    age_group = bin_age(age, age_bins)
-                except Exception:
-                    pass
+            demo = user_demographics[user_id]
+            age = demo["age_at_enrollment"]
+            age_group = bin_age(age, age_bins) if age is not None else "unknown"
 
             split_mapping[local_idx] = {
                 "age_group": age_group,

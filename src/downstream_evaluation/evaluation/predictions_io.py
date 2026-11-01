@@ -12,8 +12,8 @@ Layout::
     <predictions_dir>/<method>/fallback.json          # per-task {n_fallback, n_test}
     <predictions_dir>/_subgroups.json
 
-The module is self-contained: demographics come from the labels lookup's ``age`` /
-``BiologicalSex`` columns, so no Labels-API environment is required.
+Age groups use enrollment createdOn through the configured Labels API.
+Sex comes from the labels lookup's ``BiologicalSex`` column.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from downstream_evaluation.evaluation.metrics import get_task_type, prepare_pred
 
 # Five age bands (plus ``unknown``) — the subgroups the fairness analysis slices on.
 _AGE_GROUP_BINS: tuple[tuple[float, float, str], ...] = (
-    (-float("inf"), 30.0, "18-29"),
+    (18.0, 30.0, "18-29"),
     (30.0, 40.0, "30-39"),
     (40.0, 50.0, "40-49"),
     (50.0, 60.0, "50-59"),
@@ -172,17 +172,21 @@ def write_subgroup_map(
 ) -> None:
     """Write ``<predictions_dir>/_subgroups.json`` = ``{uid: {age_group, sex}}``.
 
-    Demographics are read from the labels lookup's ``age`` / ``BiologicalSex``
-    columns (the first non-sentinel value per user). Users without a value fall into
-    ``unknown`` so the union of subgroups covers the full evaluated set.
+    Age uses enrollment createdOn; sex is the first non-sentinel lookup value.
+    Missing or invalid enrollment metadata gives an ``unknown`` age group.
+    Users remain present even when their age target is missing from the lookup.
     """
-    lookup = pd.read_parquet(lookup_path, columns=["user_id", "age", "BiologicalSex"])
-    age_by = _first_valid_by_user(lookup, "age")
+    from labels.api import age_at_enrollment
+
+    lookup = pd.read_parquet(lookup_path, columns=["user_id", "BiologicalSex"])
     sex_by = _first_valid_by_user(lookup, "BiologicalSex")
-    subgroups = {
-        u: {"age_group": _age_group(age_by.get(u)), "sex": _sex(sex_by.get(u))}
-        for u in {str(x) for x in users}
-    }
+    subgroups = {}
+    for u in sorted({str(x) for x in users}):
+        try:
+            age = age_at_enrollment(u)
+        except (KeyError, ValueError):
+            age = None
+        subgroups[u] = {"age_group": _age_group(age), "sex": _sex(sex_by.get(u))}
     out_dir = Path(predictions_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with (out_dir / "_subgroups.json").open("w") as f:

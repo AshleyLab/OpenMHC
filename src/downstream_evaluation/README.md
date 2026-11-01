@@ -22,7 +22,7 @@ openmhc.evaluate_prediction(model, tasks)
 
 **Data layer** (`src/downstream_evaluation/data/`):
 
-- `**provider.py` — who and what.** `TaskDataProvider` reads the labels lookup (one parquet per granularity) and derives, per `(task, split)`: the cohort, their labels, and the dates of each user's eligible days.
+- `**provider.py` — who and what.** `TaskDataProvider` reads the labels lookup (one parquet per granularity) and derives, per `(task, split)`: the cohort, their labels, and the dates of each user's eligible days. Age values are calculated through the Labels API at the existing age-label timestamp; lookup eligibility is preserved. Age subgroups use enrollment `createdOn`.
 - `**loader.py` — the bytes.** `DataLoader` reads `daily_hourly_hf` once per run (lazily, on first access), indexes it by `(user_id, date)`, and serves every access pattern: `bind()` (a task cohort's eligible segments), `segment_store()` (the whole store, for global-fit models), `user_days()` (date-ascending days, for timeline builders), `as_daily_rows()` (raw-form rows, for window-index consumers).
 - `**splits.py`** reads the frozen train/validation/test user split.
 
