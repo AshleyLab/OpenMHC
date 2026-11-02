@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import fields
 from pathlib import Path
 
-from downstream_evaluation.demo_covariates import _TASK_FEATURE_EXCLUSIONS_PATH, DEMO_ALIAS
+from downstream_evaluation.demo_covariates import _TASK_FEATURE_EXCLUSIONS_PATH, _kept_cov_indices
+from downstream_evaluation.models.linear import _DEMO_COVARIATES
 from labels import api
 from openmhc._constants import BENCHMARK_TASKS
 
@@ -32,18 +34,9 @@ def describe(path: Path | None) -> dict:
 
 def main() -> None:
     """Emit a deterministic fingerprint (no timestamps or participant data)."""
-    names = (
-        "LABELS_PATH",
-        "CONTEXT_LABELS_PATH",
-        "ENROLLMENT_PATH",
-        "LABEL_VALIDITY_PATH",
-        "HEALTHKIT_DAILY_PATH",
-        "LABEL_TYPES_PATH",
-        "ORDINAL_DICTIONARY_PATH",
-        "VALIDITY_CONFIG_PATH",
-    )
+    paths = api._PATHS
     result = {
-        "files": {name: describe(getattr(api, name)) for name in names},
+        "files": {field.name: describe(getattr(paths, field.name)) for field in fields(paths)},
         "benchmark_exclusions_file": describe(_TASK_FEATURE_EXCLUSIONS_PATH),
         "LABEL_NAMES": api.LABEL_NAMES,
         "TARGET_NAMES": api.TARGET_NAMES,
@@ -51,8 +44,8 @@ def main() -> None:
         "covariate_exclusions": {
             task: [
                 cov
-                for cov in ("age", "BiologicalSex", "BMI_values")
-                if cov == task or cov in DEMO_ALIAS.get(task, ())
+                for i, cov in enumerate(_DEMO_COVARIATES)
+                if i not in _kept_cov_indices(task, _DEMO_COVARIATES)
             ]
             for task in BENCHMARK_TASKS
         },

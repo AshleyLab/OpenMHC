@@ -7,7 +7,7 @@ participant was using at any given timestamp.
 
 - `devices.get_devices(health_code, timestamp) -> DeviceSnapshot` — point-in-time lookup
 - `devices.get_device_timeline(health_code) -> DeviceTimeline` — full interval history
-- `devices.api.configure(data_dir=None)` — select device data and clear cached timelines
+- `devices.configure(data_dir=None)` — select device data and clear cached timelines
 - `devices.DeviceInterval` — one `[start, end, name]` row
 - `devices.DeviceTimeline` — sorted, non-overlapping intervals for phone and watch
 - `devices.DeviceSnapshot` — the resolved phone and watch at one timestamp
@@ -16,10 +16,9 @@ participant was using at any given timestamp.
 
 ```python
 import pandas as pd
-from devices import api as devices_api
-from devices import get_devices, get_device_timeline
+from devices import configure, get_devices, get_device_timeline
 
-devices_api.configure(data_dir="/path/to/dataset")
+configure(data_dir="/path/to/dataset")
 snap = get_devices("user-123", pd.Timestamp("2020-06-01"))
 if snap.phone is not None:
     print(snap.phone.name)       # 'iPhone 8 Plus'
@@ -42,12 +41,13 @@ on that date in the original calendar.
 ## Data source
 
 Reads `<dataset_root>/labels/user_device_info.json`. Select the root with
-`devices.api.configure(data_dir=...)` or `MHC_DATA_DIR`. An explicit
+`devices.configure(data_dir=...)` or `MHC_DATA_DIR` before import. An explicit
 `USER_DEVICE_INFO_PATH` environment variable overrides that default.
 
 The first query loads and caches the timelines. Call `configure()` after changing
 environment overrides or selecting another dataset to clear the cache. Evaluation
-entry points configure the device API automatically without reading the file.
+entry points and `labels.configure(data_dir=...)` configure the device API
+automatically without reading the file. `devices.configure()` changes only devices.
 
 The data file ships separately from `last_labels.json` and is not
 guaranteed to be in every Dataverse bundle. Releases may intentionally omit it.

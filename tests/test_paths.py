@@ -182,7 +182,9 @@ class TestDatasetPaths:
         assert paths.version == "xs"  # trusted from the marker, not asserted by the caller
         # daily_labels_lookup is the field the version merge dropped; the linear baseline
         # (and others) read it.
-        assert paths.daily_labels_lookup == tmp_path / "processed" / "daily_labels_lookup.parquet"
+        assert (
+            paths.daily_labels_lookup == tmp_path / "processed" / "daily_labels_lookup.parquet"
+        )
 
     def test_from_root_matches_resolve(self, tmp_path):
         """``from_root`` and ``resolve(version=...)`` derive identical sub-paths."""
@@ -202,11 +204,11 @@ class TestLabelsEnvWiring:
         paths = LabelPaths.resolve(tmp_path)
         _ensure_labels_env(paths)
         assert dict(os.environ) == before
-        assert api.STORE.labels_path == paths.labels
-        assert api.STORE.context_labels_path == paths.context
-        assert api.STORE.enrollment_path == paths.enrollment
-        assert api.STORE.validity_path == paths.validity
-        assert api.STORE.healthkit_daily_path == paths.daily
+        assert api.STORE.paths.labels == paths.labels
+        assert api.STORE.paths.context == paths.context
+        assert api.STORE.paths.enrollment == paths.enrollment
+        assert api.STORE.paths.validity == paths.validity
+        assert api.STORE.paths.daily == paths.daily
 
     def test_respects_user_overrides(self, monkeypatch, tmp_path):
         """Retain explicit overrides while resolving remaining files from the root."""
@@ -219,10 +221,10 @@ class TestLabelsEnvWiring:
         before = dict(os.environ)
         _ensure_labels_env(LabelPaths.resolve(tmp_path))
         assert dict(os.environ) == before
-        assert api.STORE.labels_path == Path("/somewhere/else.json")
-        assert api.STORE.context_labels_path == Path("/somewhere/ctx.json")
-        assert api.STORE.enrollment_path == Path("/somewhere/enrollment.json")
-        assert api.STORE.validity_path == tmp_path / "labels" / "label_validity.json"
+        assert api.STORE.paths.labels == Path("/somewhere/else.json")
+        assert api.STORE.paths.context == Path("/somewhere/ctx.json")
+        assert api.STORE.paths.enrollment == Path("/somewhere/enrollment.json")
+        assert api.STORE.paths.validity == tmp_path / "labels" / "label_validity.json"
 
 
 class TestLabelsApiResolution:
@@ -235,10 +237,10 @@ class TestLabelsApiResolution:
         api = importlib.reload(api)
 
         assert api.BUNDLED_METADATA_DIR == bundled_metadata_dir()
-        assert api.LABEL_TYPES_PATH == bundled_metadata_dir() / "label_types.json"
-        assert api.ORDINAL_DICTIONARY_PATH == bundled_metadata_dir() / "ordinal_dictionary.json"
-        assert api.VALIDITY_CONFIG_PATH == bundled_metadata_dir() / "validity_config.json"
-        assert api.LABELS_PATH is None
+        assert api._PATHS.label_types == bundled_metadata_dir() / "label_types.json"
+        assert api._PATHS.ordinal_dictionary == bundled_metadata_dir() / "ordinal_dictionary.json"
+        assert api._PATHS.validity_config == bundled_metadata_dir() / "validity_config.json"
+        assert api._PATHS.labels is None
         assert len(api.TARGET_NAMES) > 0
 
     def test_large_payloads_resolve_from_dataset_root(self, monkeypatch, tmp_path):
@@ -250,12 +252,12 @@ class TestLabelsApiResolution:
 
         api = importlib.reload(api)
 
-        assert api.LABELS_PATH == labels_dir / "last_labels.json"
-        assert api.CONTEXT_LABELS_PATH == labels_dir / "context_labels.json"
-        assert api.ENROLLMENT_PATH == labels_dir / "enrollment_info.json"
-        assert api.LABEL_VALIDITY_PATH == labels_dir / "label_validity.json"
-        assert api.HEALTHKIT_DAILY_PATH == labels_dir / "healthkit_daily.json"
-        assert api.LABEL_TYPES_PATH == bundled_metadata_dir() / "label_types.json"
+        assert api._PATHS.labels == labels_dir / "last_labels.json"
+        assert api._PATHS.context == labels_dir / "context_labels.json"
+        assert api._PATHS.enrollment == labels_dir / "enrollment_info.json"
+        assert api._PATHS.validity == labels_dir / "label_validity.json"
+        assert api._PATHS.daily == labels_dir / "healthkit_daily.json"
+        assert api._PATHS.label_types == bundled_metadata_dir() / "label_types.json"
 
     def test_per_file_env_overrides_dataset_root(self, monkeypatch, tmp_path):
         """A per-file env var overrides the dataset root for that one payload."""
@@ -267,8 +269,8 @@ class TestLabelsApiResolution:
 
         api = importlib.reload(api)
 
-        assert api.LABELS_PATH == custom.resolve()
-        assert api.ENROLLMENT_PATH == (tmp_path / "dataset" / "labels" / "enrollment_info.json")
+        assert api._PATHS.labels == custom.resolve()
+        assert api._PATHS.enrollment == (tmp_path / "dataset" / "labels" / "enrollment_info.json")
 
     def test_large_payload_access_raises_without_explicit_root(self):
         """Accessing a large payload with no configured root raises ``ValueError``."""

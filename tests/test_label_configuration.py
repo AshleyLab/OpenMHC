@@ -15,6 +15,17 @@ from openmhc._label_paths import LabelPaths
 @pytest.fixture(autouse=True)
 def clean_configuration(monkeypatch):
     """Keep configuration changes independent of test execution order."""
+    from devices import api as devices
+    from labels import api
+
+    # Restore the actual pre-test state, including loaded caches. Re-resolving
+    # from a cleared environment does not restore a caller's explicit selection.
+    paths = api._PATHS
+    metadata = [(getattr(api, name), getattr(api, name).copy()) for name in (
+        "LABEL_TYPES", "_LABEL_META", "LABEL_NAMES", "TARGET_NAMES", "CONTEXT_NAMES",
+        "MULTI_CATEGORICAL_NAMES",
+    )]
+    store_state, device_state = vars(api.STORE).copy(), vars(devices.STORE).copy()
     for key in (
         "MHC_DATA_DIR",
         "LABELS_DATA_PATH",
@@ -28,14 +39,22 @@ def clean_configuration(monkeypatch):
         "USER_DEVICE_INFO_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
-    from devices import api as devices
-    from labels import api
-
     api.configure()
-    devices.configure()
-    yield
-    api.configure(paths=LabelPaths.resolve())
-    devices.configure(paths=LabelPaths.resolve())
+    try:
+        yield
+    finally:
+        monkeypatch.undo()  # Restore environment before restoring API state.
+        api._PATHS = paths
+        for container, value in metadata:
+            if isinstance(container, dict):
+                container.clear()
+                container.update(value)
+            else:
+                container[:] = value
+        vars(api.STORE).clear()
+        vars(api.STORE).update(store_state)
+        vars(devices.STORE).clear()
+        vars(devices.STORE).update(device_state)
 
 
 def write_dataset(root, value, context_name):
@@ -69,7 +88,7 @@ def write_dataset(root, value, context_name):
     )
 
 
-def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path):
+def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path, monkeypatch):
     """Switch A to B and back without leaving imported consumers or caches stale."""
     import context.api as context
     import downstream_evaluation.evaluation.metrics as metrics
@@ -77,10 +96,13 @@ def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path):
     from devices import api as devices
     from labels import api
 
-    # Legacy tests elsewhere reload labels.api. Bind consumers to the current
-    # module once, before the A -> B -> A lifecycle under test (no reloads there).
-    for module in (context, metrics, sensitivity):
-        importlib.reload(module)
+    # Legacy tests reload labels.api. Restore these bindings after this test
+    # rather than permanently reloading downstream consumer modules.
+    for module, names in ((context, ("LABEL_NAMES", "CONTEXT_NAMES")),
+                          (metrics, ("LABEL_NAMES", "LABEL_TYPES")),
+                          (sensitivity, ("STORE",))):
+        for name in names:
+            monkeypatch.setattr(module, name, getattr(api, name))
     store, device_store = api.STORE, devices.STORE
     names, targets, contexts, types = (
         api.LABEL_NAMES,
@@ -101,6 +123,7 @@ def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path):
     ):
         _ensure_labels_env(paths)
         assert api.STORE is store is sensitivity.STORE
+        assert api.STORE.paths is api._PATHS is paths
         assert devices.STORE is device_store
         assert api.LabelResult is result_class
         assert api.LABEL_TYPES is types is metrics.LABEL_TYPES
@@ -127,7 +150,7 @@ def test_failed_schema_configuration_leaves_previous_store_usable(tmp_path):
     b.label_types.write_text("{broken")
     with pytest.raises(json.JSONDecodeError):
         api.configure(paths=b)
-    assert api.LABEL_TYPES_PATH == a.label_types
+    assert api._PATHS.label_types == a.label_types
     assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
 
 
@@ -182,7 +205,7 @@ def test_public_evaluation_switches_dataset_before_runner(monkeypatch, tmp_path,
 
     def capture(*args, **kwargs):
         observed.append(
-            (api.STORE.labels_path, api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value)
+            (api.STORE.paths.labels, api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value)
         )
         raise ReachedRunner
 
@@ -307,8 +330,8 @@ def test_xgboost_feature_builder_configures_labels_before_cutoffs(monkeypatch, t
         pass
 
     def check_cutoffs(**kwargs):
-        assert api.STORE.labels_path == paths.labels
-        assert api.STORE.enrollment_path == paths.enrollment
+        assert api.STORE.paths.labels == paths.labels
+        assert api.STORE.paths.enrollment == paths.enrollment
         raise CutoffReached
 
     monkeypatch.setattr(preprocessing, "build_cutoff_dates", check_cutoffs)

@@ -748,10 +748,12 @@ def main() -> None:
     args = build_parser().parse_args()
     from openmhc._label_paths import LabelPaths
 
-    paths = LabelPaths.resolve(
-        args.data_dir, labels=args.labels_path, enrollment=args.enrollment_path
+    paths = LabelPaths.resolve(args.data_dir)
+    labels_path = Path(args.labels_path).expanduser().resolve() if args.labels_path else paths.labels
+    enrollment_path = (
+        Path(args.enrollment_path).expanduser().resolve() if args.enrollment_path else paths.enrollment
     )
-    if paths.labels is None or paths.enrollment is None:
+    if labels_path is None or enrollment_path is None:
         raise ValueError(
             "Provide --data-dir / MHC_DATA_DIR or explicit labels and enrollment paths"
         )
@@ -776,8 +778,8 @@ def main() -> None:
             clip_lower=float(args.clip_lower),
             clip_upper=float(args.clip_upper),
             lambda_fairness=float(args.lambda_fairness),
-            labels_path=paths.labels,
-            enrollment_path=paths.enrollment,
+            labels_path=labels_path,
+            enrollment_path=enrollment_path,
             within_user_aggregation=str(args.within_user_aggregation),
         )
     )

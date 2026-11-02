@@ -3,7 +3,7 @@
 This module exposes a fast, in-memory lookup for label values and age computation with automatic type enforcement.
 
 ## Public surface
-- `labels.configure(data_dir=None)`: select a dataset and refresh metadata and cached payloads in place.
+- `labels.configure(data_dir=None)`: select a dataset for labels and devices, refreshing metadata and cached payloads in place.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
@@ -41,6 +41,11 @@ Configuration refreshes metadata in place and clears cached payloads without
 changing environment variables or reloading modules. Call `configure()` again
 after changing overrides. Configuration is process-global; use separate processes
 for concurrent evaluations of different datasets.
+
+All three schema files are validated before a configuration change is applied;
+invalid schemas leave the previous configuration intact. Repeated evaluations
+of the same paths retain loaded caches; an explicit `configure()` forces a refresh.
+Imputation workers receive the resolved configuration from their parent process.
 
 ## Usage
 ```python

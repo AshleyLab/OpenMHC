@@ -52,5 +52,5 @@ def __getattr__(name: str):
     if name in {"LABEL_TYPES_PATH", "ORDINAL_DICTIONARY_PATH"}:
         from . import api
 
-        return getattr(api, name)
+        return getattr(api._PATHS, name.removesuffix("_PATH").lower())
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

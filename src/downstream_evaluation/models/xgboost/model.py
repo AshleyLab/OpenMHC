@@ -145,7 +145,6 @@ def extract_xgboost_features(
     from downstream_evaluation.models.xgboost.preprocessing import build_cutoff_dates
 
     paths = _DatasetPaths.from_root(data_dir)
-    _ensure_labels_env(paths.label_paths)  # build_cutoff_dates reads the Labels API
     arrow_dir = paths.daily_hf
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -157,6 +156,7 @@ def extract_xgboost_features(
     # re-derived cutoff path — xgboost's features are task-agnostic and can't honor the
     # per-task windowed lookup.
     if max_future_days > 0:
+        _ensure_labels_env(paths.label_paths)  # build_cutoff_dates reads the Labels API
         cutoff_dates = build_cutoff_dates(max_future_days=max_future_days)
         eligible_keys = None
         suffix = f"_cutoff{max_future_days}"
@@ -320,7 +320,11 @@ class XGBoost:
             logger.info("xgboost feature cache incomplete at %s — building from raw (CPU)", fd)
             extract_xgboost_features(
                 output_dir=str(fd),
-                data_dir=self._data_dir,
+                data_dir=(
+                    self._ctx.data_dir
+                    if self._ctx is not None and self._ctx.data_dir
+                    else self._data_dir
+                ),
                 max_future_days=self._max_future_days,
                 max_nonwear_minutes=self._max_nonwear_minutes,
             )
