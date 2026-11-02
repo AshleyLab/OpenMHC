@@ -12,7 +12,7 @@
 - Input variables: `GoSleepTime` (time of day, 24-hour format)
 
 ## Question
-Not directly asked — derived from the bedtime response in the Daily Check-in or sleep survey.
+Not directly asked — derived from the bedtime set with the AppCore profile time picker (sign-up or profile screen), not from the Daily Check-in or a survey.
 
 ## Derivation details
 
