@@ -128,7 +128,7 @@ manifest, normalization stats, FEDformer `fourier_modes.json` sidecar, and
 checkpoint files are downloaded — the model card and any other repo metadata
 are skipped.
 
-[openrail]: https://huggingface.co/blog/open_rlhf
+[openrail]: https://huggingface.co/blog/open_rail
 
 ---
 
