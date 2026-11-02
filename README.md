@@ -22,6 +22,12 @@ What can this repository and the OpenMHC dataset be useful for?
 
 - **Dataset:** see [DATASET.md](DATASET.md)
 
+## Intended Use
+
+**Intended use:** research, methodological comparison, and reproduction of the OpenMHC benchmark.
+
+**Out of scope:** diagnosis, screening, prognosis, prospective risk prediction, clinical decision support, or any other medical decision-making. OpenMHC's medical condition labels are self-reported and have no diagnosis dates, and benchmark performance does not establish clinical utility. Any diagnostic, prognostic, or screening claim requires independent validation using temporally aligned, clinically adjudicated outcomes in the target population.
+
 ## Release Plan
 
 - [ ] Release OpenMHC dataset (upon paper acceptance)

@@ -104,7 +104,7 @@ to its exact checkpoint and arch.
 Paper-faithful checkpoints are mirrored on the Hugging Face Hub under the
 [`MyHeartCounts`](https://huggingface.co/MyHeartCounts) organization. The
 `hf://` URI scheme is the recommended path; bundles are public and licensed
-CC-BY-4.0.
+OpenRAIL.
 
 | Release | HF repo | Wrapper | Family |
 |---|---|---|---|
