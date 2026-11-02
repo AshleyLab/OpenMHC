@@ -385,4 +385,4 @@ release are available.
 ## License
 
 Code: MIT. Dataset: governed by a separate Data Use Agreement (see
-[DATASET.md](DATASET.md)), Models OpenRAIL;
+[DATASET.md](DATASET.md)). Models: [BigScience OpenRAIL-M](https://www.licenses.ai/s/BigScience-Open-RAIL-M-License.pdf).
