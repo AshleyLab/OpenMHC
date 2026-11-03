@@ -27,6 +27,8 @@ See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_docum
 
 All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`. Configuration requires the complete schema set; missing files or invalid JSON raise an error, with no repository fallback. The legacy variables `LABEL_TYPES_PATH`, `ORDINAL_DICTIONARY_PATH` and `VALIDITY_CONFIG_PATH` cannot redirect schemas: configuration raises an error if any points elsewhere. Unset those variables and select a dataset root instead.
 
+See [DATASET.md](../../DATASET.md#bundled-vs-dataset-root-files) for schema access requirements and existing-root migration.
+
 Participant payloads also default to `<dataset_root>/labels/` and support explicit per-file overrides:
 ```bash
 export MHC_DATA_DIR=/path/to/openmhc-dataset
@@ -121,7 +123,9 @@ result = get_labels(health_code, timestamp, label, enforce_type=False)
 
 **Label type mapping:**
 ```python
-from labels import LABEL_TYPES
+from labels import LABEL_TYPES, configure
+
+configure(data_dir="/path/to/dataset")
 
 # Check a label's type
 print(LABEL_TYPES["BiologicalSex"])  # "binary"
@@ -171,12 +175,12 @@ work                      bool         0.00         1.00         1.00         2
 - For labels in `labels.json`, the closest timestamp is chosen; ties favor the earlier point.
 - `age` is stored as a static value in `last_labels.json` (calendar-year age at the user's last survey timestamp).
 
-Recent local throughput (from `PYTHONPATH=src pytest src/labels/test_api.py -k performance`):
+Recent local throughput (from `PYTHONPATH=src pytest tests/test_labels_api.py -k performance`):
 - Label lookups: ~762,936.5 per second
 - Age lookups: ~729,164.1 per second
 
 ## Tests
 Run from repo root:
 ```bash
-PYTHONPATH=src pytest src/labels/test_api.py
+PYTHONPATH=src pytest tests/test_labels_api.py
 ```

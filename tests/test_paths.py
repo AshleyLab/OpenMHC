@@ -49,7 +49,7 @@ def _isolate_env(monkeypatch):
     """Clear dataset / labels env vars so each test starts from a known state.
 
     Without this, tests that set ``LABELS_DATA_PATH`` / ``CONTEXT_LABELS_PATH``
-    would leak into sibling test modules (e.g. ``src/labels/test_api.py``)
+    would leak into sibling test modules (e.g. ``tests/test_labels_api.py``)
     and make ordering matter.
     """
     for var in (

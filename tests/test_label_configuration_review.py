@@ -101,6 +101,40 @@ class TinyMaskCache:
         return list(range(len(indices))), np.ones((len(indices), 19, 2), dtype=np.float32)
 
 
+class LabelFreeImputer:
+    """An imputer that does not require dataset label metadata."""
+
+    def impute(self, data, observed_mask, target_mask):
+        """Allow workers to evaluate tensors without configuring label schemas."""
+        from labels import api
+
+        assert not api._SCHEMAS_CONFIGURED
+        return np.zeros_like(data)
+
+
+@pytest.mark.parametrize("start_method", ["spawn", "forkserver"])
+def test_imputation_workers_without_label_configuration(tmp_path, monkeypatch, start_method):
+    """Standalone tensor evaluation must not require unused label schemas."""
+    if start_method not in multiprocessing.get_all_start_methods():
+        pytest.skip(f"{start_method} unavailable on this platform")
+    import torch
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from imputation_evaluation.evaluation import evaluator
+    from labels import api
+    from openmhc._label_paths import LabelPaths
+
+    monkeypatch.setattr(api, "_SCHEMAS_CONFIGURED", False)
+    monkeypatch.setattr(api, "_PATHS", LabelPaths.resolve())
+    monkeypatch.setattr(evaluator, "ProcessPoolExecutor", partial(
+        ProcessPoolExecutor, mp_context=multiprocessing.get_context(start_method)))
+    loader = DataLoader(TensorDataset(torch.ones(1, 19, 2), torch.ones(1, 19, 2)), batch_size=1)
+    engine = evaluator.ImputationEvaluator(
+        ["random_noise"], num_eval_workers=2, pairs_dir=tmp_path / "pairs")
+    counts = engine._evaluate_split(loader, TinyMaskCache(), LabelFreeImputer(), np.ones(19), "test")
+    assert counts["random_noise"]["n_applicable"] == 1
+
+
 @pytest.mark.parametrize("start_method", ["spawn", "forkserver"])
 @pytest.mark.parametrize("ambient_root", [False, True])
 def test_actual_imputation_worker_uses_selected_paths(tmp_path, monkeypatch, start_method, ambient_root):
@@ -277,3 +311,69 @@ def test_configuration_fixture_restores_explicit_state_and_environment(tmp_path,
     assert api._PATHS == paths
     assert api.STORE._labels_index is index
     assert devices.STORE._timelines is timelines
+
+
+def test_empty_label_schema_preserves_active_state(tmp_path):
+    """Reject an empty schema without replacing configured metadata or caches."""
+    from labels import api
+
+    a = write_dataset(tmp_path / "a", 20, "context_a")
+    b = write_dataset(tmp_path / "b", 40, "context_b")
+    api.configure(paths=a)
+    api.get_labels("u", pd.Timestamp("2020-01-01"), "age")
+    cached = api.STORE._labels_index
+    b.label_types.write_text("{}")
+    with pytest.raises(ValueError, match="nonempty.*label_types.json"):
+        api.configure(paths=b)
+    assert api._PATHS == a
+    assert api._SCHEMAS_CONFIGURED
+    assert api.LABEL_NAMES == ["age", "context_a"]
+    assert api.STORE._labels_index is cached
+
+
+def test_direct_cutoffs_initialize_metadata(tmp_path, monkeypatch):
+    """Direct feature-helper calls must not silently return zero cutoff dates."""
+    from downstream_evaluation.models.xgboost.preprocessing import build_cutoff_dates
+    from labels import api
+
+    paths = write_dataset(tmp_path / "dataset", 20, "context_a")
+    monkeypatch.setenv("MHC_DATA_DIR", str(paths.schema_dir.parent))
+    monkeypatch.setattr(api, "_SCHEMAS_CONFIGURED", False)
+    api.TARGET_NAMES.clear()
+    assert build_cutoff_dates() == {"u": "2021-01-01"}
+    assert api._SCHEMAS_CONFIGURED
+    assert api._PATHS == paths
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_schema_environment_fixture_restores_state(tmp_path, monkeypatch, write_label_schemas, configured):
+    """The shared synthetic fixture restores API state and direct env writes."""
+    label_schema_environment = runpy.run_path(
+        str(Path(__file__).resolve().with_name("conftest.py"))
+    )["label_schema_environment"]
+
+    from devices import api as devices
+    from labels import api
+
+    a = write_dataset(tmp_path / "a", 20, "context_a")
+    api.configure(paths=a)
+    api.get_labels("u", pd.Timestamp("2020-01-01"), "age")
+    devices.get_devices("u", pd.Timestamp("2020-01-01"))
+    monkeypatch.setattr(api, "_SCHEMAS_CONFIGURED", configured)
+    store, device_store = api.STORE, devices.STORE
+    labels_index, timelines = store._labels_index, device_store._timelines
+    names = api.LABEL_NAMES
+    before_env = dict(os.environ)
+    with pytest.MonkeyPatch.context() as nested:
+        fixture = label_schema_environment.__wrapped__(nested, tmp_path, write_label_schemas)
+        next(fixture)
+        os.environ["LABELS_DATA_PATH"] = "legacy-direct-write"
+        with pytest.raises(StopIteration):
+            next(fixture)
+    assert dict(os.environ) == before_env
+    assert api._PATHS == a
+    assert api._SCHEMAS_CONFIGURED == configured
+    assert api.LABEL_NAMES is names
+    assert names == ["age", "context_a"]
+    assert api.STORE is store and devices.STORE is device_store
+    assert store._labels_index is labels_index and device_store._timelines is timelines

@@ -75,7 +75,8 @@ def _test_td():
     return _TD(["u_a", "u_b"], [_Seg(arr), _Seg(arr)], np.array([0, 1]), split="test")
 
 
-def test_predict_only_model_skips_fit_and_never_builds_train():
+def test_predict_only_model_skips_fit_and_never_builds_train(label_schema_environment):
+    """Evaluate a predict-only model without materializing its train cohort."""
     model = _PredictOnly()
     assert not hasattr(model, "fit")  # the whole point: no fit defined
 
@@ -92,7 +93,8 @@ def test_predict_only_model_skips_fit_and_never_builds_train():
     assert n_fallback == 0  # finite predictions → no fallback substitution
 
 
-def test_model_with_fit_still_fits_on_train():
+def test_model_with_fit_still_fits_on_train(label_schema_environment):
+    """Preserve training for models that implement the optional fit hook."""
     model = _WithFit()
     train_arr = np.ones((1, 24, 38), dtype=np.float32)
     train_td = _TD(["u_x"], [_Seg(train_arr)], np.array([1]), split="train")

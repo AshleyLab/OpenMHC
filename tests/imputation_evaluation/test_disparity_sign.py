@@ -124,6 +124,9 @@ def _draws_with_subgroup_gap(low_subgroup_mean: float, *, seed: int) -> pd.DataF
                     "subgroup_value": "all",
                     "draw": int(b),
                     "E": float(max(1e-6, mu + rng.normal(0, 0.02))),
+                    # Phase 2 requires Phase 1's per-task ranks. The candidate
+                    # always beats LOCF in this synthetic overall cell.
+                    "rank": 1.0 if method == "cand" else 2.0,
                 }
             )
     # Subgroup rows for the candidate method only — ``F`` fixed, ``M`` varies.
@@ -140,6 +143,7 @@ def _draws_with_subgroup_gap(low_subgroup_mean: float, *, seed: int) -> pd.DataF
                     "subgroup_value": sg_val,
                     "draw": int(b),
                     "E": float(max(1e-6, sg_mean + rng.normal(0, 0.02))),
+                    "rank": 1.0,  # Only the candidate is present in each subgroup.
                 }
             )
     return pd.DataFrame(rows)

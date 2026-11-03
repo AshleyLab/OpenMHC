@@ -180,7 +180,7 @@ def test_store_returns_json_label_value(tmp_path: Path) -> None:
 
 def test_performance_real_files(capsys) -> None:
     """Test performance with real files."""
-    base = Path(__file__).resolve().parent
+    base = Path(__file__).resolve().parents[1] / "src" / "labels"
     labels_path = base / "last_labels.json"
     enrollment_path = base / "enrollment_info.json"
 

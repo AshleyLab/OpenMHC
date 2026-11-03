@@ -28,9 +28,10 @@ def _require_dataset_payload_path(
     raise ValueError(
         f"OpenMHC dataset root is required to resolve labels/{filename}. "
         f"Expected this file under <dataset_root>/labels/{filename}. "
-        "Call `labels.configure(data_dir=...)` before querying. If you set "
-        f"`MHC_DATA_DIR` or `{env_var}` after import, call `labels.configure()` "
-        "to apply the new setting."
+        "Call `labels.configure(data_dir=...)` with a dataset containing all three "
+        "schema files before querying. Alternatively set `MHC_DATA_DIR` and call "
+        f"`labels.configure()`. `{env_var}` overrides this payload only; it does "
+        "not select the required dataset schemas."
     )
 
 
@@ -50,8 +51,8 @@ def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, A
     """
     with path.open("r") as handle:
         raw = json.load(handle)
-    if not isinstance(raw, dict):
-        raise ValueError(f"Label types must be a JSON object: {path}")
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"Label types must be a nonempty JSON object: {path}")
     types: dict[str, str] = {}
     meta: dict[str, dict[str, Any]] = {}
     for key, value in raw.items():

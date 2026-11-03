@@ -1,5 +1,7 @@
 # MHC Variable Index
 
+The 170-variable schema contains **41 targets and 129 contexts**.
+
 169 variables used by the MHC-benchmark project (41 targets + 128 contexts), mapped to their source definitions in the iOS codebase. This index describes the historical 169-variable schema; the authoritative label set for a release is its `<dataset_root>/labels/label_types.json`. In this index, the `survey_documentation/` tree has one variable `.md` per label (169 docs), plus a `summary.md` landing page per category and this index.
 
 - **Filename convention**: `<category>/<raw_identifier>.md`. The `field_` prefix used in the benchmark dataset is stripped from filenames but recorded inside each file.
@@ -29,7 +31,7 @@ Variables are grouped into 16 semantic subdirectories. Each subdirectory contain
 | [mindset_measures](mindset_measures/summary.md) | 32 | illness mindset (20) + exercise process mindset (7) + adequacy of activity (5) |
 | [study_metadata](study_metadata/summary.md) | 6 | labwork, device ownership flags, phone_on_user |
 
-Each subdir's `summary.md` links every variable in that subdir. The flat tables below are the canonical master reference — all 41 targets and all 128 contexts, one row each.
+Each subdir's `summary.md` links every variable in that subdir. The flat tables below document the historical 41-target / 128-context schema, one row each.
 
 ## Targets (41)
 

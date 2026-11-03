@@ -62,15 +62,6 @@ DATASET_VERSION_FILENAME = "dataset_version.json"
 
 Version = Literal["xs", "full"]
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_BUNDLED_METADATA_DIR = _REPO_ROOT / "data" / "labels"
-
-
-def bundled_metadata_dir() -> Path:
-    """Return the repo-owned directory for small tracked metadata files."""
-    return _BUNDLED_METADATA_DIR
-
-
 def _missing_dataset_root_error() -> ValueError:
     return ValueError(
         "OpenMHC dataset root is required for large benchmark payloads. "
@@ -198,7 +189,8 @@ def download_dataset(
         version: ``"xs"`` (593-user quickstart subset, ~1.9 GB) or
             ``"full"`` (11,894-user release, ~38 GB).
         dest: Where to put the data. Must be provided explicitly here or via
-            ``MHC_DATA_DIR``.
+            ``MHC_DATA_DIR``. Must be a new or empty directory; existing dataset
+            roots are not updated in place.
         api_token: Optional Dataverse API token for restricted datasets.
 
     Returns:
@@ -206,6 +198,8 @@ def download_dataset(
 
     Raises:
         ValueError: If ``version`` is unknown or not yet published.
+        FileExistsError: If the destination already contains files. Download to
+            a fresh directory, validate it, then select that root instead.
     """
     if version not in _VERSION_DOIS:
         raise ValueError(f"version must be one of {sorted(_VERSION_DOIS)}, got {version!r}")
@@ -217,6 +211,12 @@ def download_dataset(
         )
 
     target = data_dir(dest)
+    if target.exists() and (not target.is_dir() or any(target.iterdir())):
+        raise FileExistsError(
+            f"Dataset destination is not an empty directory: {target}. "
+            "Download the complete release into a new directory, then select it "
+            "with data_dir= or MHC_DATA_DIR. Existing roots are not repaired in place."
+        )
     target.mkdir(parents=True, exist_ok=True)
 
     token = api_token or os.getenv("DATAVERSE_API_TOKEN")
@@ -311,6 +311,18 @@ def _post_process_xs(dest: Path) -> None:
     ``forecasting_sample_index/``, ``hourly_trajectory/``, …) and removes the
     now-empty staging directories.
     """
+    # Detect metadata collisions before moving any extracted files. Keeping old
+    # root schemas while silently leaving the new release under data/ is unsafe.
+    metadata_subdirs = ("splits", "labels", "forecasting_sample_index")
+    for sub in metadata_subdirs:
+        source, target = dest / "data" / sub, dest / sub
+        if source.is_dir() and target.exists():
+            raise FileExistsError(
+                f"Cannot install dataset metadata from {source}: {target} already exists. "
+                "Extract or download the complete release into a fresh directory; "
+                "do not mix files from different releases."
+            )
+
     processed = dest / "processed"
     processed.mkdir(parents=True, exist_ok=True)
 
@@ -332,7 +344,7 @@ def _post_process_xs(dest: Path) -> None:
             source.rename(target)
 
     # 2. Metadata subtrees: data/<sub> -> root/<sub>.
-    for sub in ("splits", "labels", "forecasting_sample_index"):
+    for sub in metadata_subdirs:
         source = data / sub
         target = dest / sub
         if source.is_dir() and not target.exists():

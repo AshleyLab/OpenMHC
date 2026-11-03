@@ -76,5 +76,5 @@ than third-party hardware.
 ## Running tests
 
 ```bash
-pytest src/devices/test_api.py
+PYTHONPATH=src pytest tests/test_devices_api.py
 ```
