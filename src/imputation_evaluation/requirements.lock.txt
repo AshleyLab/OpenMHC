@@ -182,7 +182,7 @@ scipy==1.10.1
 seaborn==0.13.2
 Send2Trash==2.1.0
 sentry-sdk==2.60.0
-setuptools==82.0.1
+setuptools==83.0.0
 shellingham==1.5.4
 six==1.17.0
 smmap==5.0.3
