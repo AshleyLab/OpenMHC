@@ -3,6 +3,9 @@
 This module exposes a fast, in-memory lookup for label values with automatic type enforcement.
 
 ## Public surface
+- `labels.configure(data_dir=None)`: select a dataset and refresh schemas and cached payloads.
+- `labels.age_at(health_code, date)`: calculate calendar-year age at an explicit `pandas.Timestamp`.
+- `labels.age_at_enrollment(health_code)`: calculate calendar-year age at enrollment `createdOn`.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
@@ -18,23 +21,28 @@ This module exposes a fast, in-memory lookup for label values with automatic typ
 ## Data sources
 - `last_labels.json`: per-label → healthCode → `timestamps`/`values`.
 - `context_labels.json`: context-label payload merged into the same lookup index when available.
-- `enrollment_info.json`: per-healthCode metadata with stored `age`; missing ages are null.
+- `enrollment_info.json`: per-healthCode metadata with de-identified `birth_year` and enrollment `createdOn` for calendar-year age calculations.
 - `label_types.json`: maps each label to its semantic type (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
 
 ## Variable dictionary
 See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for variable definitions, original survey options, release mappings, observed values and iOS sources.
 
-Small schema metadata (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) is bundled in the repo under `data/labels/`. Large payload files resolve from your explicit dataset root (`data_dir=` / `MHC_DATA_DIR`) unless you override them per file:
+All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, with no repository fallback. Reading these restricted Dataverse files requires dataset access. Select the dataset with `data_dir=` or `MHC_DATA_DIR`; unset legacy schema overrides that point elsewhere, since configuration rejects them.
 ```bash
 export MHC_DATA_DIR=/path/to/openmhc-dataset
-export LABELS_DATA_PATH=/path/to/last_labels.json
-export ENROLLMENT_DATA_PATH=/path/to/enrollment_info.json
 ```
+
+Call `labels.configure(data_dir=...)` before inspecting metadata or switching datasets. Metadata containers are empty until configuration; a first label query can configure from `MHC_DATA_DIR`.
+
+Optional payload overrides include `LABELS_DATA_PATH` and `ENROLLMENT_DATA_PATH`; use files from the same dataset.
 
 ## Usage
 ```python
 import pandas as pd
 from labels import (
+    configure,
+    age_at,
+    age_at_enrollment,
     get_labels,
     LABEL_NAMES,
     LABEL_TYPES,
@@ -43,6 +51,8 @@ from labels import (
     get_labels_statistics,
     print_labels_statistics,
 )
+
+configure(data_dir="/path/to/dataset")
 
 # lookup nearest label value (returns enforced type)
 result = get_labels(
@@ -59,6 +69,10 @@ age = get_labels(
     label="age",
 )
 print(age.value)  # e.g., 25.0
+
+# Calculate calendar-year age at an explicit date or at enrollment
+print(age_at("user-123", pd.Timestamp("2020-01-14")))
+print(age_at_enrollment("user-123"))
 
 # handle type enforcement errors
 try:
@@ -100,11 +114,13 @@ result = get_labels(health_code, timestamp, label, enforce_type=False)
 
 **Label type mapping:**
 ```python
-from labels import LABEL_TYPES
+from labels import LABEL_TYPES, configure
+
+configure(data_dir="/path/to/dataset")
 
 # Check a label's type
 print(LABEL_TYPES["BiologicalSex"])  # "binary"
-print(LABEL_TYPES["happiness"])       # "ordinal"
+print(LABEL_TYPES["happiness"])       # "continuous"
 print(LABEL_TYPES["field_race"])      # "multi_categorical"
 print(LABEL_TYPES["WeightKilograms"]) # "continuous"
 ```
@@ -149,13 +165,14 @@ work                      bool         0.00         1.00         1.00         2
 ## Behavior
 - For labels in `labels.json`, the closest timestamp is chosen; ties favor the earlier point.
 - Age lookups return the stored `age` label value from `last_labels.json`.
+- Calculated age is `reference_date.year - birth_year`. Track 1 targets and Linear age covariates use the existing age-label timestamp; age subgroups in all three tracks use enrollment `createdOn`. This counts calendar years, not completed birthdays.
 
-Recent local throughput (from `PYTHONPATH=src pytest src/labels/test_api.py -k performance`):
+Previously measured local throughput (not remeasured for this change):
 - Label lookups: ~762,936.5 per second
 - Age lookups: ~729,164.1 per second
 
 ## Tests
 Run from repo root:
 ```bash
-PYTHONPATH=src pytest src/labels/test_api.py
+PYTHONPATH=src pytest tests/test_labels_api.py
 ```

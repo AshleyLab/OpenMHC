@@ -2,10 +2,12 @@
 
 `field_zip` is removed from the released Full/XS datasets and replaced by `field_state` and `field_ruca_primary_mean`.
 
-**Original field**: `field_zip`
-**Raw identifier**: `zip`
+**Pre-release processed field**: `field_zip`
+**Original UK survey identifier**: `zip`
 **Role**: context
 **Original type**: categorical
+
+The release transformation reads `field_zip` from the pre-release `context_labels.json`, which contains numeric US ZIP prefixes as well as UK/HK tokens. The original question and conditional logic below describe the UK `zip` questionnaire item; the US questionnaire uses the separate `numericZip` item. These survey identifiers should be distinguished from the processed `field_zip` used to derive the release fields.
 
 ## Released Full/XS fields
 
@@ -14,11 +16,13 @@ Three-digit US ZIP prefixes are matched to five-digit ZIP areas in the 2020 USDA
 | Released field | Type | Transformation |
 |---|---|---|
 | `field_state` | categorical | Two-letter abbreviation of the state or territory with the most eligible ZIP areas sharing the prefix. Each ZIP area counts once. |
-| `field_ruca_primary_mean` | continuous | Unweighted arithmetic mean of primary RUCA codes across eligible ZIP areas sharing the prefix, excluding code `99`, rounded to the nearest integer with `.5` rounded upward. |
+| `field_ruca_primary_mean` | integer-valued | Unweighted arithmetic mean of primary RUCA codes across eligible ZIP areas sharing the prefix, excluding code `99`, rounded to the nearest integer with `.5` rounded upward. |
+
+The dataset schema encodes this rounded mean as `continuous`.
 
 Only reference rows classified as **ZIP Code Area** are eligible; post-office/large-volume-customer entries are excluded. State ties use a reproducible selection per prefix (seed 42). The RUCA mean uses all eligible areas in the prefix, including those outside the selected state.
 
-Missing values, one- or two-digit prefixes, unmatched prefixes, and UK/HK tokens produce missing derived fields. Short prefixes are not padded with zeros. The separate `field_country` is unchanged.
+Geographic coverage is incomplete and may be uneven.
 
 ## Original survey source
 - File: `CardioHealth/Resources/JSONs/cardiosurveys/cardio_wellbeing_survey.json`

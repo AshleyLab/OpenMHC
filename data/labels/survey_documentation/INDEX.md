@@ -2,13 +2,15 @@
 
 The Full/XS release contains **170 variables** (41 targets + 129 contexts), documented here with their source definitions and release encodings. Both derived geographic fields are documented in [zip.md](geography/zip.md).
 
+Counts and encodings refer to `label_types.json` and `ordinal_dictionary.json` in the release's `labels/` directory. See the [Labels API configuration](../../../src/labels/README.md#variable-dictionary) for selecting matching metadata.
+
 - **Filename convention**: `<category>/<raw_identifier>.md`. The `field_` prefix used in the benchmark dataset is stripped from filenames but recorded inside each file.
 - **Role**: target = model prediction target; context = model input feature
-- **Type**: continuous | binary | ordinal | categorical | multi_categorical
+- **Type**: continuous | binary | ordinal | categorical | multi_categorical; the rounded RUCA mean is described as integer-valued (schema: `continuous`).
 
 ## By category
 
-Variables are grouped into 16 semantic subdirectories. Each subdirectory contains its own `summary.md` landing page. The `Labels` column counts entries in `label_types.json`.
+Variables are grouped into 16 semantic subdirectories. Each subdirectory contains its own `summary.md` landing page. The `Labels` column counts entries in the release's `labels/label_types.json`.
 
 | Category | Labels | Contents |
 |----------|--------|----------|
@@ -29,13 +31,13 @@ Variables are grouped into 16 semantic subdirectories. Each subdirectory contain
 | [mindset_measures](mindset_measures/summary.md) | 32 | illness mindset (20) + exercise process mindset (7) + adequacy of activity (5) |
 | [study_metadata](study_metadata/summary.md) | 6 | labwork, device ownership flags, phone_on_user |
 
-Each subdir's `summary.md` links every variable in that subdir. The flat tables below are the canonical master reference — all 41 targets and all 129 contexts, one row each.
+Each subdir's `summary.md` links every variable in that subdir. The flat tables below document all 41 targets and all 129 contexts, one row each; the selected dataset's schemas provide the authoritative types and encodings.
 
 ## Targets (41)
 
 | Variable | Type | Raw identifier | Source file | Line | Notes |
 |----------|------|----------------|-------------|------|-------|
-| age | continuous | heartAgeDataAge | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~62 | Manually entered in Heart Age form |
+| age | continuous | (derived) | enrollment_info.json + last_labels.json | — | Calendar-year age at the recorded age-label timestamp; see [age](demographics/age.md) |
 | Atrial fibrillation (Afib) | binary | heart_disease | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~126 | Derived from enumeration value (option value=8) |
 | BiologicalSex | binary | Gender | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~74 | Male/Female from Heart Age form |
 | BMI_categories | ordinal | (derived) | CardioHealth/Startup/APHAppDelegate.m | ~1337 | Derived from BMI_values (ordinal binning) |
@@ -151,7 +153,7 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | tobaccoProductsEver | categorical | tobaccoProductsEver | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~755 | Tobacco products ever used |
 | days_admitted | continuous | days_admitted | CardioHealth/Resources/JSONs/cardiosurveys/cardio_covid_19_survey.json | ~319 | Days hospitalized for COVID |
 | field_state | categorical | (derived from field_zip) | US ZIP prefix and 2020 USDA ZIP–RUCA reference | — | Inferred state or territory abbreviation ([transformation](geography/zip.md)) |
-| field_ruca_primary_mean | continuous | (derived from field_zip) | US ZIP prefix and 2020 USDA ZIP–RUCA reference | — | Rounded mean primary RUCA code ([transformation](geography/zip.md)) |
+| field_ruca_primary_mean | integer-valued | (derived from field_zip) | US ZIP prefix and 2020 USDA ZIP–RUCA reference | — | Rounded mean primary RUCA code ([transformation](geography/zip.md)) |
 | cannabisSmoking | ordinal | cannabisSmoking | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~811 | Cannabis smoking history |
 | body_self_healing_in_many_different_circumstances | ordinal | body_self_healing_in_many_different_circumstances | CardioHealth/Resources/JSONs/cardiosurveys/cardio_illness_mindset_measure_inventory_survey.json | ~16 | Body self-healing belief (6-point scale) |
 | chronic_illness_impact | ordinal | chronic_illness_impact | CardioHealth/Resources/JSONs/cardiosurveys/cardio_illness_mindset_measure_inventory_survey.json | ~61 | Chronic illness impact (6-point scale) |
@@ -225,8 +227,8 @@ These are documented in the variable pages with derivation details:
 
 ## Summary
 
-- **Targets**: 41 (canonical, from `label_types.json`).
-- **Contexts**: 129 (canonical, from `label_types.json`).
+- **Targets**: 41 (from the release's `labels/label_types.json`).
+- **Contexts**: 129 (from the release's `labels/label_types.json`).
 - **Documentation files**: 169 variable pages + 16 category summaries + this index = 186 Markdown files. The two derived geographic fields share `geography/zip.md`, which also preserves the original postcode question.
 
 All survey identifiers are exact string matches from JSON survey definitions. Heart Age variables map to Objective-C constants in `APHHeartAgeAndRiskFactors.m` and `APHHeartAgeTaskViewController.m`. HealthKit variables map to `HKQuantityTypeIdentifier`/`HKCharacteristicTypeIdentifier` constants in `APHAppDelegate.m`. PAR-Q variables map to static NSString constants in `APHDynamicParQQuizTask.m`. The `field_` prefix is omitted from variable-page filenames. Each page identifies its original or released field names.

@@ -1,12 +1,23 @@
 # age
 
 **Benchmark column**: `age`
-**Raw identifier**: `heartAgeDataAge`
-**Obj-C constant**: `kHeartAgeTestDataAge`
+**Original questionnaire identifier**: `heartAgeDataAge`
+**Original Obj-C constant**: `kHeartAgeTestDataAge`
 **Role**: target
 **Type**: continuous
 
-## Source
+## Benchmark definition
+
+The benchmark target is derived as calendar-year age at the timestamp stored with
+the age label in `last_labels.json`: `timestamp.year - birth_year`, using the birth year in
+`enrollment_info.json`. Track 1 targets and Linear age covariates use that label
+date; age subgroups in all three tracks use enrollment `createdOn` instead.
+See the [Labels API](../../../../src/labels/README.md#behavior).
+
+The sections below preserve the original Heart Age questionnaire and historical
+observations.
+
+## Original questionnaire source
 - Obj-C constant declaration: `CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m` line 62
 - Used in Framingham calculation: `APHHeartAgeAndRiskFactors.m` lines 175, 193, 209
 - UI question: `APHHeartAgeTaskViewController.m` lines 153-162
@@ -22,7 +33,7 @@
 
 **Input format**: Numeric (integer), minimum 18, maximum 150 years
 
-## Observed values
+## Historical observed values (April 2026)
 
 **Total observations**: 57,939 — **type-enforced**: 57,939 (**unique**: 77) — raw Python types seen: `int` (57,939).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
@@ -70,6 +81,6 @@ _Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) an
 - Recent material change: `dbdd5a0` (2024, MHC-508 UK Heart Risk Task unit localization)
 
 ## Notes
-- This is the self-reported age entered by the user in the initial demographics form. It is used as a primary input to the Framingham risk calculation.
+- The original questionnaire collects self-reported age for the Framingham risk calculation.
 - Can be pre-populated from HealthKit birth date when "Are you submitting your own heart risk data?" is answered YES (line 684 in view controller).
 - The actual age appears twice: once in the demographic step and modified/corrected in the summary results before final submission (lines 500-507).

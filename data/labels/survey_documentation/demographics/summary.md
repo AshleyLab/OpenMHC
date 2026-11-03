@@ -6,7 +6,7 @@ User-identifying traits: age, sex/gender, ethnicity/race, education, and innate 
 
 | Variable | Role | Type | Source | Summary |
 |----------|------|------|--------|---------|
-| [age](age.md) | target | continuous | Heart Age form | Age entered by user for risk calculation |
+| [age](age.md) | target | continuous | Enrollment birth year + timestamp stored with the derived age label | Derived as `age_label_timestamp.year - birth_year` |
 | [BiologicalSex](BiologicalSex.md) | target | binary | Heart Age form | Male / Female (Framingham stratification) |
 | [ethnicity](ethnicity.md) | context | ordinal | cardio_CVhealth_survey.json | Hispanic/Latino origin (3 released categories) |
 | [Ethnicity_heartage](Ethnicity_heartage.md) | context | categorical | Heart Age form | Heart-age ethnicity (6 released categories) |
