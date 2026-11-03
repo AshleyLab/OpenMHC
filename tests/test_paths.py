@@ -23,6 +23,7 @@ from openmhc._dataset import (
     write_dataset_marker,
 )
 from openmhc._evaluate import _DatasetPaths
+from openmhc._label_paths import LabelPaths
 
 
 def _write_minimal_split(root: Path, version: str = "full") -> None:
@@ -64,6 +65,7 @@ def _isolate_env(monkeypatch):
         "LABEL_TYPES_PATH",
         "ORDINAL_DICTIONARY_PATH",
         "VALIDITY_CONFIG_PATH",
+        "USER_DEVICE_INFO_PATH",
     ):
         monkeypatch.delenv(var, raising=False)
     yield
@@ -191,35 +193,38 @@ class TestDatasetPaths:
 
 
 class TestLabelsEnvWiring:
-    """Verify the labels.api env-var bridge is set when missing."""
+    """Evaluation configures paths without persisting them in the environment."""
 
-    def test_sets_payload_paths_when_unset(self, monkeypatch, tmp_path):
-        """When unset, label payload env vars are pointed under the labels dir."""
+    def test_configures_payloads_without_writing_environment(self, tmp_path):
+        """Configure all participant payloads without persisting environment defaults."""
+        from labels import api
         from openmhc._evaluate import _ensure_labels_env
 
-        _ensure_labels_env(tmp_path / "labels")
-        assert os.environ["LABELS_DATA_PATH"] == str(tmp_path / "labels" / "last_labels.json")
-        assert os.environ["CONTEXT_LABELS_PATH"] == str(tmp_path / "labels" / "context_labels.json")
-        assert os.environ["ENROLLMENT_DATA_PATH"] == str(
-            tmp_path / "labels" / "enrollment_info.json"
-        )
-        assert os.environ["LABEL_VALIDITY_PATH"] == str(tmp_path / "labels" / "label_validity.json")
-        assert os.environ["HEALTHKIT_DAILY_PATH"] == str(
-            tmp_path / "labels" / "healthkit_daily.json"
-        )
+        before = dict(os.environ)
+        paths = LabelPaths.resolve(tmp_path)
+        _ensure_labels_env(paths)
+        assert dict(os.environ) == before
+        assert api.STORE.paths.labels == paths.labels
+        assert api.STORE.paths.context == paths.context
+        assert api.STORE.paths.enrollment == paths.enrollment
+        assert api.STORE.paths.validity == paths.validity
+        assert api.STORE.paths.daily == paths.daily
 
     def test_respects_user_overrides(self, monkeypatch, tmp_path):
-        """Pre-set label env vars are left untouched; only unset ones are filled."""
+        """Retain explicit overrides while resolving remaining files from the root."""
         monkeypatch.setenv("LABELS_DATA_PATH", "/somewhere/else.json")
         monkeypatch.setenv("CONTEXT_LABELS_PATH", "/somewhere/ctx.json")
         monkeypatch.setenv("ENROLLMENT_DATA_PATH", "/somewhere/enrollment.json")
+        from labels import api
         from openmhc._evaluate import _ensure_labels_env
 
-        _ensure_labels_env(tmp_path / "labels")
-        assert os.environ["LABELS_DATA_PATH"] == "/somewhere/else.json"
-        assert os.environ["CONTEXT_LABELS_PATH"] == "/somewhere/ctx.json"
-        assert os.environ["ENROLLMENT_DATA_PATH"] == "/somewhere/enrollment.json"
-        assert os.environ["LABEL_VALIDITY_PATH"] == str(tmp_path / "labels" / "label_validity.json")
+        before = dict(os.environ)
+        _ensure_labels_env(LabelPaths.resolve(tmp_path))
+        assert dict(os.environ) == before
+        assert api.STORE.paths.labels == Path("/somewhere/else.json")
+        assert api.STORE.paths.context == Path("/somewhere/ctx.json")
+        assert api.STORE.paths.enrollment == Path("/somewhere/enrollment.json")
+        assert api.STORE.paths.validity == tmp_path / "labels" / "label_validity.json"
 
 
 class TestLabelsApiResolution:
@@ -232,10 +237,10 @@ class TestLabelsApiResolution:
         api = importlib.reload(api)
 
         assert api.BUNDLED_METADATA_DIR == bundled_metadata_dir()
-        assert api.LABEL_TYPES_PATH == bundled_metadata_dir() / "label_types.json"
-        assert api.ORDINAL_DICTIONARY_PATH == bundled_metadata_dir() / "ordinal_dictionary.json"
-        assert api.VALIDITY_CONFIG_PATH == bundled_metadata_dir() / "validity_config.json"
-        assert api.LABELS_PATH is None
+        assert api._PATHS.label_types == bundled_metadata_dir() / "label_types.json"
+        assert api._PATHS.ordinal_dictionary == bundled_metadata_dir() / "ordinal_dictionary.json"
+        assert api._PATHS.validity_config == bundled_metadata_dir() / "validity_config.json"
+        assert api._PATHS.labels is None
         assert len(api.TARGET_NAMES) > 0
 
     def test_large_payloads_resolve_from_dataset_root(self, monkeypatch, tmp_path):
@@ -247,12 +252,12 @@ class TestLabelsApiResolution:
 
         api = importlib.reload(api)
 
-        assert api.LABELS_PATH == labels_dir / "last_labels.json"
-        assert api.CONTEXT_LABELS_PATH == labels_dir / "context_labels.json"
-        assert api.ENROLLMENT_PATH == labels_dir / "enrollment_info.json"
-        assert api.LABEL_VALIDITY_PATH == labels_dir / "label_validity.json"
-        assert api.HEALTHKIT_DAILY_PATH == labels_dir / "healthkit_daily.json"
-        assert api.LABEL_TYPES_PATH == bundled_metadata_dir() / "label_types.json"
+        assert api._PATHS.labels == labels_dir / "last_labels.json"
+        assert api._PATHS.context == labels_dir / "context_labels.json"
+        assert api._PATHS.enrollment == labels_dir / "enrollment_info.json"
+        assert api._PATHS.validity == labels_dir / "label_validity.json"
+        assert api._PATHS.daily == labels_dir / "healthkit_daily.json"
+        assert api._PATHS.label_types == bundled_metadata_dir() / "label_types.json"
 
     def test_per_file_env_overrides_dataset_root(self, monkeypatch, tmp_path):
         """A per-file env var overrides the dataset root for that one payload."""
@@ -264,8 +269,8 @@ class TestLabelsApiResolution:
 
         api = importlib.reload(api)
 
-        assert api.LABELS_PATH == custom.resolve()
-        assert api.ENROLLMENT_PATH == (tmp_path / "dataset" / "labels" / "enrollment_info.json")
+        assert api._PATHS.labels == custom.resolve()
+        assert api._PATHS.enrollment == (tmp_path / "dataset" / "labels" / "enrollment_info.json")
 
     def test_large_payload_access_raises_without_explicit_root(self):
         """Accessing a large payload with no configured root raises ``ValueError``."""

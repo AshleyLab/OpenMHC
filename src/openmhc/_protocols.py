@@ -36,12 +36,14 @@ class EvalContext:
         dates: per-user eligible segment dates (daily) / week_starts (weekly), aligned
             with ``user_ids`` — for cache baselines that pool per-user over the cohort's
             eligible days (e.g. MAE). ``None`` when not provided.
+        data_dir: Dataset root selected by the evaluator, for build-on-miss features.
     """
 
     task: str
     split: str
     user_ids: np.ndarray
     dates: list | None = None
+    data_dir: str | None = None
 
 
 @runtime_checkable

@@ -5,7 +5,8 @@ used over time.  The underlying data file (``user_device_info.json``) is
 produced upstream by the MHC-benchmark build pipeline and ships separately
 from ``last_labels.json``.  This module loads it lazily so importing
 :mod:`devices` works even when the file is not present in the bundle --
-the first query is what raises :class:`FileNotFoundError`.
+the first query raises :class:`FileNotFoundError` for a missing file, or
+:class:`ValueError` if no dataset path has been configured.
 
 Timestamps must be tz-naive (the underlying interval bounds are date-only,
 read as midnight UTC-naive); passing a tz-aware ``pd.Timestamp`` will raise
@@ -23,7 +24,8 @@ Quick start::
 
 Both :func:`get_devices` and :func:`get_device_timeline` (and any direct
 ``STORE.timelines`` access) trigger the lazy load; whichever runs first
-will raise :class:`FileNotFoundError` if the JSON is missing.
+will raise :class:`FileNotFoundError` if the JSON is missing, or
+:class:`ValueError` if no path has been configured.
 
 The JSON schema is::
 
@@ -43,15 +45,13 @@ upstream build; an unrecognised string falls through to
 from __future__ import annotations
 
 import json
-import os
 from bisect import bisect_right
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "labels"
-USER_DEVICE_INFO_PATH = Path(os.getenv("USER_DEVICE_INFO_PATH", DATA_DIR / "user_device_info.json"))
+from openmhc._label_paths import LabelPaths
 
 
 @dataclass(frozen=True)
@@ -148,7 +148,7 @@ def _interval_at(
 class _DeviceStore:
     """Lazily loads ``user_device_info.json`` and serves per-user lookups."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path | None) -> None:
         self.path = path
         self._timelines: dict[str, DeviceTimeline] | None = None
 
@@ -156,6 +156,11 @@ class _DeviceStore:
     def timelines(self) -> dict[str, DeviceTimeline]:
         """All per-user timelines, loaded on first access."""
         if self._timelines is None:
+            if self.path is None:
+                raise ValueError(
+                    "Call devices.configure(data_dir=...) or labels.configure(data_dir=...). "
+                    "After setting MHC_DATA_DIR or USER_DEVICE_INFO_PATH, call devices.configure()."
+                )
             self._timelines = _load_device_info(self.path)
         return self._timelines
 
@@ -182,7 +187,8 @@ def _load_device_info(path: Path) -> dict[str, DeviceTimeline]:
         raise FileNotFoundError(
             f"user_device_info.json not found at {path}. "
             "This file ships separately from the labels bundle; "
-            "set USER_DEVICE_INFO_PATH or place it under data/labels/."
+            "Call devices.configure(data_dir=...) to select another dataset, or set "
+            "USER_DEVICE_INFO_PATH and call devices.configure() to apply it."
         )
     with path.open("r") as handle:
         raw = json.load(handle)
@@ -221,7 +227,16 @@ def _parse_intervals(
     return tuple(parsed)
 
 
-STORE = _DeviceStore(USER_DEVICE_INFO_PATH)
+STORE = _DeviceStore(LabelPaths.resolve().devices)
+
+
+def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = None) -> None:
+    """Select optional device data and clear cached timelines in place."""
+    if paths is not None and data_dir is not None:
+        raise ValueError("Pass data_dir or paths, not both")
+    resolved = paths if paths is not None else LabelPaths.resolve(data_dir)
+    STORE.path = resolved.devices
+    STORE._timelines = None
 
 
 def get_devices(health_code: str, timestamp: pd.Timestamp) -> DeviceSnapshot:
@@ -240,6 +255,7 @@ def get_devices(health_code: str, timestamp: pd.Timestamp) -> DeviceSnapshot:
     Raises:
         KeyError: If *health_code* has no device records.
         FileNotFoundError: If ``user_device_info.json`` is not on disk.
+        ValueError: If no device path is configured or intervals overlap.
     """
     return STORE.get_timeline(health_code).snapshot_at(timestamp)
 
@@ -253,5 +269,6 @@ def get_device_timeline(health_code: str) -> DeviceTimeline:
     Raises:
         KeyError: If *health_code* has no device records.
         FileNotFoundError: If ``user_device_info.json`` is not on disk.
+        ValueError: If no device path is configured or intervals overlap.
     """
     return STORE.get_timeline(health_code)
