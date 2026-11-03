@@ -340,14 +340,15 @@ def _phase_bootstrap(
         bootstrap_fair_skill_score,
     )
 
-    # Demographics default to <dataset_root>/labels/ (resolved by the labels API
+    # Demographics default to <dataset_root>/labels/ (resolved by LabelPaths
     # via MHC_DATA_DIR); the sweep config may override either path explicitly.
-    from labels.api import ENROLLMENT_PATH as _ENROLL_DEFAULT
-    from labels.api import LABELS_PATH as _LABELS_DEFAULT
+    from openmhc._label_paths import LabelPaths
 
-    labels_path = bs.get("labels_path") or (str(_LABELS_DEFAULT) if _LABELS_DEFAULT else None)
+    paths = LabelPaths.resolve()
+
+    labels_path = bs.get("labels_path") or (str(paths.labels) if paths.labels else None)
     enrollment_path = bs.get("enrollment_path") or (
-        str(_ENROLL_DEFAULT) if _ENROLL_DEFAULT else None
+        str(paths.enrollment) if paths.enrollment else None
     )
     if labels_path is None or enrollment_path is None:
         raise SystemExit(

@@ -118,9 +118,10 @@ def main() -> int:
     )
     print(f"skill/rank bootstrap done ({time.time() - t0:.0f}s)")
 
-    from labels.api import ENROLLMENT_PATH, LABELS_PATH
+    from openmhc._label_paths import LabelPaths
 
-    if not LABELS_PATH or not ENROLLMENT_PATH:
+    paths = LabelPaths.resolve()
+    if not paths.labels or not paths.enrollment:
         raise SystemExit("labels/enrollment unresolved — set MHC_DATA_DIR.")
     fr = bootstrap_fair_skill_score(
         models=models,
@@ -129,8 +130,8 @@ def main() -> int:
         binary_metrics=list(_spec.PAPER_BINARY_METRICS),
         continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
         binary_channel_indices=_spec.BINARY_CHANNELS,
-        labels_path=str(LABELS_PATH),
-        enrollment_path=str(ENROLLMENT_PATH),
+        labels_path=str(paths.labels),
+        enrollment_path=str(paths.enrollment),
         age_bins=AGE_BINS,
         n_boot=N_BOOT,
         seed=SEED,

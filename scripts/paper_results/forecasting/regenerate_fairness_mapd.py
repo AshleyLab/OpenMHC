@@ -75,9 +75,10 @@ def main() -> int:
     )
     logger.info("Substrate: %d rows. Running MAPD fairness (point + %d-draw BCa)...", len(substrate), N_BOOT)
 
-    from labels.api import ENROLLMENT_PATH, LABELS_PATH
+    from openmhc._label_paths import LabelPaths
 
-    if not LABELS_PATH or not ENROLLMENT_PATH:
+    paths = LabelPaths.resolve()
+    if not paths.labels or not paths.enrollment:
         raise SystemExit("labels/enrollment unresolved — set MHC_DATA_DIR.")
 
     tables = bootstrap_fair_skill_score(
@@ -87,8 +88,8 @@ def main() -> int:
         binary_metrics=list(_spec.PAPER_BINARY_METRICS),
         continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
         binary_channel_indices=_spec.BINARY_CHANNELS,
-        labels_path=str(LABELS_PATH),
-        enrollment_path=str(ENROLLMENT_PATH),
+        labels_path=str(paths.labels),
+        enrollment_path=str(paths.enrollment),
         age_bins=AGE_BINS,
         n_boot=N_BOOT,
         seed=SEED,

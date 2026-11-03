@@ -251,7 +251,7 @@ def test_fingerprint_uses_actual_paths_and_covariate_helper(tmp_path, monkeypatc
     script = runpy.run_path(str(Path(__file__).parents[1] / "scripts/fingerprint_labels.py"))
     script["main"]()
     result = json.loads(capsys.readouterr().out)
-    assert result["files"]["devices"]["path"] == str(paths.devices)
+    assert result["files"]["USER_DEVICE_INFO_PATH"]["path"] == str(paths.devices)
     assert len(result["files"]) == 9
     assert all(value == ["age", "extra"] for value in result["covariate_exclusions"].values())
 
