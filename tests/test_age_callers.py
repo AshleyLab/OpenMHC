@@ -57,13 +57,13 @@ def test_target_changes_values_only(caller_dataset, tmp_path, grain):
     """Daily/weekly masks and missing-target cohorts survive dynamic age lookup."""
     from downstream_evaluation.data.provider import TaskDataProvider
 
-    _, lookup = caller_dataset
+    folder, lookup = caller_dataset
     date_col = "week_start" if grain == "weekly" else "date"
     lookup = lookup.rename(columns={"date": date_col})
     path = tmp_path / "lookup.parquet"
     lookup.to_parquet(path)
     splits = {"train": ["known", "no_target", "missing_year"], "validation": ["known"]}
-    provider = TaskDataProvider(path, splits, grain)
+    provider = TaskDataProvider(path, splits, grain, data_dir=folder.parent)
     td = provider.task_data("age", "train")
     assert td.user_ids.tolist() == ["known"]
     assert td.labels.tolist() == [45]
@@ -106,7 +106,7 @@ def test_eligible_target_metadata_errors_do_not_shrink_cohort(caller_dataset, tm
     path = tmp_path / "lookup.parquet"
     lookup.to_parquet(path)
     with pytest.raises(ValueError, match="Cannot calculate age target"):
-        TaskDataProvider(path, {"test": ["known"]}).task_data("age", "test")
+        TaskDataProvider(path, {"test": ["known"]}, data_dir=folder.parent).task_data("age", "test")
 
 
 def test_tsfm_uses_same_age_anchor(caller_dataset):
@@ -118,6 +118,66 @@ def test_tsfm_uses_same_age_anchor(caller_dataset):
     assert _label_timestamp("no_target", "age", pd.Timestamp("2020-01-01")) is None
     assert _label_timestamp("known", "BiologicalSex", pd.Timestamp("2020-01-01")) == pd.Timestamp(
         "2025-06-01"
+    )
+
+
+@pytest.mark.parametrize("encoder_name", ["toto", "chronos2"])
+@pytest.mark.parametrize("fault", ["multiple", "null", "sentinel"])
+def test_tsfm_invalid_age_does_not_abort_extraction(
+    caller_dataset, tmp_path, monkeypatch, encoder_name, fault
+):
+    """Skip bad age windows, keep other tasks, and reuse valid masked-age features."""
+    from types import SimpleNamespace
+
+    import h5py
+
+    from downstream_evaluation.models.chronos2 import Chronos2
+    from downstream_evaluation.models.toto import Toto
+
+    folder, _ = caller_dataset
+    payload_path = folder / "last_labels.json"
+    payload = json.loads(payload_path.read_text())
+    series = {"timestamps": ["2025-06-01"], "values": [None if fault == "null" else -1]}
+    if fault == "multiple":
+        series = {"timestamps": ["2024-06-01", "2025-06-01"], "values": [44, 45]}
+    payload["age"]["no_target"] = series
+    payload_path.write_text(json.dumps(payload))
+    (folder.parent / "dataset_version.json").write_text('{"version": "xs"}')
+    cls = {"toto": Toto, "chronos2": Chronos2}[encoder_name]
+    kwargs = dict(data_dir=str(folder.parent), cache_dir=str(tmp_path / "embeddings"))
+    encoder = cls(**kwargs)
+    # Process the invalid age first to prove extraction continues to the valid user.
+    encoder._grouped = {"test": ["no_target", "known"]}
+    values = np.ones((1, 24, 19), dtype=np.float32)
+    encoder._loader = SimpleNamespace(user_days=lambda uid: (values, ["2025-06-01"]))
+    encoder._handle, encoder._window_hours = object(), 24
+    seen = []
+
+    def run_batch(handle, examples, window_hours):
+        seen.extend((e.user_id, e.task, e.label_date) for e in examples)
+        return np.ones((len(examples), 19, 4), dtype=np.float32)
+
+    monkeypatch.setattr(encoder, "_run_batch", run_batch)
+    encoder._build_split("test", ["age", "BiologicalSex"])
+    assert sorted(seen) == [
+        ("known", "BiologicalSex", "2025-06-01"),
+        ("known", "age", "2025-06-01"),
+        ("no_target", "BiologicalSex", "2025-06-01"),
+    ]
+    with h5py.File(encoder._task_file("test", "age"), "r") as handle:
+        assert handle.attrs["cache_complete"]
+        assert handle["user_ids"][:].astype(str).tolist() == ["known"]
+        assert handle["dates"][:].astype(str).tolist() == ["2025-06-01"]
+    fresh = cls(**kwargs)
+    monkeypatch.setattr(
+        fresh, "_ensure_loaded", lambda: pytest.fail("A compatible cache must not load weights")
+    )
+    assert fresh._pending_tasks("test", ["age", "BiologicalSex"]) == []
+    # The fixture's known age has a false validity mask, but its recorded anchor
+    # still produces the same features on cold extraction and a fresh cache read.
+    np.testing.assert_array_equal(
+        fresh._load_task("test", "age")["known"],
+        encoder._load_task("test", "age")["known"],
     )
 
 
@@ -276,7 +336,7 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
         (folder.parent, 45, 39, "30-39"),
     ):
         labels.configure(root)
-        td = TaskDataProvider(path, {"test": ["known"]}).task_data("age", "test")
+        td = TaskDataProvider(path, {"test": ["known"]}, data_dir=root).task_data("age", "test")
         assert td.labels.tolist() == [target_age]
         demo = build_demo_user_lookup_from_labels_df(lookup, ["age"])
         assert demo["known"][0] == target_age

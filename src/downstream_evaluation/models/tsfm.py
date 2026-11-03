@@ -44,7 +44,9 @@ from downstream_evaluation.models._feature_align import aligned_feature_matrix
 logger = logging.getLogger(__name__)
 
 HOURS_PER_DAY = 24
-INPUT_PREPROCESSING_VERSION = "canonical_hourly_mask_v1"
+# v2 preserves hourly masks and anchors age windows at the recorded target date,
+# independent of the reference-date validity mask. v1 age caches are incompatible.
+INPUT_PREPROCESSING_VERSION = "canonical_hourly_mask_v2"
 
 # The 32 headline cross-sectional tasks.
 FINAL_TASKS = [
@@ -182,7 +184,7 @@ def _label_timestamp(user_id, task, reference_ts):
 
         try:
             return age_label_timestamp(user_id)
-        except KeyError:
+        except (KeyError, ValueError):
             return None
 
     try:
@@ -264,7 +266,7 @@ class TSFMEncoder:
     (build-on-miss extraction over raw ``daily_hourly_hf``, GPU), read the task file,
     mean-pool across the 19 channels, align to the cohort ``user_ids``, and run the
     uniform :class:`openmhc.LinearProbe`. Subclasses override ``_load_model`` and
-    ``_run_batch``. New caches record the hourly-mask preprocessing version.
+    ``_run_batch``. New caches record the hourly-mask and label-anchor version.
     Cache reads require matching checkpoint, dataset and extraction settings,
     plus a completion marker. Legacy caches must be regenerated in a fresh directory.
     """
@@ -377,13 +379,14 @@ class TSFMEncoder:
 
     @staticmethod
     def _validate_cache_preprocessing(handle, path: Path) -> None:
-        """Require embeddings produced with the current hourly mask policy."""
+        """Require embeddings produced with the current mask and label-anchor policy."""
         version = handle.attrs.get("input_preprocessing")
         if version != INPUT_PREPROCESSING_VERSION:
             raise ValueError(
                 f"Incompatible TSFM embedding cache {path}: input_preprocessing={version!r}; "
                 f"expected {INPUT_PREPROCESSING_VERSION!r}. Use a fresh cache_dir to regenerate "
-                "embeddings with the preserved hourly mask. Existing files have not been changed."
+                "embeddings with the current hourly mask and label-anchor policy. "
+                "Existing files have not been changed."
             )
 
     def _pending_tasks(self, split: str, tasks: list[str]) -> list[str]:

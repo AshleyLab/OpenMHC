@@ -287,9 +287,10 @@ def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap, do_
 
     # ---- Gate C-pre fairness: point + bootstrap (still max-min) ----
     if do_fairness:
-        from labels.api import ENROLLMENT_PATH, LABELS_PATH
+        from openmhc._label_paths import LabelPaths
 
-        if not LABELS_PATH or not ENROLLMENT_PATH:
+        paths = LabelPaths.resolve()
+        if not paths.labels or not paths.enrollment:
             rep.check("GateC.fairness", False, "labels/enrollment unresolved (set MHC_DATA_DIR)")
         else:
             ft = bootstrap_fair_skill_score(
@@ -297,7 +298,7 @@ def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap, do_
                 continuous_metrics=CONTINUOUS_METRICS, binary_metrics=BINARY_METRICS,
                 continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
                 binary_channel_indices=_spec.BINARY_CHANNELS,
-                labels_path=str(LABELS_PATH), enrollment_path=str(ENROLLMENT_PATH),
+                labels_path=str(paths.labels), enrollment_path=str(paths.enrollment),
                 age_bins=AGE_BINS, n_boot=N_BOOT, seed=SEED, ci_level=CI_LEVEL,
                 within_user_aggregation="micro", bca=True, per_user_metrics=substrate,
             )

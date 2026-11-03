@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
+from collections.abc import Sequence
 
 import pandas as pd
 
@@ -17,7 +18,7 @@ from labels.api import STORE, LabelsStore
 logger = logging.getLogger(__name__)
 
 
-def bin_age(age: int, age_bins: list[int]) -> str:
+def bin_age(age: int, age_bins: Sequence[int]) -> str:
     """Bin an age into a decade-style label.
 
     Args:
@@ -38,30 +39,33 @@ def bin_age(age: int, age_bins: list[int]) -> str:
 def get_user_demographics(
     store: LabelsStore,
     user_ids: list[str],
+    *,
+    age_bins: Sequence[int] = (18, 30, 40, 50, 60),
 ) -> dict[str, dict[str, object]]:
-    """Look up enrollment age, birth year and biological sex for each user.
+    """Look up enrollment age and sex, warning about unknown age groups.
 
     Args:
         store: Labels store for data access.
         user_ids: Unique user identifiers (health codes).
+        age_bins: Age-group edges used by the caller, for coverage warnings.
 
     Returns:
-        Dict mapping user_id to birth_year, age_at_enrollment (or None), and sex.
+        Dict mapping user_id to age_at_enrollment (or None), and sex.
         Sex is "male", "female", or "unknown".
+
+    Unreadable or malformed enrollment files raise before per-user processing.
     """
     demographics: dict[str, dict[str, object]] = {}
+    if not user_ids:
+        return demographics
+    enrollment = store.enrollment
 
     for uid in user_ids:
-        birth_year = None
         age = None
         sex = "unknown"
 
         try:
-            birth_year = store.enrollment.get_birth_year(uid)
-        except (KeyError, ValueError, TypeError, OverflowError):
-            pass
-        try:
-            age = store.enrollment.age_at_enrollment(uid)
+            age = enrollment.age_at_enrollment(uid)
         except (KeyError, ValueError):
             pass
 
@@ -80,14 +84,19 @@ def get_user_demographics(
         except (KeyError, LookupError):
             pass
 
-        demographics[uid] = {"birth_year": birth_year, "age_at_enrollment": age, "sex": sex}
+        demographics[uid] = {"age_at_enrollment": age, "sex": sex}
 
-    if user_ids and all(v["age_at_enrollment"] is None for v in demographics.values()):
+    unknown = sum(
+        row["age_at_enrollment"] is None
+        or bin_age(row["age_at_enrollment"], age_bins) == "unknown"
+        for row in demographics.values()
+    )
+    if unknown:
         logger.warning(
-            "Age fairness will be empty: 0/%d users have usable enrollment age. "
-            "Check birth_year and createdOn in enrollment_info.json. "
-            "Sex fairness still works if BiologicalSex labels are present.",
-            len(user_ids),
+            "%d/%d users have unknown age groups. Check birth_year and createdOn "
+            "in enrollment_info.json and the age-bin range.%s",
+            unknown, len(demographics),
+            " Age-based fairness has no usable age groups." if unknown == len(demographics) else "",
         )
 
     return demographics
@@ -131,7 +140,7 @@ def build_subgroup_mapping(
 
     unique_users = sorted(eval_user_ids)
     logger.info(f"Looking up demographics for {len(unique_users)} unique users...")
-    user_demographics = get_user_demographics(store, unique_users)
+    user_demographics = get_user_demographics(store, unique_users, age_bins=age_bins)
 
     # Build per-split mapping
     mapping: dict[str, dict[int, dict[str, str]]] = {}

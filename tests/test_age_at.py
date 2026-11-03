@@ -103,3 +103,31 @@ def test_switching_datasets_refreshes_age(age_dataset, tmp_path, write_age_datas
     assert age_at("known", date) == 30
     labels.configure(age_dataset)
     assert age_at("known", date) == 40
+
+
+@pytest.mark.parametrize("query", ["age_at", "age_at_enrollment", "age_label_timestamp"])
+def test_first_age_query_configures_selected_dataset(
+    query, label_schema_environment, tmp_path, monkeypatch, write_age_dataset
+):
+    """Direct age helpers initialize the selected root without an earlier label query."""
+    from downstream_evaluation.data.provider import age_label_timestamp
+    from openmhc._label_paths import LabelPaths
+
+    root = tmp_path / "selected"
+    folder = write_age_dataset(root)
+    (folder / "enrollment_info.json").write_text(
+        json.dumps({"u": {"birth_year": 1980, "createdOn": "2010-06-01"}})
+    )
+    (folder / "last_labels.json").write_text(
+        json.dumps({"age": {"u": {"timestamps": ["2015-06-01"], "values": [35]}}})
+    )
+    monkeypatch.setenv("MHC_DATA_DIR", str(root))
+    monkeypatch.setattr(api, "_SCHEMAS_CONFIGURED", False)
+    if query == "age_at":
+        assert labels.age_at("u", pd.Timestamp("2020-01-01")) == 40
+    elif query == "age_at_enrollment":
+        assert labels.age_at_enrollment("u") == 30
+    else:
+        assert age_label_timestamp("u") == pd.Timestamp("2015-06-01")
+    assert api._SCHEMAS_CONFIGURED
+    assert api._PATHS == LabelPaths.resolve(root)

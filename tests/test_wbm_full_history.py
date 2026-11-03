@@ -25,11 +25,12 @@ def dataset(tmp_path, monkeypatch, age_label_environment):
         "u1": {"birth_year": 1970, "createdOn": "2015-01-01"},
         "u2": {"birth_year": 1960, "createdOn": "2015-01-01"},
     }))
-    processed = tmp_path / "processed"
+    root = folder.parent
+    processed = root / "processed"
     processed.mkdir()
-    splits = tmp_path / "splits.json"
+    splits = root / "splits.json"
     splits.write_text(json.dumps({"train": [], "validation": [], "test": ["u1", "u2"]}))
-    monkeypatch.setattr(_DatasetPaths, "from_root", lambda root: SimpleNamespace(root=tmp_path, splits_file=splits))
+    monkeypatch.setattr(_DatasetPaths, "from_root", lambda _: SimpleNamespace(root=root, splits_file=splits))
     frame = pd.DataFrame({
         "user_id": ["u1", "u1", "u2"],
         "week_start": ["2020-01-01", "2024-01-01", "2024-01-01"],
@@ -40,7 +41,7 @@ def dataset(tmp_path, monkeypatch, age_label_environment):
     old = frame.copy()
     old.loc[[1, 2], ["Diabetes", "age"]] = -1
     old.to_parquet(processed / "weekly_labels_lookup_stride7_windowed.parquet")
-    return tmp_path
+    return root
 
 
 @pytest.mark.parametrize("task", ["Diabetes", "age"])

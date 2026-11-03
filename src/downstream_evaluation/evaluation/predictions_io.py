@@ -19,12 +19,15 @@ Sex comes from the labels lookup's ``BiologicalSex`` column.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from downstream_evaluation.evaluation.metrics import get_task_type, prepare_predictions
+
+logger = logging.getLogger(__name__)
 
 # Five age bands (plus ``unknown``) — the subgroups the fairness analysis slices on.
 _AGE_GROUP_BINS: tuple[tuple[float, float, str], ...] = (
@@ -175,18 +178,30 @@ def write_subgroup_map(
     Age uses enrollment createdOn; sex is the first non-sentinel lookup value.
     Missing or invalid enrollment metadata gives an ``unknown`` age group.
     Users remain present even when their age target is missing from the lookup.
+    Unknown counts are logged; unreadable or malformed enrollment files raise.
     """
-    from labels.api import age_at_enrollment
+    from labels.api import STORE, _ensure_configured
 
+    _ensure_configured()
+    # Load outside the per-user try: file corruption is not a missing age.
+    enrollment = STORE.enrollment
     lookup = pd.read_parquet(lookup_path, columns=["user_id", "BiologicalSex"])
     sex_by = _first_valid_by_user(lookup, "BiologicalSex")
     subgroups = {}
     for u in sorted({str(x) for x in users}):
         try:
-            age = age_at_enrollment(u)
+            age = enrollment.age_at_enrollment(u)
         except (KeyError, ValueError):
             age = None
         subgroups[u] = {"age_group": _age_group(age), "sex": _sex(sex_by.get(u))}
+    unknown = sum(row["age_group"] == "unknown" for row in subgroups.values())
+    if unknown:
+        logger.warning(
+            "%d/%d users have unknown age groups. Check birth_year and createdOn "
+            "in enrollment_info.json and the age-bin range.%s",
+            unknown, len(subgroups),
+            " Age-based fairness has no usable age groups." if unknown == len(subgroups) else "",
+        )
     out_dir = Path(predictions_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with (out_dir / "_subgroups.json").open("w") as f:

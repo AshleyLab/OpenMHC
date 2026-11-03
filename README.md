@@ -355,14 +355,14 @@ for the Track 1 / Track 2 per-method substrate columns and dtypes, and
 | `configs/` | Hydra configs for evaluation, training, sweeps, and output layout |
 | `jobs/` | SLURM wrappers for Sherlock and SC cluster runs |
 | `tools/` and `scripts/` | Release, leaderboard, parity, and paper-result utilities |
-| `data/labels/` | Bundled schema-only label metadata |
+| `data/labels/` | Benchmark feature exclusions and historical survey documentation |
 | `data/imputation/masks/` | Bundled precomputed imputation masks for reproducible scoring |
 | `notebooks/quickstart_benchmark.ipynb` | End-to-end benchmark example notebook |
 | `notebooks/example_lsm2_representation_extraction.ipynb` | Extract representations from the pretrained LSM2 daily encoder |
 | `tools/leaderboard_docs/` | Docs mirrored into the HF leaderboard dataset repo |
 
 The participant data itself is not tracked in this repository. See
-[DATASET.md](DATASET.md) for download instructions and expected layout.
+[DATASET.md](DATASET.md) for access requirements, download instructions and expected layout.
 
 ## Citation
 

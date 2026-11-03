@@ -226,7 +226,7 @@ def _build_subgroup_mapping(
         split,
         len(unique_users),
     )
-    user_demographics = get_user_demographics(STORE, unique_users)
+    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
 
     out: dict[int, dict[str, str]] = {}
     for sidx, uid in zip(sample_idxs, user_ids):

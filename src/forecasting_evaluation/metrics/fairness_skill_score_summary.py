@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,9 @@ from forecasting_evaluation.metrics.skill_score_summary import (  # noqa: E402
 
 DEFAULT_AGE_BINS = (18, 30, 40, 50, 60)
 DEFAULT_DEMOGRAPHIC_ATTRS = ("age_group", "sex")
+
+logger = logging.getLogger(__name__)
+
 
 def _last_value(entries: dict[str, Any], user_id: str) -> Any | None:
     item = entries.get(user_id)
@@ -99,18 +103,16 @@ def load_user_demographics(
 
     Age uses each user's enrollment createdOn and birth year. Missing or invalid
     enrollment metadata gives an unknown age group. Sex is the latest
-    BiologicalSex label value.
+    BiologicalSex label value. Unknown counts are logged; unreadable or malformed
+    enrollment files raise.
     """
-    from labels.api import EnrollmentIndex
+    from labels.api import EnrollmentIndex, _load_enrollment
 
     labels_file = Path(labels_path)
     enrollment_file = Path(enrollment_path)
     with labels_file.open("r", encoding="utf-8") as file:
         labels_data = json.load(file)
-    with enrollment_file.open("r", encoding="utf-8") as file:
-        enrollment = json.load(file)
-
-    enrollment_index = EnrollmentIndex(enrollment)
+    enrollment_index = EnrollmentIndex(_load_enrollment(enrollment_file))
     sex_entries = labels_data.get("BiologicalSex", {})
 
     demographics: dict[str, dict[str, str]] = {}
@@ -124,6 +126,15 @@ def load_user_demographics(
             "age_group": bin_age(age, age_bins=age_bins),
             "sex": normalize_sex(sex_value),
         }
+    unknown = sum(row["age_group"] == "unknown" for row in demographics.values())
+    if unknown:
+        logger.warning(
+            "%d/%d users have unknown age groups. Check birth_year and createdOn "
+            "in enrollment_info.json and the age-bin range.%s",
+            unknown,
+            len(demographics),
+            " Age-based fairness has no usable age groups." if unknown == len(demographics) else "",
+        )
     return demographics
 
 
@@ -744,10 +755,16 @@ def main() -> None:
     args = build_parser().parse_args()
     from openmhc._label_paths import LabelPaths
 
-    paths = LabelPaths.resolve(
-        args.data_dir, labels=args.labels_path, enrollment=args.enrollment_path
+    paths = LabelPaths.resolve(args.data_dir)
+    labels_path = (
+        Path(args.labels_path).expanduser().resolve() if args.labels_path else paths.labels
     )
-    if paths.labels is None or paths.enrollment is None:
+    enrollment_path = (
+        Path(args.enrollment_path).expanduser().resolve()
+        if args.enrollment_path
+        else paths.enrollment
+    )
+    if labels_path is None or enrollment_path is None:
         raise ValueError(
             "Provide --data-dir / MHC_DATA_DIR or explicit labels and enrollment paths"
         )
@@ -772,8 +789,8 @@ def main() -> None:
             clip_lower=float(args.clip_lower),
             clip_upper=float(args.clip_upper),
             lambda_fairness=float(args.lambda_fairness),
-            labels_path=paths.labels,
-            enrollment_path=paths.enrollment,
+            labels_path=labels_path,
+            enrollment_path=enrollment_path,
             within_user_aggregation=str(args.within_user_aggregation),
         )
     )

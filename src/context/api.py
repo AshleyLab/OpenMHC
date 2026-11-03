@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from labels.api import CONTEXT_NAMES, LABEL_NAMES, LabelResult, get_labels
+from labels.api import CONTEXT_NAMES, LABEL_NAMES, LabelResult, _ensure_configured, get_labels
 
 
 def get_context(
@@ -52,6 +52,7 @@ def get_context(
         ValueError: If ``context_label`` is not in :data:`CONTEXT_NAMES`.
         KeyError: If the healthCode is not found for this label.
     """
+    _ensure_configured()
     if context_label not in LABEL_NAMES:
         raise ValueError(f"Unknown label: {context_label}")
     if context_label not in CONTEXT_NAMES:

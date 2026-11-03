@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from imputation_evaluation.evaluation.pair_writer import PairWriter
     from imputation_evaluation.masking.generator import MaskCache
     from imputation_evaluation.methods.base import ImputationMethod
+    from openmhc._label_paths import LabelPaths
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,7 @@ def _init_worker(
     window_descriptors: list[list[int]] | None = None,
     window_day_offsets: list[list[int]] | None = None,
     fallback_fill: np.ndarray | None = None,
+    label_paths: LabelPaths | None = None,
 ) -> None:
     """Initialize worker process with shared read-only data.
 
@@ -238,7 +240,13 @@ def _init_worker(
         fallback_fill: Optional per-channel ``(C,)`` float32 array. When set,
             NaN cells at target positions are substituted in place and counted
             into the batch counts. ``None`` disables substitution.
+        label_paths: Parent's resolved dataset configuration, including explicit
+            overrides. Apply before custom imputers query labels or devices.
     """
+    if label_paths is not None:
+        from labels import api as labels_api
+
+        labels_api.configure(paths=label_paths)
     global _worker_mask_cache, _worker_method, _worker_scenarios
     global _worker_channel_stds, _worker_fallback_fill, _worker_split_name
     global _worker_n_days, _worker_window_descriptors, _worker_window_day_offsets
@@ -653,6 +661,8 @@ class ImputationEvaluator:
 
         if use_parallel:
             # Streaming batch-level parallelism
+            from labels import api as labels_api
+
             batch_offset = 0
             in_flight: dict = {}  # future -> batch_idx
 
@@ -669,6 +679,7 @@ class ImputationEvaluator:
                     window_descriptors,
                     window_day_offsets,
                     self._fallback_fill,
+                    labels_api._PATHS if labels_api._SCHEMAS_CONFIGURED else None,
                 ),
             ) as executor:
                 for batch_idx, batch_data in enumerate(dataloader):

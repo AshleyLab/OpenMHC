@@ -19,6 +19,8 @@ from downstream_evaluation.evaluation.per_user_pairs import (
 )
 from downstream_evaluation.evaluation.predictions_io import _safe_task
 
+pytestmark = pytest.mark.usefixtures("label_schema_environment")
+
 
 def _write_task(pred_dir, method, task, df):
     d = pred_dir / method / _safe_task(task)
@@ -218,3 +220,19 @@ def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
     # An unknown baseline is a loud error.
     with pytest.raises(ValueError, match="baseline"):
         reduce_substrate_to_point(df, baseline="nonexistent")
+
+    # Reordering valid rows must preserve every headline result.
+    assert reduce_substrate_to_point(df.iloc[::-1]) == res
+
+    # Both cross-method and cross-task disagreements must fail in either order,
+    # including an unknown group conflicting with a known group.
+    for attr, replacement in (("age_group", "60+"), ("age_group", "unknown"), ("sex", "unknown")):
+        for scope in (df["method"] == "good", df["task"] == "age"):
+            mixed = df.copy()
+            mixed.loc[
+                scope & (mixed["user_id"] == "u0") & (mixed["subgroup_attr"] == attr),
+                "subgroup_value",
+            ] = replacement
+            for ordered in (mixed, mixed.iloc[::-1]):
+                with pytest.raises(ValueError, match=f"Conflicting {attr} assignments for 1 user"):
+                    reduce_substrate_to_point(ordered)

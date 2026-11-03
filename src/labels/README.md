@@ -1,9 +1,9 @@
 # Labels API
 
-This module exposes a fast, in-memory lookup for label values and age computation with automatic type enforcement.
+This module exposes an in-memory lookup for stored label values with automatic type enforcement.
 
 ## Public surface
-- `labels.configure(data_dir=None)`: select a dataset and refresh metadata and cached payloads in place.
+- `labels.configure(data_dir=None)`: select a dataset for labels and devices, refreshing metadata and cached payloads in place.
 - `labels.age_at(health_code, date)`: calculate calendar-year age at an explicit `pandas.Timestamp`.
 - `labels.age_at_enrollment(health_code)`: calculate calendar-year age at enrollment `createdOn`.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
@@ -21,13 +21,17 @@ This module exposes a fast, in-memory lookup for label values and age computatio
 ## Data sources
 - `last_labels.json`: per-label → healthCode → `timestamps`/`values`.
 - `context_labels.json`: context-label payload merged into the same lookup index when available.
-- `enrollment_info.json`: per-healthCode metadata with de-identified `birth_year`.
+- `enrollment_info.json`: per-healthCode metadata with de-identified `birth_year` and enrollment `createdOn` for calendar-year age calculations.
 - `label_types.json`: maps each label to its semantic type (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
 
 ## Variable dictionary
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for a per-variable reference (question text, answer options, observed value distributions, iOS source) covering all 169 labels.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for a per-variable reference (question text, answer options, observed value distributions, iOS source) covering the historical 169-variable schema. The dataset schema determines the labels available in a selected release.
 
-Small schema metadata (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) is bundled in the repo under `data/labels/`. Large payload files resolve from your explicit dataset root (`data_dir=` / `MHC_DATA_DIR`) unless you override them per file:
+All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`. Configuration requires the complete schema set; missing files or invalid JSON raise an error, with no repository fallback. The legacy variables `LABEL_TYPES_PATH`, `ORDINAL_DICTIONARY_PATH` and `VALIDITY_CONFIG_PATH` cannot redirect schemas: configuration raises an error if any points elsewhere. Unset those variables and select a dataset root instead.
+
+See [DATASET.md](../../DATASET.md#bundled-vs-dataset-root-files) for schema access requirements and existing-root migration.
+
+Participant payloads also default to `<dataset_root>/labels/` and support explicit per-file overrides:
 ```bash
 export MHC_DATA_DIR=/path/to/openmhc-dataset
 export LABELS_DATA_PATH=/path/to/last_labels.json
@@ -35,8 +39,8 @@ export ENROLLMENT_DATA_PATH=/path/to/enrollment_info.json
 ```
 
 For direct API calls, use `labels.configure(data_dir="/path/to/dataset")` before
-querying or switching datasets. Evaluation entry points configure this
-automatically. An explicit `data_dir=` overrides `MHC_DATA_DIR`; explicit per-file
+querying, inspecting `LABEL_NAMES` / `TARGET_NAMES` / `CONTEXT_NAMES`, or switching datasets. Metadata containers are empty until configuration. A first label query can configure lazily from `MHC_DATA_DIR`. Evaluation entry points configure this
+automatically. An explicit `data_dir=` overrides `MHC_DATA_DIR`; explicit payload
 overrides take precedence over either root.
 
 Configuration refreshes metadata in place and clears cached payloads without
@@ -44,10 +48,16 @@ changing environment variables or reloading modules. Call `configure()` again
 after changing overrides. Configuration is process-global; use separate processes
 for concurrent evaluations of different datasets.
 
+All three schema files are validated before a configuration change is applied;
+invalid schemas leave the previous configuration intact. Repeated evaluations
+of the same paths retain loaded caches; an explicit `configure()` forces a refresh.
+Imputation workers receive the resolved configuration from their parent process.
+
 ## Usage
 ```python
 import pandas as pd
 from labels import (
+    configure,
     age_at,
     get_labels,
     LABEL_NAMES,
@@ -57,6 +67,8 @@ from labels import (
     get_labels_statistics,
     print_labels_statistics,
 )
+
+configure(data_dir="/path/to/dataset")
 
 # lookup nearest label value (returns enforced type)
 result = get_labels(
@@ -146,7 +158,9 @@ result = get_labels(health_code, timestamp, label, enforce_type=False)
 
 **Label type mapping:**
 ```python
-from labels import LABEL_TYPES
+from labels import LABEL_TYPES, configure
+
+configure(data_dir="/path/to/dataset")
 
 # Check a label's type
 print(LABEL_TYPES["BiologicalSex"])  # "binary"
@@ -196,12 +210,12 @@ work                      bool         0.00         1.00         1.00         2
 - For labels in `labels.json`, the closest timestamp is chosen; ties favor the earlier point.
 - `age` is stored as a static value in `last_labels.json` (calendar-year age at the user's last survey timestamp).
 
-Recent local throughput (from `PYTHONPATH=src pytest src/labels/test_api.py -k performance`):
+Recent local throughput (from `PYTHONPATH=src pytest tests/test_labels_api.py -k performance`):
 - Label lookups: ~762,936.5 per second
 - Age lookups: ~729,164.1 per second
 
 ## Tests
 Run from repo root:
 ```bash
-PYTHONPATH=src pytest src/labels/test_api.py
+PYTHONPATH=src pytest tests/test_labels_api.py
 ```

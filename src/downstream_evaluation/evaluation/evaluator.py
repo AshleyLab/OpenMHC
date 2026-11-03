@@ -84,7 +84,7 @@ def _spec_inputs(loader, spec, td, ttype, streaming, with_labels):
     return cohort if streaming else [cohort.load(u) for u in cohort.user_ids]
 
 
-def _set_context(model, td) -> None:
+def _set_context(model, td, data_dir=None) -> None:
     """Hand a unified Method its per-(task, split) context, if it defines the hook.
 
     Mirrors the ``set_temporal_window`` duck-typed hook: external Methods omit it and
@@ -93,7 +93,10 @@ def _set_context(model, td) -> None:
         from openmhc._protocols import EvalContext
 
         model.set_context(
-            EvalContext(task=td.task, split=td.split, user_ids=td.user_ids, dates=td.dates)
+            EvalContext(
+                task=td.task, split=td.split, user_ids=td.user_ids,
+                dates=td.dates, data_dir=data_dir,
+            )
         )
 
 
@@ -190,9 +193,9 @@ class DownstreamEvaluator:
             )
             test_data = _spec_inputs(loader, spec, test_td, ttype, streaming, with_labels=False)
         if has_fit:
-            _set_context(model, train_td)
+            _set_context(model, train_td, self.data_dir)
             model.fit(train_data, train_td.labels, ttype)
-        _set_context(model, test_td)
+        _set_context(model, test_td, self.data_dir)
         y_pred = np.asarray(model.predict(test_data))
         # Missing-prediction fallback: when a model leaves any test prediction
         # non-finite (e.g. WBM has no weekly embedding for some participants),
@@ -228,8 +231,8 @@ class DownstreamEvaluator:
         loader = self._fallback_loader(spec)
         fb_train = _spec_inputs(loader, spec, train_td, ttype, streaming=False, with_labels=True)
         fb_test = _spec_inputs(loader, spec, test_td, ttype, streaming=False, with_labels=False)
-        _set_context(fb_model, train_td)
+        _set_context(fb_model, train_td, self.data_dir)
         fb_model.fit(fb_train, train_td.labels, ttype)
-        _set_context(fb_model, test_td)
+        _set_context(fb_model, test_td, self.data_dir)
         fb = np.asarray(fb_model.predict(fb_test), dtype=np.float64)
         return _combine_with_fallback(y_pred, fb, ttype)

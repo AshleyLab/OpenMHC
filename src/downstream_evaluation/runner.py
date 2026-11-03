@@ -45,7 +45,17 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     spec = getattr(model, "data_spec", None)
     grain = spec.provider_granularity if spec is not None else getattr(model, "input_granularity", "daily")
     lookup = f"{config.data_dir}/processed/{lookup_filename(grain, config.temporal.is_full_history)}"
-    provider = TaskDataProvider(lookup, config.split_users, granularity=grain)
+    provider = TaskDataProvider(
+        lookup, config.split_users, granularity=grain, data_dir=config.data_dir
+    )
+
+    if config.predictions_dir is not None:
+        from labels.api import STORE
+
+        # The subgroup export needs enrollment even when age is not an evaluated
+        # task. Fail before loading sensor data or running models, not after scoring.
+        provider.validate_label_dataset()
+        _ = STORE.enrollment
 
     if spec is not None:
         # DataSpec models: build a loader at the spec's resolution; the evaluator builds a

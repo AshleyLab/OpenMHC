@@ -250,8 +250,14 @@ def _ensure_labels_env(paths: LabelPaths) -> None:
     from devices import api as devices_api
     from labels import api as labels_api
 
-    labels_api.configure(paths=paths)
-    devices_api.configure(paths=paths)
+    if paths != labels_api._PATHS or not labels_api._SCHEMAS_CONFIGURED:
+        labels_api.configure(paths=paths)
+    else:
+        # Import-time paths may already match on the first evaluation. Validate
+        # all schemas even then, without discarding warm participant caches.
+        labels_api._load_schemas(paths)
+        if devices_api.STORE.path != paths.devices:
+            devices_api.configure(paths=paths)
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +741,9 @@ def evaluate_imputation(
                 (per_user_df["subgroup_attr"].astype(str) == "all")
                 & (per_user_df["subgroup_value"].astype(str) == "all")
             ].copy()
-            combined = pd.concat([this_method_df, baseline_df], ignore_index=True)
+            combined = pd.concat(
+                [this_method_df, baseline_df], ignore_index=True
+            )
             combined = combined.rename(columns={"E_per_user": "E"})
             for col in ("method", "scenario", "split", "channel", "channel_type", "user_id"):
                 combined[col] = combined[col].astype(str)

@@ -22,6 +22,7 @@ mask. Granularity controls only *which* lookup supplies eligibility:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -63,8 +64,9 @@ def age_label_timestamp(user_id: str) -> pd.Timestamp:
     The cross-sectional lookup does not identify an observation among repeated
     age labels, so ambiguous series must be resolved before evaluation.
     """
-    from labels.api import STORE
+    from labels.api import STORE, _ensure_configured
 
+    _ensure_configured()
     series = STORE.labels_index.get_series("age", user_id)
     if len(series.timestamps_ns) != 1 or len(series.values) != 1:
         raise ValueError(f"Expected exactly one dated age target for user {user_id}")
@@ -84,7 +86,9 @@ def age_target(user_id: str) -> int:
     try:
         return age_at(user_id, age_label_timestamp(user_id))
     except (KeyError, ValueError, TypeError) as exc:
-        raise ValueError(f"Cannot calculate age target for lookup-eligible user {user_id}") from exc
+        raise ValueError(
+            f"Cannot calculate age target for lookup-eligible user {user_id}: {exc}"
+        ) from exc
 
 
 @dataclass
@@ -112,9 +116,11 @@ class TaskDataProvider:
 
     def __init__(
         self,
-        lookup_path: str,
+        lookup_path: str | Path,
         split_users: dict[str, list[str] | set[str]],
         granularity: str = "series",
+        *,
+        data_dir: str | Path | None = None,
     ) -> None:
         """Initialize a provider for the configured label dataset.
 
@@ -122,17 +128,49 @@ class TaskDataProvider:
             lookup_path: path to the labels lookup parquet for this granularity.
             split_users: ``{"train"/"validation"/"test": [user_id, ...]}``.
             granularity: ``"daily"`` / ``"weekly"`` / ``"series"``.
+            data_dir: dataset root for age metadata. Inferred for lookups under
+                ``<root>/processed/``; required for age reads from copied lookups.
+                The configured Labels API must match this dataset.
         """
         if granularity not in LOOKUP_BY_GRANULARITY:
             raise ValueError(
                 f"granularity must be one of {sorted(LOOKUP_BY_GRANULARITY)}, got {granularity!r}"
             )
         self.granularity = granularity
+        lookup_path = Path(lookup_path).expanduser().resolve()
+        lookup_root = lookup_path.parent.parent if lookup_path.parent.name == "processed" else None
+        root = Path(data_dir).expanduser().resolve() if data_dir is not None else lookup_root
+        if lookup_root is not None and root != lookup_root:
+            raise ValueError("Provider data_dir does not match the lookup dataset root")
+        from openmhc._label_paths import LabelPaths
+
+        self._label_paths = LabelPaths.resolve(root) if root is not None else None
         self._lookup = pd.read_parquet(lookup_path)
         self._date_col = "date" if "date" in self._lookup.columns else "week_start"
         self._split_users = {k: {str(u) for u in v} for k, v in split_users.items()}
         self._tasks = [c for c in self._lookup.columns if c not in _KEY_COLS]
         self._index_cache: dict[str, dict[str, tuple]] = {}
+
+    def validate_label_dataset(self) -> None:
+        """Reject age metadata from another dataset, including after a cache fill."""
+        from labels import api
+
+        if self._label_paths is None:
+            raise ValueError(
+                "Cannot identify the lookup dataset for age metadata. "
+                "Pass data_dir= to TaskDataProvider for a lookup outside <root>/processed/."
+            )
+        api._ensure_configured()
+        for name in ("schema_dir", "labels", "enrollment"):
+            actual = getattr(api.STORE.paths, name)
+            expected = getattr(self._label_paths, name)
+            actual = actual.resolve() if actual is not None else None
+            expected = expected.resolve() if expected is not None else None
+            if actual != expected:
+                raise ValueError(
+                    f"Configured label dataset does not match the provider lookup ({name}). "
+                    "Call labels.configure(data_dir=...) for the lookup's dataset before reading ages."
+                )
 
     @property
     def tasks(self) -> list[str]:
@@ -149,6 +187,8 @@ class TaskDataProvider:
         cross-sectional tasks). Age uses its recorded label date and birth year
         instead of the cached value; missing or ambiguous source metadata raises.
         """
+        if task == "age":
+            self.validate_label_dataset()
         if task in self._index_cache:
             return self._index_cache[task]
         if task not in self._lookup.columns:
