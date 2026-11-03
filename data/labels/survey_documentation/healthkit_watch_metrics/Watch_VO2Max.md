@@ -22,47 +22,47 @@ Not a survey variable. Collected automatically via HealthKit from Apple Watch/iP
 
 ## Observed values
 
-**Total observations**: 91,622 — **type-enforced**: 91,622 (**unique**: 40,955) — raw Python types seen: `float` (91,622).
+**Total observations**: 68,782 — **type-enforced**: 68,782 (**unique**: 32,919) — raw Python types seen: `float` (68,782).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
 | min | 14.00 |
-| q25 | 27.86 |
-| median | 33.77 |
-| mean | 33.60 |
-| q75 | 39.09 |
-| max | 99.00 |
-| std | 8.03 |
+| q25 | 27.71 |
+| median | 33.92 |
+| mean | 33.75 |
+| q75 | 39.34 |
+| max | 59.89 |
+| std | 8.18 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `14.00` | 246 |
-| `30.99` | 33 |
-| `27.08` | 32 |
-| `26.59` | 31 |
-| `32.84` | 31 |
-| `26.43` | 30 |
-| `31.08` | 30 |
-| `31.67` | 30 |
-| `37.20` | 30 |
-| `25.92` | 29 |
-| `26.12` | 29 |
-| `26.41` | 29 |
-| `27.68` | 29 |
-| `29.16` | 29 |
-| `29.42` | 29 |
-| `29.60` | 29 |
-| `37.50` | 29 |
-| `25.65` | 28 |
-| `26.14` | 28 |
-| `27.01` | 28 |
+| `14.00` | 127 |
+| `25.92` | 27 |
+| `36.20` | 26 |
+| `37.50` | 26 |
+| `27.68` | 26 |
+| `37.20` | 26 |
+| `27.08` | 26 |
+| `31.67` | 25 |
+| `31.08` | 25 |
+| `26.92` | 25 |
+| `29.42` | 24 |
+| `26.59` | 23 |
+| `35.12` | 23 |
+| `30.42` | 23 |
+| `38.30` | 22 |
+| `25.81` | 22 |
+| `35.00` | 22 |
+| `27.83` | 22 |
+| `25.26` | 22 |
+| `27.97` | 22 |
 
 _Daily-resolution variant also available in `data/labels/healthkit_daily.json`; this table reflects `last_labels.json` (nearest-per-user measurement) for API consistency._
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - Commits touching source file: 117 total

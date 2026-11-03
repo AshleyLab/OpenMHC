@@ -24,7 +24,7 @@
 
 ## Observed values
 
-**Total observations**: 9,867 — **type-enforced**: 9,867 (**unique**: 101) — raw Python types seen: `float` (9,867).
+**Total observations**: 3,691 — **type-enforced**: 3,691 (**unique**: 88) — raw Python types seen: `float` (3,691).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
@@ -32,37 +32,37 @@
 | min | 70.00 |
 | q25 | 112 |
 | median | 120 |
-| mean | 120.9 |
+| mean | 120.8 |
 | q75 | 128 |
-| max | 200 |
-| std | 13.71 |
+| max | 199 |
+| std | 13.21 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `120` | 1,610 |
-| `110` | 819 |
-| `130` | 599 |
-| `118` | 415 |
-| `125` | 343 |
-| `128` | 312 |
-| `115` | 279 |
-| `100` | 274 |
-| `122` | 270 |
-| `140` | 267 |
-| `124` | 244 |
-| `116` | 240 |
-| `117` | 236 |
-| `112` | 225 |
-| `90.00` | 213 |
-| `135` | 207 |
-| `114` | 170 |
-| `121` | 151 |
-| `126` | 148 |
-| `127` | 147 |
+| `120` | 526 |
+| `110` | 296 |
+| `130` | 194 |
+| `118` | 166 |
+| `128` | 135 |
+| `125` | 128 |
+| `124` | 106 |
+| `122` | 105 |
+| `140` | 103 |
+| `100` | 100 |
+| `116` | 98 |
+| `115` | 97 |
+| `117` | 93 |
+| `112` | 82 |
+| `135` | 81 |
+| `114` | 69 |
+| `121` | 65 |
+| `90.00` | 62 |
+| `127` | 60 |
+| `132` | 55 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - .h/.m commits: `06a6f76`, `0869e98`

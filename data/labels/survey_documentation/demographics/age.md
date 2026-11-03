@@ -24,45 +24,45 @@
 
 ## Observed values
 
-**Total observations**: 57,939 — **type-enforced**: 57,939 (**unique**: 77) — raw Python types seen: `int` (57,939).
+**Total observations**: 11,893 — **type-enforced**: 11,893 (**unique**: 72) — raw Python types seen: `int` (11,893).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
-| min | 17.00 |
-| q25 | 24.00 |
-| median | 32.00 |
-| mean | 35.35 |
-| q75 | 43.00 |
-| max | 93.00 |
-| std | 14.38 |
+| min | 18.00 |
+| q25 | 30.00 |
+| median | 39.00 |
+| mean | 41.90 |
+| q75 | 52.00 |
+| max | 90.00 |
+| std | 15.38 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `18.00` | 5,200 |
-| `30.00` | 3,193 |
-| `25.00` | 1,932 |
-| `26.00` | 1,872 |
-| `24.00` | 1,853 |
-| `29.00` | 1,811 |
-| `23.00` | 1,757 |
-| `27.00` | 1,744 |
-| `28.00` | 1,718 |
-| `31.00` | 1,662 |
-| `32.00` | 1,617 |
-| `22.00` | 1,581 |
-| `33.00` | 1,551 |
-| `35.00` | 1,519 |
-| `19.00` | 1,499 |
-| `20.00` | 1,468 |
-| `21.00` | 1,432 |
-| `34.00` | 1,427 |
-| `36.00` | 1,243 |
-| `37.00` | 1,217 |
+| `30.00` | 445 |
+| `33.00` | 352 |
+| `31.00` | 348 |
+| `32.00` | 345 |
+| `36.00` | 332 |
+| `35.00` | 321 |
+| `29.00` | 303 |
+| `40.00` | 300 |
+| `27.00` | 289 |
+| `25.00` | 286 |
+| `34.00` | 284 |
+| `39.00` | 283 |
+| `26.00` | 283 |
+| `28.00` | 283 |
+| `43.00` | 279 |
+| `37.00` | 272 |
+| `44.00` | 270 |
+| `41.00` | 260 |
+| `38.00` | 257 |
+| `45.00` | 251 |
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - .h/.m commits: `06a6f76` (MHX-640 Added NSLocalizedString), `0869e98` (Squashed commit)

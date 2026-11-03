@@ -8,7 +8,7 @@ Lab values and clinical measurements entered through the Heart Age form (cholest
 |----------|------|------|--------|---------|
 | [SystolicBloodPressure](SystolicBloodPressure.md) | target | continuous | Heart Age form | Systolic BP (mmHg) |
 | [blood_pressure_categories](blood_pressure_categories.md) | target | ordinal | Derived | AHA categories (normal / elevated / stage-1 / stage-2) |
-| [TotalCholesterol](TotalCholesterol.md) | target | continuous | Heart Age form | Total cholesterol (mg/dL) |
+| [TotalCholesterol](TotalCholesterol.md) | target | continuous | Heart Age form | Total cholesterol (mmol/L) |
 | [Hdl](Hdl.md) | target | continuous | Heart Age form | HDL cholesterol |
 | [Ldl](Ldl.md) | target | continuous | Heart Age form | LDL cholesterol (collected but not used in Framingham) |
 | [BloodGlucose](BloodGlucose.md) | context | continuous | Heart Age form | Blood glucose |

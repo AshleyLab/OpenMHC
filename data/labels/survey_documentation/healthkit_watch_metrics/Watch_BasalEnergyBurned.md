@@ -22,47 +22,47 @@ Not a survey variable. Collected automatically via HealthKit from Apple Watch/iP
 
 ## Observed values
 
-**Total observations**: 381,354 — **type-enforced**: 381,354 (**unique**: 359,156) — raw Python types seen: `float` (381,354).
+**Total observations**: 269,912 — **type-enforced**: 269,912 (**unique**: 254,001) — raw Python types seen: `float` (269,912).
 **Type-enforcement rejections**: 0 missing (`LabelValueError`), 0 unconvertible (`LabelTypeError`), 0 dictionary-miss (`KeyError`).
 
 | stat | value |
 |------|------:|
-| min | -4666 |
-| q25 | 1455 |
-| median | 1784 |
-| mean | 1921 |
-| q75 | 2181 |
-| max | 9989 |
-| std | 992.1 |
+| min | 500.3 |
+| q25 | 1544 |
+| median | 1831 |
+| mean | 1958 |
+| q75 | 2211 |
+| max | 4500 |
+| std | 675.8 |
 
 **Top 20 most frequent values**:
 
 | value | count |
 |------:|------:|
-| `1595` | 134 |
-| `1697` | 130 |
-| `1529` | 106 |
-| `1286` | 105 |
-| `1600` | 105 |
+| `1697` | 112 |
+| `1529` | 105 |
 | `3148` | 102 |
-| `3138` | 90 |
-| `1753` | 88 |
-| `1782` | 88 |
-| `1577` | 86 |
+| `3138` | 92 |
 | `1524` | 83 |
-| `1633` | 78 |
 | `1816` | 76 |
-| `1340` | 75 |
-| `1508` | 75 |
-| `1779` | 75 |
-| `1814` | 74 |
+| `1340` | 76 |
+| `1508` | 73 |
+| `1779` | 73 |
 | `1534` | 72 |
 | `1513` | 71 |
-| `1281` | 70 |
+| `1774` | 69 |
+| `2814` | 66 |
+| `1662` | 66 |
+| `1759` | 64 |
+| `1633` | 63 |
+| `1692` | 63 |
+| `1635` | 59 |
+| `1506` | 59 |
+| `1504` | 57 |
 
 _Daily-resolution variant also available in `data/labels/healthkit_daily.json`; this table reflects `last_labels.json` (nearest-per-user measurement) for API consistency._
 
-_Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) and `data/labels/context_labels.json` (md5 `560ed125…`)._
+_Generated 2026-07-25 from `data/labels/last_labels.json` (md5 `521c157a…`) and `data/labels/context_labels.json` (md5 `220f5946…`)._
 
 ## Git history
 - Commits touching source file: 117 total
