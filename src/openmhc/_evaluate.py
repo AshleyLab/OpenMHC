@@ -621,9 +621,8 @@ def evaluate_imputation(
     masking_cfg.intensity_failure.enabled = "intensity_failure" in scenario_list
 
     masks_dir = _dataset_masks_dir(paths.root, paths.version)
-    use_precomputed = paths.version == "full" or (
-        seed == 42 and n_days == 1 and max_samples is None
-    )
+    # Context length changes window assembly, not the daily prediction targets.
+    use_precomputed = paths.version == "full" or (seed == 42 and max_samples is None)
     if use_precomputed:
         if not masks_dir.is_dir():
             raise FileNotFoundError(

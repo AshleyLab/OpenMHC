@@ -8,6 +8,7 @@ import pytest
 
 from imputation_evaluation.masking.generator import (
     MaskCache,
+    MaskCacheGenerator,
     ScenarioMasks,
     pack_masks,
 )
@@ -118,7 +119,8 @@ def test_public_api_selects_masks_from_requested_root(tmp_path, monkeypatch, ver
 
 
 @pytest.mark.parametrize("version", ["full", "xs"])
-def test_canonical_run_requires_dataset_masks(tmp_path, monkeypatch, version):
+@pytest.mark.parametrize("n_days", [1, 7])
+def test_canonical_run_requires_dataset_masks(tmp_path, monkeypatch, version, n_days):
     """Missing release masks fail before evaluation starts."""
     monkeypatch.setattr(_evaluate, "_ensure_labels_env", lambda _: None)
     paths = SimpleNamespace(
@@ -127,12 +129,15 @@ def test_canonical_run_requires_dataset_masks(tmp_path, monkeypatch, version):
     monkeypatch.setattr(_evaluate._DatasetPaths, "resolve", lambda *args, **kwargs: paths)
     with pytest.raises(FileNotFoundError, match="accompanying this dataset"):
         _evaluate.evaluate_imputation(
-            SimpleNamespace(impute=lambda x: x), version=version, data_dir=tmp_path
+            SimpleNamespace(impute=lambda x: x), version=version, data_dir=tmp_path, n_days=n_days
         )
 
 
-@pytest.mark.parametrize("options", [{"seed": 7}, {"n_days": 7}, {"max_samples": 2}])
-def test_noncanonical_xs_generates_masks_for_its_selected_samples(tmp_path, monkeypatch, options):
+@pytest.mark.parametrize("options", [{"seed": 7}, {"max_samples": 2}])
+@pytest.mark.parametrize("n_days", [1, 7])
+def test_noncanonical_xs_generates_masks_for_its_selected_samples(
+    tmp_path, monkeypatch, options, n_days
+):
     """Custom XS runs must not accidentally reuse the canonical release cache."""
     import imputation_evaluation.runner as runner
 
@@ -159,7 +164,11 @@ def test_noncanonical_xs_generates_masks_for_its_selected_samples(tmp_path, monk
     monkeypatch.setattr(runner, "run_eval", check_config)
     with pytest.raises(ReachedRunner):
         _evaluate.evaluate_imputation(
-            SimpleNamespace(impute=lambda x: x), version="xs", data_dir=tmp_path, **options
+            SimpleNamespace(impute=lambda x: x),
+            version="xs",
+            data_dir=tmp_path,
+            n_days=n_days,
+            **options,
         )
 
 
@@ -255,3 +264,126 @@ def test_xs_extraction_preserves_full_mask_rows(cache):
     empty = subset(full, [("unmasked", "2020-02-01")])
     assert empty.n_applicable == 0
     assert empty.masks_packed.size == 0
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_generated_cache_roundtrip_with_reordered_split(tmp_path, empty):
+    """Generated identities follow applicable rows, not dataset or split order."""
+    from datasets import Dataset
+
+    from imputation_evaluation.masking.random_noise import RandomNoiseMask
+
+    values = np.ones((5, 19, 1440), dtype=np.float32)
+    values[4] = np.nan
+    if empty:
+        values[:] = np.nan
+    data = Dataset.from_dict(
+        {
+            "user_id": ["a", "b", "c", "d", "e"],
+            "date": [f"2020-01-0{i}" for i in range(1, 6)],
+            "values": values,
+        }
+    )
+    splits = {"test": [3, 4, 1]}
+    cache = MaskCacheGenerator(data, num_workers=0, batch_size=2).generate(
+        splits, [RandomNoiseMask()], base_seed=42
+    )
+    before = cache.get("test", "random_noise")
+    np.testing.assert_array_equal(before.indices, [] if empty else [0, 2])
+    np.testing.assert_array_equal(before.user_ids, [] if empty else ["d", "b"])
+    np.testing.assert_array_equal(before.dates, [] if empty else ["2020-01-04", "2020-01-02"])
+    cache.save(tmp_path)
+    restored = MaskCache.load(tmp_path, ["random_noise"], ["test"])
+    restored.check_sample_keys(data, splits)
+    after = restored.get("test", "random_noise")
+    for field in ("indices", "masks_packed", "user_ids", "dates"):
+        np.testing.assert_array_equal(getattr(before, field), getattr(after, field))
+    if not empty:
+        with pytest.raises(ValueError, match="do not match"):
+            restored.check_sample_keys(data, {"test": [1, 4, 3]})
+        changed = {"user_id": data["user_id"], "date": list(data["date"])}
+        changed["date"][3] = "2020-02-04"
+        with pytest.raises(ValueError, match="do not match"):
+            restored.check_sample_keys(changed, splits)
+
+
+def test_xs_context_length_preserves_released_daily_targets(tmp_path, monkeypatch):
+    """The public API selects one cache; real window assembly preserves its bits."""
+    import imputation_evaluation.runner as runner
+    from imputation_evaluation.evaluation import evaluator
+
+    daily = np.zeros((2, 19, 1440), dtype=np.float32)
+    daily[0, :, ::3] = 1
+    daily[1, :, 1::5] = 1
+    packed, shape = pack_masks(daily)
+    released = MaskCache()
+    released.add(
+        "test",
+        "random_noise",
+        ScenarioMasks(
+            indices=np.array([0, 1]),
+            masks_packed=packed,
+            shape=shape,
+            user_ids=np.array(["a", "a"]),
+            dates=np.array(["2020-01-01", "2020-01-02"]),
+        ),
+    )
+    mask_dir = _evaluate._dataset_masks_dir(tmp_path, "xs")
+    released.save(mask_dir)
+    paths = SimpleNamespace(
+        root=tmp_path,
+        version="xs",
+        daily_hf=tmp_path / "daily",
+        splits_file=tmp_path / "splits.json",
+        label_paths=None,
+        require=lambda *args: None,
+    )
+    monkeypatch.setattr(_evaluate._DatasetPaths, "resolve", lambda *a, **kw: paths)
+    monkeypatch.setattr(_evaluate, "_ensure_labels_env", lambda _: None)
+    observed = {}
+    # Restore the worker's global state after exercising its real evaluation path.
+    for name, value in list(vars(evaluator).items()):
+        if name.startswith("_worker_"):
+            monkeypatch.setattr(evaluator, name, value)
+
+    class ReachedEvaluation(Exception):
+        pass
+
+    def run(config, **kwargs):
+        assert config.masking.masks_file == str(mask_dir)
+        loaded = MaskCache.load(mask_dir, ["random_noise"], ["test"])
+        days = config.data.n_days
+
+        def impute(data, original_mask, artificial_mask):
+            observed[days] = artificial_mask.copy()
+            return np.nan_to_num(data)
+
+        evaluator._init_worker(
+            loaded,
+            SimpleNamespace(impute=impute),
+            ["random_noise"],
+            np.ones(19),
+            "test",
+            n_days=days,
+            window_descriptors=None if days == 1 else [[0, 1, -1, -1, -1, -1, -1]],
+        )
+        values = np.ones((2, 19, 1440) if days == 1 else (1, 19, 7 * 1440), dtype=np.float32)
+        evaluator._evaluate_batch_all_scenarios(
+            (values, np.ones_like(values), [0, 1] if days == 1 else [0], 0)
+        )
+        raise ReachedEvaluation
+
+    monkeypatch.setattr(runner, "run_eval", run)
+    for days in (1, 7):
+        with pytest.raises(ReachedEvaluation):
+            _evaluate.evaluate_imputation(
+                SimpleNamespace(impute=lambda x: x),
+                version="xs",
+                data_dir=tmp_path,
+                masking_scenarios=["random_noise"],
+                n_days=days,
+            )
+    np.testing.assert_array_equal(observed[1], daily)
+    for i in range(2):
+        np.testing.assert_array_equal(observed[7][0, :, i * 1440 : (i + 1) * 1440], daily[i])
+    assert not observed[7][0, :, 2 * 1440 :].any()

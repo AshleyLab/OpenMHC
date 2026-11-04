@@ -542,7 +542,8 @@ Notable fields a dev would tune:
   use `sharable_users_seed42_2026_xs/` under the same `imputation/masks/` parent.
   Use masks from the matching dataset release and date variant. The runner
   checks participant/date alignment before fitting. The public API selects
-  these paths automatically for canonical runs; direct Hydra CLI runs must
+  these paths automatically for Full and for XS with `seed=42` and no sample
+  limit; direct Hydra CLI runs must
   supply `+masking.masks_file=...` to reuse the released masks.
 
 Per-scenario knobs are on the matching sub-config in `MaskingConfig` (`random_noise.patch_size`, `temporal_slice.min_block_size`, `intensity_failure.hr_threshold`, etc.) — see the defaults table in Part 1.

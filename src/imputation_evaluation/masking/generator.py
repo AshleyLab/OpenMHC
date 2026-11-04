@@ -579,9 +579,15 @@ class MaskCacheGenerator:
             shape = (0, N_CHANNELS, N_TIMESTEPS)
 
         indices_array = np.array(applicable_indices, dtype=np.int64)
+        # Stored indices are split-local; identities come from the matching HF rows.
+        dataset_rows = np.asarray(indices, dtype=np.int64)[indices_array]
+        user_ids = np.asarray(self.hf_dataset["user_id"], dtype=str)[dataset_rows]
+        dates = np.asarray(self.hf_dataset["date"], dtype=str)[dataset_rows]
 
         return ScenarioMasks(
             indices=indices_array,
             masks_packed=masks_packed,
             shape=shape,
+            user_ids=user_ids,
+            dates=dates,
         )

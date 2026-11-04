@@ -189,7 +189,7 @@ def test_preparation_keys_match_evaluator_filters_and_order(tmp_path, monkeypatc
                 [10000.0] * 19,
             ],
         }
-    ).save_to_disk(hf)
+    ).save_to_disk(str(hf))
     split_file = tmp_path / "splits/sharable_users_seed42_2026_xs.json"
     split_file.parent.mkdir()
     split_file.write_text(json.dumps({"train": ["c"], "validation": ["a"], "test": ["b"]}))

@@ -110,7 +110,7 @@ directory as `<dataset_root>/imputation/`; manual setup follows the same layout.
 The repository does not contain mask files.
 
 `evaluate_imputation()` requires these files for Full and for canonical XS runs
-(`seed=42`, `n_days=1`, no `max_samples` limit). Missing files raise an error;
+(`seed=42`, no `max_samples` limit). Missing files raise an error;
 participant IDs and dates are checked against the selected data before fitting.
 Other XS configurations generate masks for their selected samples.
 
