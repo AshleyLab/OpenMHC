@@ -1,2 +1,5 @@
 # @package method
 type: chronos2
+# null keeps the model's public default checkpoint/cache path.
+checkpoint: null
+cache_dir: null

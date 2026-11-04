@@ -13,8 +13,8 @@ The parquet is produced by the evaluation run — pass both `output_dir=` and
 `method_name="<method>"` to `openmhc.evaluate_forecasting` and it writes
 `per_user_errors.parquet` with the `model` column set to `<method>`. Upload that
 file verbatim (renamed to `<method>.parquet`); do not hand-author it. The
-maintainers concatenate every `forecasting/*.parquet` and recompute paired skill,
-fair skill, and average rank against the `seasonal_naive` baseline during
+maintainers concatenate every `forecasting/*.parquet` and recompute paired skill
+and average rank against the `seasonal_naive` baseline during
 ingestion, so the columns and dtypes below must match exactly.
 
 > **`method_name` is required and must equal your `<method>` stem.** It defaults
@@ -33,9 +33,8 @@ ingestion, so the columns and dtypes below must match exactly.
 One row per `(model, group, metric, channel_idx, channel_name, user_id)`. Single
 Parquet, dictionary-encoded string columns, **`float64`** metric value, `zstd`
 compression. Unlike Track 2 (which stores the error `E_per_user`), the forecasting
-substrate stores the **raw** per-user metric value, so one file serves all three
-reducers — skill and fairness convert it to an error on load, rank uses it
-directly.
+substrate stores the **raw** per-user metric value, so one file serves both
+reducers — skill converts it to an error on load, rank uses it directly.
 
 | column | type | description |
 |---|---|---|
@@ -81,41 +80,12 @@ Source of truth: `CATEGORY_SCOPES` in `src/forecasting_evaluation/metrics/metric
   (`src/openmhc/data/baselines/forecasting_seasonal_naive_per_user_errors.parquet`)
   is the canonical shape your submission should mirror.
 
-### No subgroup rows — fairness is joined server-side
+### No subgroup rows
 
 Unlike Track 2, the forecasting substrate is keyed by `user_id` only and carries
 **no `subgroup_attr` / `subgroup_value` columns**. Submitters do **not** ship
-subgroup rows — `evaluate_forecasting` emits exactly the columns above — and the
-fairness skill score is joined at scoring time.
-
-That join needs **no private data**: every forecasting user also appears in
-`imputation/locf.parquet`, which carries per-user `age_group` / `sex` subgroup
-rows under the canonical 18/30/40/50/60 age bins. Reusing that partition gives
-forecasting fairness the identical user→subgroup mapping as imputation, with no
-extra artifact. This is exactly what the live leaderboard does, and it
-reproduces the published `S_fair` point estimates:
-
-```python
-demo = {}                                     # {user_id: {age_group, sex}}
-imp = pd.read_parquet(
-    hf_hub_download(REPO, "imputation/locf.parquet", repo_type="dataset"),
-    columns=["subgroup_attr", "subgroup_value", "user_id"])
-for attr in ("age_group", "sex"):
-    sub = imp[imp.subgroup_attr.astype(str) == attr][
-        ["user_id", "subgroup_value"]].drop_duplicates()
-    for uid, val in sub.itertuples(index=False):
-        demo.setdefault(str(uid), {})[attr] = str(val)
-
-err  = to_error_df(substrate, user_col="user_id")   # canonical error conversion
-fair = compute_fair_skill_scores_from_errors(
-    err, demo, baseline_method="seasonal_naive")
-fair[fair.scope == "overall"]                       # == published S_fair points
-```
-
-> **Use the `_from_errors` entry point.** Track 3 passes **per-user** errors plus
-> a `demographics` dict; Track 2 passes **per-cell mean** errors to
-> `compute_fair_skill_scores`. Mixing the two up returns plausible but wrong
-> numbers with no error raised. Convert with `to_error_df` rather than by hand.
+subgroup rows — `evaluate_forecasting` emits exactly the columns above. A cohort
+view filters these rows by `user_id` membership in `demographics.parquet`.
 
 ## `<method>.meta.json`
 
@@ -157,11 +127,10 @@ sidecar from HF and merges only the provided fields).
 ## Conventions
 
 - Evaluated against the canonical split `sharable_users_seed42_2026` (`test`).
-- Track-3 baseline for skill / fairness: `seasonal_naive` (server-side; do not
+- Track-3 baseline for skill: `seasonal_naive` (server-side; do not
   submit it).
 - Scored set: `mae` (continuous channels 0–6) + `auroc` (binary channels 7–18);
   ratio clip `[0.01, 100]`; within-user aggregation `micro`; unit `user`.
-- Fairness disparity primitive: mean absolute pairwise difference (MAPD).
 - Must use the standard evaluation protocol — canonical dataset version, split
   file, sample-index, and horizon (24 h).
 

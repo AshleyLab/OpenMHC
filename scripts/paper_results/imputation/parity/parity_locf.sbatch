@@ -21,13 +21,6 @@ ml load python/3.12.1
 unset PYTHONPATH
 source /scratch/users/schuetzn/envs/openmhc/bin/activate
 
-# labels.api needs <dataset_root>/labels/enrollment_info.json to bucket
-# users by age_group. The existing paper run used the full dataset; the
-# locf manifest references the full-dataset user_ids, so the lookup root
-# must match (xs would silently fall through to "unknown" buckets and
-# wreck parity).
-export MHC_DATA_DIR=/home/users/schuetzn/.cache/openmhc/data-full
-
 cd /home/users/schuetzn/myheartcounts-dataset
 
 python scripts/paper_results/imputation/parity/parity_locf.py "$@"

@@ -84,9 +84,9 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | Variable | Type | Raw identifier | Source file | Line | Notes |
 |----------|------|----------------|-------------|------|-------|
 | field_BloodGlucose | continuous | BloodGlucose | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~68 | Blood glucose value |
-| field_GoSleepTime | continuous | GoSleepTime | (derived) | Unknown | Likely from device tracking, not in JSON |
+| field_GoSleepTime | continuous | GoSleepTime | APHAppDelegate.m | ~1436 | AppCore profile time picker (sign-up or profile screen), not in JSON |
 | field_HeightCentimeters | continuous | (HealthKit) | CardioHealth/Startup/APHAppDelegate.m | ~525 | Height in meters from HealthKit, converted to cm |
-| field_WakeUpTime | continuous | WakeUpTime | (derived) | Unknown | Likely from device tracking, not in JSON |
+| field_WakeUpTime | continuous | WakeUpTime | APHAppDelegate.m | ~1435 | AppCore profile time picker (sign-up or profile screen), not in JSON |
 | field_atwork | ordinal | atwork | CardioHealth/Resources/JSONs/cardiosurveys/cardio_activitysleep_survey.json | ~28 | Work activity level (5-point scale) |
 | field_country | categorical | country | CardioHealth/Resources/JSONs/cardiosurveys/cardio_wellbeing_survey.json | ~90 | Country of residence (UK/US/HK) |
 | field_education | ordinal | education | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~332 | Education level (7-point scale) |

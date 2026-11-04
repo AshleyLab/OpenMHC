@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +28,7 @@ from openmhc._dataset import (
 from openmhc._dataset import (
     data_dir as _resolve_dataset_root,
 )
+from openmhc._label_paths import LabelPaths
 from openmhc._results import ForecastingResults, ImputationResults, PredictionResults
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ class _DatasetPaths:
     norm_stats: Path
     clip_dates: Path
     labels_dir: Path
+    label_paths: LabelPaths
     hourly_trajectory: Path
     forecasting_sample_index_dir: Path
     version: str = "full"  # "xs" or "full"
@@ -153,12 +154,13 @@ class _DatasetPaths:
             daily_hourly_hf=root / "processed" / "daily_hourly_hf",
             daily_hf=root / "processed" / "daily_hf",
             window_index=root / "processed" / "window_index_w7_s7_d5.parquet",
-            weekly_labels_lookup=root / "processed" / "weekly_labels_lookup_stride7_windowed.parquet",
+            weekly_labels_lookup=root / "processed" / "weekly_labels_lookup_stride7_full_history.parquet",
             daily_labels_lookup=root / "processed" / "daily_labels_lookup.parquet",
             splits_file=root / "splits" / _SPLIT_FILENAMES[version],
             norm_stats=root / "processed" / "normalization_stats_hourly.json",
             clip_dates=root / "labels" / "clip_dates.json",
             labels_dir=root / "labels",
+            label_paths=LabelPaths.resolve(root),
             hourly_trajectory=root / "hourly_trajectory",
             forecasting_sample_index_dir=root / "forecasting_sample_index",
             version=version,
@@ -239,40 +241,23 @@ class _DatasetPaths:
             )
 
 
-_LABELS_PAYLOAD_ENV_FILES = {
-    "LABELS_DATA_PATH": "last_labels.json",
-    "CONTEXT_LABELS_PATH": "context_labels.json",
-    "ENROLLMENT_DATA_PATH": "enrollment_info.json",
-    "LABEL_VALIDITY_PATH": "label_validity.json",
-    "HEALTHKIT_DAILY_PATH": "healthkit_daily.json",
-}
+def _ensure_labels_env(paths: LabelPaths) -> None:
+    """Configure shared stores without mutating the caller's environment.
 
-
-def _ensure_labels_env(labels_dir: Path) -> None:
-    """Point `labels.api` at a resolved dataset root for large label payloads.
-
-    `labels.api` reads its data-file paths from env vars at import time and
-    caches them in module-level Path constants. We set each var if the user
-    hasn't, then reload the module if it was already imported (e.g. via
-    ``openmhc.list_tasks()``) so the cached paths reflect the new values.
-
-    Without this, paths fall back to the repo-local ``data/labels/`` (which
-    ships only schema files), and `enrollment_info.json` / `label_validity.json`
-    silently load as empty — breaking the imputation sensitivity pathway and
-    the default ``return_valid_only=True`` behaviour of ``get_labels``.
+    The historical name is retained, but this no longer writes environment
+    variables or reloads modules. Existing imports keep their object identity.
     """
-    changed = False
-    for env_var, filename in _LABELS_PAYLOAD_ENV_FILES.items():
-        if not os.getenv(env_var):
-            os.environ[env_var] = str(labels_dir / filename)
-            changed = True
+    from devices import api as devices_api
+    from labels import api as labels_api
 
-    if changed:
-        import importlib
-        import sys
-
-        if "labels.api" in sys.modules:
-            importlib.reload(sys.modules["labels.api"])
+    if paths != labels_api._PATHS or not labels_api._SCHEMAS_CONFIGURED:
+        labels_api.configure(paths=paths)
+    else:
+        # Import-time paths may already match on the first evaluation. Validate
+        # all schemas even then, without discarding warm participant caches.
+        labels_api._load_schemas(paths)
+        if devices_api.STORE.path != paths.devices:
+            devices_api.configure(paths=paths)
 
 
 # ---------------------------------------------------------------------------
@@ -314,16 +299,15 @@ def evaluate_prediction(
         seed: Random seed for the per-task bootstrap standard errors and the Linear
             fallback baseline. The bundled models pin their own classifier seed, so this
             does not change their point predictions.
-        predictions_dir: when set, write per-(method, task) test predictions +
-            a shared ``_subgroups.json`` here — the input the paper-metrics
-            bootstrap paired-resamples for skill / rank / fairness CIs.
+        predictions_dir: when set, write per-(method, task) test predictions
+            here — the input the paper-metrics bootstrap paired-resamples for
+            skill / rank CIs.
         output_dir: when set, write the per-method leaderboard substrate
-            ``<output_dir>/<method>.parquet`` (the raw per-user prediction pairs,
-            subgroup-expanded) + a ``.meta.json`` provenance sidecar, and populate
+            ``<output_dir>/<method>.parquet`` (the raw per-user prediction pairs)
+            + a ``.meta.json`` provenance sidecar, and populate
             ``PredictionResults.per_user_pairs``. The per-(method, task)
-            predictions + ``_subgroups.json`` are written here too (unless
-            ``predictions_dir`` points elsewhere), since the substrate is pooled
-            from them.
+            predictions are written here too (unless ``predictions_dir`` points
+            elsewhere), since the substrate is pooled from them.
         method_name: value for the substrate's ``method`` column and the
             ``<method>.parquet`` filename — the leaderboard groups by it and the
             upload filename must match. Defaults to ``model.name``.
@@ -345,7 +329,7 @@ def evaluate_prediction(
         )
 
     paths = _DatasetPaths.resolve(data_dir, version=version)
-    _ensure_labels_env(paths.labels_dir)
+    _ensure_labels_env(paths.label_paths)
 
     from downstream_evaluation.data.splits import load_split_file
     from downstream_evaluation.evaluation.metrics import get_task_type
@@ -425,7 +409,7 @@ def evaluate_prediction(
     overall_fallback_rate = total_fallback / total_test if total_test else 0.0
 
     # Leaderboard substrate: pool the per-(method, task) prediction pairs into one
-    # <method>.parquet (subgroup-expanded) for upload. Track 1 ships raw pairs (not a
+    # <method>.parquet for upload. Track 1 ships raw pairs (not a
     # precomputed per-user error) because its ranking/correlation metrics don't
     # decompose per user — the leaderboard recomputes skill server-side vs. Linear.
     per_user_pairs = None
@@ -616,7 +600,7 @@ def evaluate_imputation(
 
     paths = _DatasetPaths.resolve(data_dir, version=version)
     paths.require("daily_hf", "splits_file", "labels_dir")
-    _ensure_labels_env(paths.labels_dir)
+    _ensure_labels_env(paths.label_paths)
 
     from imputation_evaluation.config import (
         DataConfig,
@@ -624,7 +608,6 @@ def evaluate_imputation(
         ImputationEvalConfig,
         MaskingConfig,
         OutputConfig,
-        SensitivityConfig,
         VisualizationConfig,
         WandbConfig,
     )
@@ -699,7 +682,6 @@ def evaluate_imputation(
             output=OutputConfig(results_dir=output_dir),
             evaluation=eval_cfg,
             visualization=VisualizationConfig(),
-            sensitivity=SensitivityConfig(),
             wandb=WandbConfig(),
         )
 
@@ -1012,7 +994,7 @@ def evaluate_forecasting(
         "splits_file",
         "labels_dir",
     )
-    _ensure_labels_env(paths.labels_dir)
+    _ensure_labels_env(paths.label_paths)
 
     from forecasting_evaluation.config import (
         DataConfig,

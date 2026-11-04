@@ -87,19 +87,15 @@ def _aggregate_user_macro_one_cell(
     canonical_user_ids: list[str],
     sidx_arr: np.ndarray,
     full_u_rows: np.ndarray,
-    keep_mask: np.ndarray | None = None,
     n_channels: int = N_CHANNELS,
     return_per_user: bool = False,
 ) -> dict:
-    """User-macro per-channel metrics for one cell (all rows, or a subgroup mask).
+    """User-macro per-channel metrics for one (scenario, split).
 
-    Mirrors the bootstrap reducer (:func:`bootstrap_skill_rank.compute_user_stats_per_cell`
+    Mirrors the bootstrap reducer (:func:`bootstrap_skill_rank.compute_user_stats`
     + :func:`bootstrap_skill_rank._per_method_cell_errors`) at the deterministic
     point grain — i.e. per-user MAE/RMSE/AUC computed once, then ``nanmean``
     over users.
-
-    ``keep_mask`` is a manifest-row-aligned boolean mask used by the subgroup
-    variant. ``None`` means "keep every manifest row" (the ``ALL_KEY`` cell).
 
     When ``return_per_user=True``, also emit ``metrics["per_user"]`` as a
     ``{ch_key: {user_id: E_user}}`` map covering the 19 real per-channel
@@ -137,7 +133,7 @@ def _aggregate_user_macro_one_cell(
     binary_rows_pred: dict[int, list[np.ndarray]] = {}
     binary_rows_user: dict[int, list[np.ndarray]] = {}
 
-    # Map sample_idx -> manifest-row so we can lift the keep_mask onto pair rows.
+    # Map sample_idx -> manifest-row so we can map pair rows to users.
     sidx_to_manifest_row = np.full(
         int(sidx_arr.max()) + 1 if sidx_arr.size else 0, -1, dtype=np.int64
     )
@@ -157,7 +153,7 @@ def _aggregate_user_macro_one_cell(
         pair_sidx = table.column("sample_idx").to_numpy()
         pair_manifest_rows = sidx_to_manifest_row[pair_sidx]
         # Pair rows whose sample_idx isn't in the manifest are dropped — same
-        # tolerance as MetricAccumulator. (compute_user_stats_per_cell raises;
+        # tolerance as MetricAccumulator. (compute_user_stats raises;
         # the live path is more permissive on partial inputs.)
         in_manifest = pair_manifest_rows >= 0
         if not in_manifest.all():
@@ -166,14 +162,8 @@ def _aggregate_user_macro_one_cell(
             keep_indices = np.flatnonzero(in_manifest)
         else:
             keep_indices = None
-        if keep_mask is not None:
-            row_mask = keep_mask[pair_manifest_rows]
-            if not row_mask.any():
-                continue
-        else:
-            row_mask = np.ones(pair_sidx.size, dtype=bool)
-        u_rows_pair = full_u_rows[pair_manifest_rows][row_mask]
-        unique_samples.update(np.unique(pair_sidx[row_mask]).tolist())
+        u_rows_pair = full_u_rows[pair_manifest_rows]
+        unique_samples.update(np.unique(pair_sidx).tolist())
 
         gt_col = table.column("gt")
         pred_col = table.column("pred")
@@ -184,8 +174,6 @@ def _aggregate_user_macro_one_cell(
             if keep_indices is not None:
                 gt_ch = gt_ch[keep_indices]
                 pred_ch = pred_ch[keep_indices]
-            gt_ch = gt_ch[row_mask]
-            pred_ch = pred_ch[row_mask]
             err = (pred_ch - gt_ch).astype(np.float64)
             err_sq = err * err
             err_abs = np.abs(err)
@@ -199,8 +187,6 @@ def _aggregate_user_macro_one_cell(
             if keep_indices is not None:
                 gt_bool = gt_bool[keep_indices]
                 pred_ch = pred_ch[keep_indices]
-            gt_bool = gt_bool[row_mask]
-            pred_ch = pred_ch[row_mask]
             pred_bool = pred_ch > 0.5
 
             has_data[ch] = True
@@ -489,100 +475,6 @@ def aggregate_pairs(
         canonical_user_ids=canonical_user_ids,
         sidx_arr=sidx_arr,
         full_u_rows=full_u_rows,
-        keep_mask=None,
         n_channels=n_channels,
         return_per_user=return_per_user,
     )
-
-
-def aggregate_pairs_by_subgroup(
-    pairs_path: str | Path,
-    channel_stds: np.ndarray,
-    subgroup_mapping: dict[int, dict[str, str]],
-    *,
-    manifest_path: str | Path | None = None,
-    return_per_user: bool = False,
-) -> dict[str, dict[str, dict]]:
-    """Per-subgroup user-macro metrics from saved per-channel pair Parquet files.
-
-    Reads each per-channel file once, partitions rows by subgroup via
-    ``sample_idx`` lookup, and computes user-macro metrics per group —
-    following the same channel-by-channel memory pattern as
-    :func:`aggregate_pairs`.
-
-    Args:
-        pairs_path: Directory containing ``pairs_ch*.parquet`` files.
-        channel_stds: Per-channel standard deviations for normalization,
-            shape ``(C,)``.
-        subgroup_mapping: Maps ``sample_idx`` to attribute dicts,
-            e.g. ``{0: {"age_group": "30-39", "sex": "male"}, ...}``.
-        manifest_path: As in :func:`aggregate_pairs`.
-        return_per_user: As in :func:`aggregate_pairs`; forwarded to each
-            subgroup's metrics computation.
-
-    Returns:
-        ``{attr: {group_name: metrics_dict}}`` where ``metrics_dict``
-        matches the format of :func:`aggregate_pairs`.
-
-    Raises:
-        FileNotFoundError: If the manifest sibling is missing.
-    """
-    pairs_path = Path(pairs_path)
-    if pairs_path.is_file():
-        pairs_path = pairs_path.parent
-
-    attrs: set[str] = set()
-    for demo in subgroup_mapping.values():
-        attrs.update(demo.keys())
-    attrs_list = sorted(attrs)
-    if not attrs_list:
-        return {}
-
-    n_channels = min(N_CHANNELS, len(channel_stds))
-
-    resolved = (
-        Path(manifest_path) if manifest_path is not None else _discover_manifest(pairs_path)
-    )
-    if resolved is None or not resolved.exists():
-        searched = manifest_path or (
-            pairs_path.parent.parent / f"manifest_{pairs_path.name}.parquet"
-        )
-        raise FileNotFoundError(
-            f"aggregate_pairs_by_subgroup requires a sample manifest at {searched}; "
-            "cell-micro fallback was removed in Phase A."
-        )
-
-    canonical_user_ids, sidx_arr, full_u_rows = _load_sample_to_user(resolved)
-
-    # Build (attr, group) -> keep_mask over manifest rows once.
-    n_manifest = sidx_arr.size
-    cells_by_attr: dict[str, dict[str, np.ndarray]] = {a: {} for a in attrs_list}
-    for attr in attrs_list:
-        group_masks: dict[str, np.ndarray] = {}
-        for i, sidx in enumerate(sidx_arr):
-            demo = subgroup_mapping.get(int(sidx), {})
-            group = demo.get(attr, "unknown")
-            mask = group_masks.get(group)
-            if mask is None:
-                mask = np.zeros(n_manifest, dtype=bool)
-                group_masks[group] = mask
-            mask[i] = True
-        cells_by_attr[attr] = group_masks
-
-    result: dict[str, dict[str, dict]] = {}
-    for attr in attrs_list:
-        result[attr] = {}
-        for group_name, keep_mask in cells_by_attr[attr].items():
-            if not keep_mask.any():
-                continue
-            result[attr][group_name] = _aggregate_user_macro_one_cell(
-                pairs_path,
-                channel_stds,
-                canonical_user_ids=canonical_user_ids,
-                sidx_arr=sidx_arr,
-                full_u_rows=full_u_rows,
-                keep_mask=keep_mask,
-                n_channels=n_channels,
-                return_per_user=return_per_user,
-            )
-    return result

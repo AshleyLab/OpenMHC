@@ -9,7 +9,7 @@
 - **NOT in survey JSON**: `WakeUpTime` does not appear in `cardio_activitysleep_survey.json` or any other survey in `CardioHealth/Resources/JSONs/cardiosurveys/`.
 - **AppCore Profile Item**: Managed as `kAPCUserInfoItemTypeWakeUpTime` in AppCore framework.
 - File reference: `CardioHealth/Startup/APHAppDelegate.m` line ~1435
-- See also: `APCUser+Sleep.h` (from AppCore)
+- See also: `CardioHealth/User/APCUser+Sleep.h`
 
 ## Question
 Not a survey question. This is a user profile preference.
@@ -22,7 +22,7 @@ Continuous time value (hours and minutes), typically 0–24 hour format or user'
 | Constraint | Value |
 |-----------|-------|
 | Data Type | time |
-| Source | User profile / HealthKit sleep analysis |
+| Source | AppCore profile time picker (sign-up or profile screen) |
 | UI Hint | time picker (profile settings) |
 
 ## Observed values
@@ -74,7 +74,7 @@ _Generated 2026-04-28 from `data/labels/last_labels.json` (md5 `0f65e8fe…`) an
 
 ## Notes
 - **Not extracted from survey**: Unlike `sleep_time` and `sleep_time1` which are explicit survey questions, `WakeUpTime` is a user-configurable profile preference.
-- **HealthKit integration**: May also be derived or validated against HealthKit sleep analysis (see `HKObject+Metadata` in AppDelegate imports).
+- **Set by hand**: The participant picks this time at sign-up or on the profile screen. It is not derived from HealthKit.
 - **Coaching trigger**: Used in `APHStandModule.m` (`isWakeUpTime` method) to determine if user is currently in their wake period for stand/activity coaching interventions.
 - **Companion to GoSleepTime**: Together with `GoSleepTime`, defines the user's active window for coaching and real-time activity monitoring.
 - **Contextual**: Helps tailor activity suggestions and stand reminders to times when user is awake and likely to respond.

@@ -12,7 +12,7 @@
 - Input variables: `WakeUpTime` (time of day, 24-hour format)
 
 ## Question
-Not directly asked — derived from the wake-up time response in the Daily Check-in or sleep survey.
+Not directly asked — derived from the wake-up time set with the AppCore profile time picker (sign-up or profile screen), not from the Daily Check-in or a survey.
 
 ## Derivation details
 

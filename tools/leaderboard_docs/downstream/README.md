@@ -4,7 +4,7 @@ This directory holds the **per-method substrate** for the OpenMHC Track-1 (outco
 prediction) leaderboard. Each method ships two files:
 
 ```
-downstream/<method>.parquet         # per-user prediction pairs (method × task × subgroup × user)
+downstream/<method>.parquet         # per-user prediction pairs (method × task × user)
 downstream/<method>.meta.json       # display + diagnostic sidecar
 ```
 
@@ -22,16 +22,18 @@ server-side against the `linear` baseline.
 The substrate parquets are the canonical inputs for:
 
 - The OpenMHC HF Space (`MyHeartCounts/OpenMHC`) — the live leaderboard table (skill /
-  fair-skill / average-rank vs the `linear` baseline). The Space **reduces these substrates
-  live on every page load** — point estimate vs the `linear` baseline — exactly like the
+  worst-subgroup skill / average rank vs the `linear` baseline). The Space **reduces these substrates
+  on startup or first access and caches the results in-process** — point estimate vs the `linear` baseline — exactly like the
   imputation and forecasting tracks. So once your `<method>.parquet` (+ `.meta.json`) is on
   the dataset, **it goes straight onto the board** — reduced live vs `linear`, with no
   precomputed rows file and no offline maintainer reduce (the board picks it up on the
   Space's next restart). (The paper's 95% confidence intervals come from the separate
   `downstream/bootstrap/` reference; the live board shows the point value.)
 - Independent re-aggregation (the reducers in `scripts/paper_results/downstream/`).
-- The cluster-bootstrap reference at `downstream/bootstrap/` (per-draw CIs) is reduced
-  from these substrates, so any change here must be matched by a bootstrap refresh.
+- The current main bootstrap reference at `downstream/bootstrap/` uses the same
+  saved evaluation predictions, before float32 pair serialization. Refresh it
+  together with the prediction files. It contains all-participant skill/rank CIs;
+  it does not contain subgroup or worst-subgroup CIs.
 
 ## Loading
 
@@ -60,7 +62,9 @@ print(json.loads(open(meta_p).read()))
 ## Pooled substrate
 
 The pooled per-user frame across all methods is the concatenation of the per-method
-parquets (93,528 rows/method for the canonical 32-task config):
+parquets (30,999 rows/method for the canonical 32-task config). Files built before
+`S_fair` was retired hold three times that, with `age_group` and `sex` rows; filter
+on `subgroup_attr == "all"`:
 
 ```python
 import glob, pandas as pd
@@ -72,9 +76,10 @@ pooled = pd.concat(
 
 ## `fallback_rate`
 
-Each sidecar carries `fallback_rate` — the fraction of the method's
-test predictions the harness left non-finite and substituted with the `linear` baseline
-before scoring. `wbm` is the only non-zero method (it embeds only participants with a
+Missing predictions are replaced with the corresponding `linear` baseline
+predictions before scoring. Each sidecar records the substituted fraction as
+`fallback_rate`. The pooled rate is the total number of substituted
+participant–task pairs divided by the total evaluated pairs. `wbm` is the only non-zero method (it embeds only participants with a
 full weekly window); the rest are `0.0`. A high rate means the headline scores partly
 reflect the baseline's performance on the substituted cells and should be read with
 caution.
@@ -82,7 +87,10 @@ caution.
 ## Refreshing
 
 The substrate is produced and uploaded from the OpenMHC code repo. It is pooled from
-saved eval predictions (no model re-run); the bootstrap reference is kept on the same
+saved eval predictions and schemas from the matching dataset root (no model re-run);
+set `MHC_DATA_DIR` for substrate production and the parity gate. The leaderboard
+reducers consume the completed substrate without requiring dataset access.
+The bootstrap reference is kept on the same
 predictions. Because the Space reduces the substrate live, **uploading it (step 5) is all
 it takes** — no precomputed rows file to regenerate and no offline reduce; the board picks it
 up on the Space's next restart. (You only touch the Space *code* when the reducer itself
@@ -90,7 +98,7 @@ changes — see `docs/leaderboard-maintenance.md`.)
 
 ```bash
 # (1) Eval — run each method through the public API, saving per-(method, task)
-#     test predictions + the shared _subgroups.json.
+#     test predictions.
 METHOD=xgboost MHC_DATA_DIR=<data> PREDICTIONS_DIR=results/eval/final/predictions \
   python scripts/run_eval.py                      # repeat for the 8 methods
 
@@ -98,21 +106,22 @@ METHOD=xgboost MHC_DATA_DIR=<data> PREDICTIONS_DIR=results/eval/final/prediction
 PYTHONPATH=src python scripts/paper_results/downstream/bootstrap_downstream_draws.py \
   --predictions_dir results/eval/final/predictions --csvs_dir results/eval/final \
   --methods linear multirocket xgboost lsm2 gru_d wbm toto chronos2 \
+  --split-file <canonical-split.json> \
   --output results/paper/bootstrap_draws.parquet
 
 # (3) Build the per-method substrate parquets (+ provenance sidecars).
-python scripts/paper_results/downstream/parity/produce_per_method_per_user_pairs.py \
+MHC_DATA_DIR=<data> PYTHONPATH=src python scripts/paper_results/downstream/leaderboard/produce_per_method_per_user_pairs.py \
   --predictions-dir results/eval/final/predictions --out-dir results/leaderboard_downstream
 
-# (4) Parity gate — the substrate must equal the predictions, and a substrate-driven
-#     bootstrap must reproduce results/paper/bootstrap_draws.parquet.
-python scripts/paper_results/downstream/parity/parity_substrate.py
+# (4) Parity gate — check the serialized prediction pairs and point scores.
+#     Bootstrap reproducibility must account for float32 pair serialization.
+MHC_DATA_DIR=<data> PYTHONPATH=src python scripts/paper_results/downstream/dev/parity_substrate.py
 
 # (5) Upload the per-method substrates (HF auth required).
-for m in multirocket xgboost lsm2 gru_d wbm toto chronos2; do
+for m in linear multirocket xgboost lsm2 gru_d wbm toto chronos2; do
   python tools/upload_leaderboard_substrate.py --dir results/leaderboard_downstream \
     --method "$m" --track downstream --name "<Display>" --type "<Type>" \
-    --submitter "OpenMHC team" --subtrack static
+    --submitter "OpenMHC team" --subtrack static --fallback-rate <measured-pooled-rate>
 done
 
 # (6) Upload the bootstrap-draws reference (-> downstream/bootstrap/).
@@ -121,3 +130,6 @@ python tools/upload_leaderboard_bootstrap.py --dir results/paper --track downstr
 
 Steps (2) and (6) keep the bootstrap CIs on the same canonical predictions as the point
 numbers — run them together whenever the substrates change.
+
+The CLI examples use shared-participant bootstrap sampling.
+The Space's pinned point reducer is validated separately and does not generate CIs.

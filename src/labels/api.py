@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
-import os
 import statistics
 from bisect import bisect_left, bisect_right
 from collections import Counter
@@ -15,33 +15,9 @@ from typing import Any
 
 import pandas as pd
 
-from openmhc._dataset import bundled_metadata_dir as _bundled_metadata_dir
-from openmhc._dataset import data_dir as _resolve_dataset_root
+from openmhc._label_paths import LabelPaths
 
-BUNDLED_METADATA_DIR = _bundled_metadata_dir()
-DATA_DIR = BUNDLED_METADATA_DIR
-
-
-def _normalize_path(path: str | Path) -> Path:
-    return Path(path).expanduser().resolve()
-
-
-def _resolve_bundled_metadata_path(env_var: str, filename: str) -> Path:
-    override = os.getenv(env_var)
-    if override:
-        return _normalize_path(override)
-    return (BUNDLED_METADATA_DIR / filename).resolve()
-
-
-def _resolve_dataset_payload_path(env_var: str, filename: str) -> Path | None:
-    override = os.getenv(env_var)
-    if override:
-        return _normalize_path(override)
-    try:
-        root = _resolve_dataset_root()
-    except ValueError:
-        return None
-    return root / "labels" / filename
+logger = logging.getLogger(__name__)
 
 
 def _require_dataset_payload_path(
@@ -55,25 +31,17 @@ def _require_dataset_payload_path(
     raise ValueError(
         f"OpenMHC dataset root is required to resolve labels/{filename}. "
         f"Expected this file under <dataset_root>/labels/{filename}. "
-        f"Set `{env_var}` directly, pass `data_dir=` / `dest=`, or set `MHC_DATA_DIR`."
+        "Call `labels.configure(data_dir=...)` with a dataset containing all three "
+        "schema files before querying. Alternatively set `MHC_DATA_DIR` and call "
+        f"`labels.configure()`. `{env_var}` overrides this payload only; it does "
+        "not select the required dataset schemas."
     )
 
 
-LABELS_PATH = _resolve_dataset_payload_path("LABELS_DATA_PATH", "last_labels.json")
-CONTEXT_LABELS_PATH = _resolve_dataset_payload_path("CONTEXT_LABELS_PATH", "context_labels.json")
-ORDINAL_DICTIONARY_PATH = _resolve_bundled_metadata_path(
-    "ORDINAL_DICTIONARY_PATH", "ordinal_dictionary.json"
-)
-ENROLLMENT_PATH = _resolve_dataset_payload_path("ENROLLMENT_DATA_PATH", "enrollment_info.json")
-LABEL_TYPES_PATH = _resolve_bundled_metadata_path("LABEL_TYPES_PATH", "label_types.json")
-LABEL_VALIDITY_PATH = _resolve_dataset_payload_path("LABEL_VALIDITY_PATH", "label_validity.json")
-HEALTHKIT_DAILY_PATH = _resolve_dataset_payload_path("HEALTHKIT_DAILY_PATH", "healthkit_daily.json")
-VALIDITY_CONFIG_PATH = _resolve_bundled_metadata_path(
-    "VALIDITY_CONFIG_PATH", "validity_config.json"
-)
+_PATHS = LabelPaths.resolve()
 
 
-def _load_label_types() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     """Load label type mappings from label_types.json.
 
     Handles both old flat format (``{"Diabetes": "binary"}``) and new
@@ -84,10 +52,10 @@ def _load_label_types() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
         string for backward compatibility, and meta_dict maps label→full
         metadata dict.
     """
-    if not LABEL_TYPES_PATH.exists():
-        return {}, {}
-    with LABEL_TYPES_PATH.open("r") as handle:
+    with path.open("r") as handle:
         raw = json.load(handle)
+    if not isinstance(raw, dict) or not raw:
+        raise ValueError(f"Label types must be a nonempty JSON object: {path}")
     types: dict[str, str] = {}
     meta: dict[str, dict[str, Any]] = {}
     for key, value in raw.items():
@@ -95,16 +63,33 @@ def _load_label_types() -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
             # Old flat format: {"Diabetes": "binary"}
             types[key] = value
             meta[key] = {"type": value, "target": True}
-        else:
+        elif isinstance(value, dict) and "type" in value:
             # New object format: {"Diabetes": {"type": "binary", "target": true}}
             types[key] = value["type"]
             meta[key] = value
+        else:
+            raise ValueError(f"Invalid label type metadata for {key!r}: {path}")
+        if types[key] not in (
+            "binary",
+            "ordinal",
+            "categorical",
+            "multi_categorical",
+            "continuous",
+        ):
+            raise ValueError(f"Unknown label type for {key!r}: {path}")
     return types, meta
 
 
-LABEL_TYPES: dict[str, str]
-_LABEL_META: dict[str, dict[str, Any]]
-LABEL_TYPES, _LABEL_META = _load_label_types()
+# Metadata is populated by configure() or the first label query.
+LABEL_TYPES: dict[str, str] = {}
+_LABEL_META: dict[str, dict[str, Any]] = {}
+_SCHEMAS_CONFIGURED = False
+
+
+def _ensure_configured() -> None:
+    """Configure lazily so imports work before an explicit dataset is selected."""
+    if not _SCHEMAS_CONFIGURED:
+        configure()
 
 
 class LabelTypeError(Exception):
@@ -205,7 +190,7 @@ def _to_int(value: Any, label: str) -> int:
                 return int(parsed)
         except (ValueError, TypeError):  # noqa: BLE001
             # if not directly convertible into int, then search in ordinal dictionary
-            ord_dict = _load_ordinal_dictionary(ordinal_dictionary_path=ORDINAL_DICTIONARY_PATH)
+            ord_dict = _load_ordinal_dictionary(ordinal_dictionary_path=_PATHS.ordinal_dictionary)
             return int(ord_dict[label][value])
         # search in dictionary if not directly convertible
         raise LabelTypeError(
@@ -278,12 +263,27 @@ def _to_tuple_of_int(value: Any, label: str) -> tuple[int, ...]:
 
 
 # Derive label names from label_types.json (insertion order preserved).
-LABEL_NAMES: list[str] = list(LABEL_TYPES.keys())
-TARGET_NAMES: list[str] = [k for k, v in _LABEL_META.items() if v.get("target", True)]
-CONTEXT_NAMES: list[str] = [k for k, v in _LABEL_META.items() if not v.get("target", True)]
-MULTI_CATEGORICAL_NAMES: list[str] = [
-    k for k, v in _LABEL_META.items() if v.get("type") == "multi_categorical"
-]
+LABEL_NAMES: list[str] = []
+TARGET_NAMES: list[str] = []
+CONTEXT_NAMES: list[str] = []
+MULTI_CATEGORICAL_NAMES: list[str] = []
+
+
+def _apply_metadata(types: dict, meta: dict) -> None:
+    """Refresh the imported metadata containers without replacing their identities."""
+    LABEL_TYPES.clear()
+    LABEL_TYPES.update(types)
+    _LABEL_META.clear()
+    _LABEL_META.update(meta)
+    LABEL_NAMES[:] = types
+    TARGET_NAMES[:] = [k for k, v in meta.items() if v.get("target", True)]
+    CONTEXT_NAMES[:] = [k for k, v in meta.items() if not v.get("target", True)]
+    MULTI_CATEGORICAL_NAMES[:] = [
+        k for k, v in meta.items() if v.get("type") == "multi_categorical"
+    ]
+
+
+_apply_metadata(LABEL_TYPES.copy(), _LABEL_META.copy())
 
 
 _VALID_AGGREGATIONS = ("mean", "median", "min", "max", "std", "last", "first")
@@ -475,7 +475,14 @@ class EnrollmentIndex:
 
     def __init__(self, enrollment: dict[str, dict[str, Any]]) -> None:
         """Initialize the enrollment index."""
+        if not isinstance(enrollment, dict):
+            raise ValueError("Enrollment metadata must be a JSON object keyed by user ID")
         self._enrollment = enrollment
+        self._has_birth_years = any(
+            isinstance(record, dict)
+            and (record.get("birth_year") is not None or record.get("birthdate") is not None)
+            for record in enrollment.values()
+        )
 
     def get(self, health_code: str) -> dict[str, Any] | None:
         """Get enrollment information for a health code.
@@ -508,9 +515,66 @@ class EnrollmentIndex:
             # Transition fallback for pre-migration enrollment fixtures/files.
             birthdate = user.get("birthdate")
             if birthdate is None:
-                raise KeyError(f"No birth_year for healthCode: {health_code}")
+                if self._has_birth_years:
+                    raise KeyError(
+                        f"Enrollment record lacks birth_year for healthCode: {health_code}. "
+                        "Other records in this file have it, so this is a gap in this record "
+                        "rather than an outdated release."
+                    )
+                raise KeyError(
+                    f"Enrollment metadata lacks birth_year for healthCode: {health_code}. "
+                    "Download a dataset release containing birth_year into a new directory "
+                    "and call labels.configure(data_dir=...). Stored age cannot replace birth_year."
+                )
             return int(pd.Timestamp(birthdate).year)
         return int(birth_year)
+
+    def age_at(self, health_code: str, date: pd.Timestamp) -> int:
+        """Return calendar-year age at an explicit date from enrolment birth year.
+
+        The supplied timestamp's year is used without timezone conversion.
+        Missing participants or birth years raise KeyError. Invalid timestamps,
+        invalid birth years and dates before the birth year raise ValueError.
+        """
+        if not isinstance(date, pd.Timestamp) or pd.isna(date):
+            raise ValueError("date must be a valid pandas.Timestamp")
+        record = self.get(health_code)
+        if record is not None and not isinstance(record, dict):
+            raise ValueError("Invalid enrollment record")
+        raw_year = record.get("birth_year") if record is not None else None
+        if isinstance(raw_year, bool) or (
+            isinstance(raw_year, float) and not raw_year.is_integer()
+        ):
+            raise ValueError("Birth year must be an integer")
+        try:
+            birth_year = self.get_birth_year(health_code)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Invalid birth year in enrollment metadata") from exc
+        if not 1 <= birth_year <= 9999:
+            raise ValueError("Birth year must be between 1 and 9999")
+        if date.year < birth_year:
+            raise ValueError("date is before the participant's birth year")
+        return years_between_birth_year(birth_year, date)
+
+    def age_at_enrollment(self, health_code: str) -> int:
+        """Return calendar-year age at the participant's enrollment createdOn.
+
+        Missing records or createdOn raise KeyError; malformed dates raise
+        ValueError. Stored age is never used as a fallback.
+        """
+        record = self.get(health_code)
+        if record is not None and not isinstance(record, dict):
+            raise ValueError("Invalid enrollment record")
+        created_on = record.get("createdOn") if record is not None else None
+        if created_on is None:
+            raise KeyError(f"No enrollment createdOn for healthCode: {health_code}")
+        if not isinstance(created_on, (str, pd.Timestamp)):
+            raise ValueError("Enrollment createdOn must be a timestamp")
+        try:
+            date = pd.Timestamp(created_on)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError("Invalid enrollment createdOn") from exc
+        return self.age_at(health_code, date)
 
     def get_birthdate(self, health_code: str) -> pd.Timestamp:
         """Get a synthetic birthdate for compatibility.
@@ -527,22 +591,22 @@ class LabelsStore:
 
     def __init__(
         self,
-        labels_path: Path | None,
-        enrollment_path: Path | None,
-        validity_path: Path | None = None,
-        healthkit_daily_path: Path | None = None,
-        context_labels_path: Path | None = None,
+        paths: LabelPaths,
     ) -> None:
-        """Initialize the labels store with file paths."""
-        self.labels_path = labels_path
-        self.enrollment_path = enrollment_path
-        self.validity_path = validity_path
-        self.healthkit_daily_path = healthkit_daily_path
-        self.context_labels_path = context_labels_path
+        """Initialize the labels store with the resolved configuration."""
+        self.paths = paths
         self._labels_index: LabelsIndex | None = None
         self._enrollment: EnrollmentIndex | None = None
         self._validity_attached: bool = False
         self._daily_index: LabelsIndex | None = None
+
+    def configure(self, paths: LabelPaths) -> None:
+        """Replace paths and discard all cached payloads, keeping this store."""
+        self.paths = paths
+        self._labels_index = None
+        self._enrollment = None
+        self._validity_attached = False
+        self._daily_index = None
 
     def get_labels(self, health_code: str, timestamp: pd.Timestamp, label: str) -> LabelResult:
         """Get label value for a health code at a specific timestamp.
@@ -569,13 +633,13 @@ class LabelsStore:
         if self._labels_index is None:
             index = _load_labels(
                 _require_dataset_payload_path(
-                    self.labels_path,
+                    self.paths.labels,
                     env_var="LABELS_DATA_PATH",
                     filename="last_labels.json",
                 )
             )
-            if self.context_labels_path is not None and self.context_labels_path.exists():
-                ctx = _load_labels(self.context_labels_path)
+            if self.paths.context is not None and self.paths.context.exists():
+                ctx = _load_labels(self.paths.context)
                 for label, per_user in ctx.items():
                     if label not in index:
                         index[label] = per_user
@@ -598,7 +662,7 @@ class LabelsStore:
             self._enrollment = EnrollmentIndex(
                 _load_enrollment(
                     _require_dataset_payload_path(
-                        self.enrollment_path,
+                        self.paths.enrollment,
                         env_var="ENROLLMENT_DATA_PATH",
                         filename="enrollment_info.json",
                     )
@@ -613,8 +677,8 @@ class LabelsStore:
         Returns None if healthkit_daily.json does not exist.
         """
         if self._daily_index is None:
-            if self.healthkit_daily_path is not None and self.healthkit_daily_path.exists():
-                self._daily_index = LabelsIndex(_load_labels(self.healthkit_daily_path))
+            if self.paths.daily is not None and self.paths.daily.exists():
+                self._daily_index = LabelsIndex(_load_labels(self.paths.daily))
         return self._daily_index
 
     def _ensure_validity_loaded(self) -> None:
@@ -627,9 +691,9 @@ class LabelsStore:
         if self._validity_attached:
             return
         self._validity_attached = True
-        if self.validity_path is None or not self.validity_path.exists():
+        if self.paths.validity is None or not self.paths.validity.exists():
             return
-        validity_data = _load_validity(self.validity_path)
+        validity_data = _load_validity(self.paths.validity)
         raw_index = self.labels_index._index  # noqa: SLF001
         for label, per_user in validity_data.items():
             label_series = raw_index.get(label, {})
@@ -668,12 +732,25 @@ def _load_labels(labels_path: Path) -> dict[str, dict[str, LabelSeries]]:
 
 def _load_ordinal_dictionary(ordinal_dictionary_path: Path) -> dict[str, dict[str, LabelSeries]]:
     with ordinal_dictionary_path.open("r") as handle:
-        return json.load(handle)
+        raw = json.load(handle)
+    # The release contains both value-to-code and code-to-description mappings.
+    if not isinstance(raw, dict) or any(
+        not isinstance(mapping, dict)
+        or any(not isinstance(value, (str, int)) for value in mapping.values())
+        for mapping in raw.values()
+    ):
+        raise ValueError(
+            f"Ordinal dictionary must contain JSON mappings: {ordinal_dictionary_path}"
+        )
+    return raw
 
 
 def _load_enrollment(enrollment_path: Path) -> dict[str, dict[str, Any]]:
     with enrollment_path.open("r") as handle:
-        return json.load(handle)
+        try:
+            return json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid enrollment JSON: {enrollment_path}") from exc
 
 
 def _load_validity(validity_path: Path) -> dict[str, dict[str, list[bool]]]:
@@ -716,13 +793,166 @@ def years_between_birth_year(birth_year: int, at: pd.Timestamp) -> int:
     return at.year - int(birth_year)
 
 
-STORE = LabelsStore(
-    labels_path=LABELS_PATH,
-    enrollment_path=ENROLLMENT_PATH,
-    validity_path=LABEL_VALIDITY_PATH,
-    healthkit_daily_path=HEALTHKIT_DAILY_PATH,
-    context_labels_path=CONTEXT_LABELS_PATH,
-)
+STORE = LabelsStore(_PATHS)
+
+
+def _load_schemas(resolved: LabelPaths) -> tuple[dict, dict]:
+    """Validate all small schemas without mutating live state or payload caches."""
+    resolved.require_schemas()
+    try:
+        types, meta = _load_label_types(resolved.label_types)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid label schema {resolved.label_types}: {exc}") from exc
+    try:
+        _load_ordinal_dictionary(resolved.ordinal_dictionary)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid label schema {resolved.ordinal_dictionary}: {exc}") from exc
+    try:
+        with resolved.validity_config.open() as handle:
+            validity = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid label schema {resolved.validity_config}: {exc}") from exc
+    if not isinstance(validity, dict) or any(
+        value is not None
+        and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        )
+        for value in validity.values()
+    ):
+        raise ValueError(
+            f"Validity config must map labels to nonnegative days or null: {resolved.validity_config}"
+        )
+    return types, meta
+
+
+def configure(data_dir: str | Path | None = None, *, paths: LabelPaths | None = None) -> None:
+    """Select a dataset for labels and devices; refresh metadata and lazy caches.
+
+    All three schemas come from the selected dataset's ``labels/`` directory.
+    Conflicting schema environment paths raise an error. Payload overrides
+    are resolved by ``LabelPaths``.
+    Call before querying/evaluating a new dataset. References imported with
+    ``from labels.api import STORE, LABEL_TYPES, CONTEXT_NAMES`` stay valid.
+    Configuration is process-global; concurrent evaluations of different
+    datasets require separate processes.
+    """
+    if paths is not None and data_dir is not None:
+        raise ValueError("Pass data_dir or paths, not both")
+    resolved = paths if paths is not None else LabelPaths.resolve(data_dir)
+    # Validate before changing metadata or either store.
+    types, meta = _load_schemas(resolved)
+
+    global _PATHS, _SCHEMAS_CONFIGURED
+    _PATHS = resolved
+    _apply_metadata(types, meta)
+    STORE.configure(resolved)
+    from devices import api as devices_api
+
+    devices_api.configure(paths=resolved)
+    _SCHEMAS_CONFIGURED = True
+
+
+def age_at(health_code: str, date: pd.Timestamp) -> int:
+    """Return calendar-year age at an explicitly supplied pandas.Timestamp.
+
+    Uses the configured dataset's enrolment birth year and returns
+    ``date.year - birth_year``; this is not birthday-based age. The enrolment
+    reader also accepts legacy records containing birthdate instead of birth_year.
+    Missing participants or birth years raise KeyError. Invalid dates or birth
+    years raise ValueError. Stored age labels are not read or modified.
+    """
+    _ensure_configured()
+    return STORE.enrollment.age_at(health_code, date)
+
+
+def age_at_enrollment(health_code: str) -> int:
+    """Return age at enrollment createdOn using the configured birth year.
+
+    Missing metadata raises KeyError and invalid metadata raises ValueError.
+    """
+    _ensure_configured()
+    return STORE.enrollment.age_at_enrollment(health_code)
+
+
+AGE_GROUP_EDGES = (18, 30, 40, 50, 60)
+
+
+def _age_group(age: int | None) -> str:
+    """Return the group for an age; missing and under-18 ages are unknown."""
+    if age is None or age < AGE_GROUP_EDGES[0]:
+        return "unknown"
+    for low, high in zip(AGE_GROUP_EDGES, AGE_GROUP_EDGES[1:]):
+        if age < high:
+            return f"{low}-{high - 1}"
+    return f"{AGE_GROUP_EDGES[-1]}+"
+
+
+def _sex_group(value: Any) -> str:
+    """Return male or female for a BiologicalSex value, otherwise unknown."""
+    if isinstance(value, bool):
+        return "male" if value else "female"
+    if isinstance(value, str) and value.strip().lower() in ("male", "female"):
+        return value.strip().lower()
+    return "unknown"
+
+
+def user_demographics(
+    user_ids: Iterable[str], *, paths: LabelPaths | None = None
+) -> dict[str, dict[str, str]]:
+    """Return ``{user_id: {"age_group": ..., "sex": ...}}``, one group per participant.
+
+    This is the single definition of the reporting groups for all tracks. Age
+    group uses calendar-year age at enrollment; sex is the latest BiologicalSex
+    label. Missing or invalid values, including malformed records, give ``unknown``
+    and keep the user. The unknown age count is logged, as is a cohort with no usable
+    sex label. Unreadable or malformed files raise.
+
+    Args:
+        user_ids: Users to look up.
+        paths: Read these files instead of the configured dataset, leaving the
+            configured dataset unchanged.
+    """
+    if paths is None:
+        _ensure_configured()
+        store = STORE
+    else:
+        store = LabelsStore(paths)
+    # Load outside the per-user tries: a broken file is not a missing value.
+    enrollment = store.enrollment
+    labels_index = store.labels_index
+
+    groups = {}
+    for user_id in sorted({str(user) for user in user_ids}):
+        try:
+            age = enrollment.age_at_enrollment(user_id)
+        except (KeyError, ValueError):
+            age = None
+        try:
+            sex_values = labels_index.get_series("BiologicalSex", user_id).values
+        except KeyError:
+            sex_values = []
+        groups[user_id] = {
+            "age_group": _age_group(age),
+            "sex": _sex_group(sex_values[-1] if sex_values else None),
+        }
+    unknown = sum(row["age_group"] == "unknown" for row in groups.values())
+    if unknown:
+        logger.warning(
+            "%d/%d users have unknown age groups. Check birth_year and createdOn "
+            "in enrollment_info.json; ages below 18 are also unknown.%s",
+            unknown,
+            len(groups),
+            " The cohort has no usable age groups." if unknown == len(groups) else "",
+        )
+    if groups and all(row["sex"] == "unknown" for row in groups.values()):
+        logger.warning(
+            "No user has a usable BiologicalSex label. Check last_labels.json; "
+            "sex cohorts will be empty."
+        )
+    return groups
 
 
 def get_labels(
@@ -762,6 +992,7 @@ def get_labels(
         LabelValueError: If value is None or NaN
         LabelTypeError: If value cannot be converted to expected type
     """
+    _ensure_configured()
     if label not in LABEL_NAMES:
         raise ValueError(f"Unknown label: {label}")
 
@@ -823,6 +1054,7 @@ def get_labels_windowed(
         ValueError: If label is unknown or aggregation method is invalid.
         KeyError: If healthCode not found or no measurements in window.
     """
+    _ensure_configured()
     if label not in LABEL_NAMES and label not in DAILY_LABELS:
         raise ValueError(f"Unknown label: {label}")
 
@@ -873,6 +1105,7 @@ def get_labels_one_hot(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_one_hot only supports multi_categorical labels, "
@@ -886,7 +1119,7 @@ def get_labels_one_hot(
         return_valid_only=return_valid_only,
     ).value
     if options is None:
-        ord_dict = _load_ordinal_dictionary(ORDINAL_DICTIONARY_PATH)
+        ord_dict = _load_ordinal_dictionary(_PATHS.ordinal_dictionary)
         options = sorted(int(k) for k in ord_dict.get(label, {}).keys())
     s = set(selected)
     return {opt: (opt in s) for opt in options}
@@ -913,6 +1146,7 @@ def get_labels_count(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_count only supports multi_categorical labels, "
@@ -952,6 +1186,7 @@ def get_labels_contains(
     Raises:
         ValueError: If ``label`` is not a ``multi_categorical`` label.
     """
+    _ensure_configured()
     if LABEL_TYPES.get(label) != "multi_categorical":
         raise ValueError(
             f"get_labels_contains only supports multi_categorical labels, "
@@ -973,9 +1208,10 @@ def get_labels_statistics() -> pd.DataFrame:
     For each label, includes: data type, min value, max value, median value,
     and count of unique values.
     """
+    _ensure_configured()
     labels_data = _load_labels(
         _require_dataset_payload_path(
-            LABELS_PATH,
+            _PATHS.labels,
             env_var="LABELS_DATA_PATH",
             filename="last_labels.json",
         )

@@ -12,7 +12,7 @@ parity with the published paper's method set.
 
 ```
 imputation/bootstrap_with_dense_weekly/
-├── draws.parquet      # per-(method, scenario, channel, subgroup, draw) E/R/rank
+├── draws.parquet      # per-(method, scenario, channel, draw) E/R/rank
 └── draws.meta.json    # provenance: seed, n_boot, methods, scenarios, git commit
 ```
 
@@ -22,10 +22,10 @@ imputation/bootstrap_with_dense_weekly/
 |---|---|---|
 | Method count | 16 | **17** |
 | Includes `lsm2_weekly` (dense 7-day) | no | **yes** |
-| Skill / fairness scores | identical to this variant per method (pairwise vs `locf`) | identical to canonical per method |
+| Skill scores | identical to this variant per method (pairwise vs `locf`) | identical to canonical per method |
 | Average-rank values | computed across 16-method pool | **shifted** because the comparison pool grew |
 
-**Skill** and **fairness skill score** are computed pairwise against the
+**Skill** is computed pairwise against the
 LOCF baseline, so removing or adding a non-baseline method doesn't change
 any other method's score. **Average rank** depends on the comparison pool
 and will differ between the two variants — that's expected and the whole

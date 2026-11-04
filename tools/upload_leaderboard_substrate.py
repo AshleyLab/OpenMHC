@@ -55,7 +55,7 @@ import json
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 DEFAULT_REPO_ID = "MyHeartCounts/OpenMHC-leaderboard-data"
 
@@ -148,6 +148,36 @@ def validate_method_column(parquet_path: Path, method: str) -> None:
         )
 
 
+def validate_users_have_demographics(parquet_path: Path, repo_id: str) -> None:
+    """Fail loudly if the parquet holds users absent from the demographics file.
+
+    Cohort views filter by ``demographics.parquet``, so any other user would still
+    count in the full-cohort view but silently drop out of every cohort.
+    """
+    import pandas as pd
+
+    try:
+        path = hf_hub_download(repo_id, "demographics.parquet", repo_type="dataset")
+    except RepositoryNotFoundError:
+        print(f"{repo_id} does not exist yet, so it has no cohort views to check against.")
+        return
+    except EntryNotFoundError as exc:
+        raise SystemExit(
+            f"Could not get demographics.parquet from {repo_id} ({type(exc).__name__}). If it "
+            "is not published yet, publish it first: see docs/leaderboard-maintenance.md."
+        ) from exc
+    known = set(pd.read_parquet(path, columns=["user_id"])["user_id"].astype(str))
+    users = set(pd.read_parquet(parquet_path, columns=["user_id"])["user_id"].astype(str))
+    missing = len(users - known)
+    if missing:
+        raise SystemExit(
+            f"{parquet_path} has {missing} user(s) absent from demographics.parquet. They "
+            "would be left out of every cohort view. Check the evaluation cohort. If they are "
+            "expected, publish a file that covers them first: run "
+            "tools/build_leaderboard_demographics.py with --add-substrate."
+        )
+
+
 def main() -> None:
     """Upload one method substrate parquet to the leaderboard dataset."""
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -202,6 +232,7 @@ def main() -> None:
     src = find_parquet(args.dir, args.method)
     if args.track in ("imputation", "downstream"):
         validate_method_column(src, args.method)
+    validate_users_have_demographics(src, args.repo_id)
     dest = f"{args.track}/{args.method}.parquet"
 
     api = HfApi()

@@ -11,10 +11,8 @@
 output_root: ${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper_no_dense
 runs_root:   ${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/runs
 draws_path:  ${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper_no_dense/bootstrap_draws.parquet
-# Pooled per_user_errors.parquet (BCa LOO substrate; METRICS.md §S7). Phase 1
-# writes it here, Phase 2 fairness reads it from here. Omitting this key makes
-# run_paper_pipeline.py pass --no-per-user-errors to Phase 1, which then breaks
-# Phase 2 fairness (--bca defaults to true and needs this file).
+# Pooled per_user_errors.parquet. Phase 1 writes it here. Omitting this key makes
+# run_paper_pipeline.py pass --no-per-user-errors to Phase 1.
 per_user_errors_path: ${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper_no_dense/per_user_errors.parquet
 manifest_path: ${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper_no_dense/bootstrap_method_dirs.json
 
@@ -29,19 +27,13 @@ common_overrides:
 n_boot: 1000
 seed: 42
 splits: [test]
-include_fairness: true
 include_auc: true
-age_bins: [18, 30, 40, 50, 60]
-exclude_unknown: false
 
 # Phase 2
 baseline_method: locf
 clip_lower: 0.01
 clip_upper: 100.0
-lambda_fairness: 0.5
-fairness_combine: linear_penalty
 ci_level: 0.95
-disparity_fns: []
 method_filter: null
 
 methods:

@@ -94,7 +94,7 @@ traceable to its exact checkpoint and arch.
 Paper-faithful checkpoints are mirrored on the Hugging Face Hub under the
 [`MyHeartCounts`](https://huggingface.co/MyHeartCounts) organization. The
 `hf://` URI scheme is the recommended path for users who don't have W&B
-access; bundles are public and licensed [OpenRAIL][openrail].
+access; bundles are public and licensed [BigScience OpenRAIL-M][openrail].
 
 ```bash
 pip install 'openmhc[pypots,hf]'      # PyPOTS wrappers + HF loader
@@ -128,7 +128,7 @@ manifest, normalization stats, FEDformer `fourier_modes.json` sidecar, and
 checkpoint files are downloaded — the model card and any other repo metadata
 are skipped.
 
-[openrail]: https://huggingface.co/blog/open_rlhf
+[openrail]: https://www.licenses.ai/s/BigScience-Open-RAIL-M-License.pdf
 
 ---
 

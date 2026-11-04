@@ -14,7 +14,6 @@
 
 set -euo pipefail
 
-export MHC_DATA_DIR=/simurgh/u/schuetzn/OpenMHC-Full/data
 cd /simurgh/u/schuetzn/myheartcounts-dataset
 
 /simurgh/u/schuetzn/conda/envs/openmhc/bin/python \

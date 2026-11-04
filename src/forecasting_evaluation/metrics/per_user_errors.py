@@ -2,7 +2,7 @@
 
 Single importable producer + serializer + reconstruction adapters for the
 forecasting per-user metric table — the one artifact every downstream reducer
-(skill point/bootstrap, rank point/bootstrap, fairness) consumes. Mirrors the
+(skill point/bootstrap, rank point/bootstrap) consumes. Mirrors the
 imputation track's :mod:`imputation_evaluation.evaluation.per_user_errors`,
 adapted to forecasting's on-disk **metric trees**
 (``<metrics_dir>/<metric>/<user>.parquet`` — forecasting has no ``pairs/``
@@ -12,9 +12,9 @@ byte-exact against the legacy from-trees path.
 The substrate stores one row per ``(model, group, metric, channel, user)`` with
 the RAW micro-pooled ``metric_value`` (= Σcell / Σcount over the user's finite
 horizon cells) and the finite-cell count ``n_values``. Storing RAW (not the
-error-converted value) is what lets a single table serve all three reducers:
+error-converted value) is what lets a single table serve both reducers:
 
-  * skill / fairness apply :func:`metric_spec.metric_to_error` on load (incl. the
+  * skill applies :func:`metric_spec.metric_to_error` on load (incl. the
     ``BINARY_ERROR_FLOOR`` floor) — see :func:`to_error_df`;
   * rank uses ``metric_value`` directly and rebuilds the activity/physiology
     (continuous) and sleep/workout (binary) group scopes — see
@@ -244,13 +244,13 @@ def read_per_user_metrics_parquet(path: str | Path) -> tuple[pd.DataFrame, dict 
 
 
 def to_error_df(per_user_df: pd.DataFrame, *, user_col: str = "unit_id") -> pd.DataFrame:
-    """Reconstruct the skill/fairness per-user error table from the substrate.
+    """Reconstruct the skill per-user error table from the substrate.
 
     Applies :func:`metric_spec.metric_to_error` per row (incl. the binary floor),
     drops non-finite errors (matching ``skill_score_summary._load_metric_values``),
-    and renames ``user_id`` → ``user_col`` (``"unit_id"`` for skill/bootstrap,
-    ``"user_id"`` for fairness). Keys are returned as plain ``str`` (not category)
-    so the bootstrap replica/resample machinery works unchanged.
+    and renames ``user_id`` → ``user_col`` (``"unit_id"`` for skill/bootstrap).
+    Keys are returned as plain ``str`` (not category) so the bootstrap
+    replica/resample machinery works unchanged.
     """
     columns = [
         "model",

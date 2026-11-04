@@ -2,7 +2,7 @@
 
 Each file is one method's **per-user, per-task substrate** for one track, stored as a single Parquet file at `<track>/<method>.parquet`.
 
-These are the inputs the leaderboard recompute consumes to produce paired skill scores, cross-method ranks, and fairness skill scores. They are *reduced* per-user values — **not** raw sensor data. The three tracks differ in what each row stores: Track 1 stores raw prediction **pairs**, Track 2 stores an **error**, Track 3 stores the **raw metric value**.
+These are the inputs the leaderboard recompute consumes to produce paired skill scores and cross-method ranks. They are *reduced* per-user values — **not** raw sensor data. The three tracks differ in what each row stores: Track 1 stores raw prediction **pairs**, Track 2 stores an **error**, Track 3 stores the **raw metric value**.
 
 ## Track 1 — Predictive Tasks
 
@@ -13,16 +13,18 @@ One row per `(method, task, task_type, subgroup_attr, subgroup_value, user_id)`.
 | `method` | string (dict) | method identifier, e.g. `xgboost` |
 | `task` | string (dict) | prediction task name (one of the 32 tasks) |
 | `task_type` | string (dict) | `binary`, `ordinal`, or `regression` |
-| `subgroup_attr` | string (dict) | `all` (global), `age_group`, or `sex` |
-| `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (an age bucket, or a sex value) |
+| `subgroup_attr` | string (dict) | `all` |
+| `subgroup_value` | string (dict) | `all` |
 | `user_id` | string (dict) | pseudonymous participant id — the bootstrap cluster unit |
 | `y_true` | float32 | ground-truth label for the `(task, user)` cell |
 | `y_pred` | float32 | the model's prediction, by task type: a thresholded class for binary, and the continuous score for ordinal and regression (ordinal is scored with rank-based Spearman, so the raw score is kept rather than rounded to a class) |
-| `y_proba` | float32 | the model's continuous score — class-1 probability for binary, point prediction otherwise (the column the ranking/correlation metrics read) |
+| `y_proba` | float32 | continuous binary score used by average precision; ordinal/regression primary metrics read `y_pred` |
 
 ### Why pairs, not an error
 
-Because the metrics are cohort-level (AUPRC / Spearman / Pearson), a single per-user error like Track 2's `E_per_user` is not well-defined. The leaderboard pools every `downstream/*.parquet` and recomputes the paired skill score, fair skill score, and average rank against the `linear` baseline. Missing-prediction fallback is already applied — a participant the model could not score is substituted with the `linear` baseline before the pairs are written — so there are no NaN pairs.
+Because the metrics are cohort-level (AUPRC / Spearman / Pearson), a single per-user error like Track 2's `E_per_user` is not well-defined. The leaderboard pools every `downstream/*.parquet` and recomputes the paired skill score and average rank against the `linear` baseline. Missing-prediction fallback is already applied — a participant the model could not score is substituted with the `linear` baseline before the pairs are written — so there are no NaN pairs.
+
+A cohort view is a membership filter of these rows by [`demographics.parquet`](#demographics). Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
 
 ## Track 2 — Imputation
 
@@ -35,8 +37,8 @@ One row per `(method, scenario, split, channel, channel_type, subgroup_attr, sub
 | `split` | string (dict) | data split — `test` |
 | `channel` | string (dict) | `ch_0`..`ch_18` (19 sensor channels), or `cat_collapsed:sleep` / `cat_collapsed:workouts` (collapsed-binary tasks) |
 | `channel_type` | string (dict) | `continuous` (`ch_0`–`ch_6`), `binary` (`ch_7`–`ch_18`), or `binary_collapsed` (the `cat_collapsed:*` tasks) |
-| `subgroup_attr` | string (dict) | `all` (global), `age_group`, or `sex` |
-| `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (an age bucket, or a sex value) |
+| `subgroup_attr` | string (dict) | `all` |
+| `subgroup_value` | string (dict) | `all` |
 | `user_id` | string (dict) | pseudonymous participant id — the bootstrap cluster unit; required for paired skill + per-user rank |
 | `E_per_user` | float32 | per-user error for the cell (see below) |
 
@@ -48,9 +50,11 @@ One row per `(method, scenario, split, channel, channel_type, subgroup_attr, sub
 
 NaN values are dropped — a user with no data for a cell simply has no row.
 
+A cohort view is a membership filter of these rows by [`demographics.parquet`](#demographics). Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
+
 ## Track 3 — Forecasting
 
-One row per `(model, group, metric, channel_idx, channel_name, user_id)`. Unlike Track 2 (which stores the error `E_per_user`), the forecasting substrate stores the **raw** per-user `metric_value`, so a single file serves all three reducers — skill and fairness convert it to an error on load, rank uses it directly.
+One row per `(model, group, metric, channel_idx, channel_name, user_id)`. Unlike Track 2 (which stores the error `E_per_user`), the forecasting substrate stores the **raw** per-user `metric_value`, so a single file serves both reducers — skill converts it to an error on load, rank uses it directly.
 
 | column | type | description |
 |---|---|---|
@@ -65,14 +69,25 @@ One row per `(model, group, metric, channel_idx, channel_name, user_id)`. Unlike
 
 ### From `metric_value` to error
 
-The skill/fairness reducers convert on load: continuous error = `metric_value` (MAE, lower=better); binary error = `max(1 − auroc, 0.005)`. Rank uses `metric_value` directly. Stored at **float64** (vs Track 2's float32) for byte-exact reproduction of the published aggregates.
+The skill reducer converts on load: continuous error = `metric_value` (MAE, lower=better); binary error = `max(1 − auroc, 0.005)`. Rank uses `metric_value` directly. Stored at **float64** (vs Track 2's float32) for byte-exact reproduction of the published aggregates.
+
+## Demographics
+
+`demographics.parquet` holds one row per participant in a published substrate. It is the only source of cohort membership, for all three tracks. `demographics.meta.json` records the rules, the code commit, the dataset version and the substrate revision it was built from.
+
+| column | type | description |
+|---|---|---|
+| `user_id` | string | pseudonymous participant id |
+| `age_group` | string | `18-29`, `30-39`, `40-49`, `50-59` or `60+`, from age at enrollment (`createdOn` year minus `birth_year`) |
+| `sex` | string | `male`, `female` or `unknown`, from the latest `BiologicalSex` label |
+
+Each participant has one group across all tracks. Like the dataset, this file is covered by the [Data Use Agreement](https://github.com/AshleyLab/myheartcounts-dataset/blob/main/DATASET.md#data-use-agreement).
 
 ## Conventions
 
 - Evaluated against the canonical split `sharable_users_seed42_2026` (`test`).
-- Baselines for skill / fairness: `linear` (Track 1), `locf` (Track 2), `seasonal_naive` (Track 3). The baseline is scored server-side; do not submit it.
+- Baselines for skill: `linear` (Track 1), `locf` (Track 2), `seasonal_naive` (Track 3). The baseline is scored server-side; do not submit it.
 - Track 3 within-user aggregation: micro (pool finite horizon cells); unit: user.
-- Fairness disparity primitive: mean absolute pairwise difference (MAPD) — for a 2-level attribute (`sex`) this equals the historical max-min.
 - Format: one Parquet per method, dictionary-encoded categoricals; `float32` pairs (Track 1) / `float32` errors (Track 2) / `float64` `metric_value` (Track 3).
 - Per-track bootstrap references live under `<track>/bootstrap/` — see that subdir's `SCHEMA.md`.
 - Per-track details (full schema, submission steps): see `<track>/SCHEMA.md`.

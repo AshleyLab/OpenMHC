@@ -67,8 +67,8 @@ class EvalConfig:
             probe runs inside each method via ``openmhc.LinearProbe``).
         temporal: the per-task forward-window policy (handed to from-raw models).
         predictions_dir: when set, the evaluator writes per-(method, task) test
-            predictions + a shared ``_subgroups.json`` here (input to the
-            paper-metrics bootstrap); ``None`` disables prediction export.
+            predictions here (input to the paper-metrics bootstrap); ``None``
+            disables prediction export.
     """
 
     data_dir: str
@@ -100,12 +100,14 @@ class MethodConfig:
 
     ``type`` selects the registry builder. The remaining fields are the
     per-method options that used to be env vars / constructor args: ``checkpoint``
-    (MAE / WBM), ``features_dir`` + ``max_future_days`` (XGBoost). Builders ignore
-    the fields they don't read.
+    and ``cache_dir`` (LSM2 / WBM / Toto / Chronos-2; incompatible cache identities
+    are rejected, so changed inputs need a fresh directory), ``features_dir`` +
+    ``max_future_days`` (XGBoost). Builders ignore the fields they don't read.
     """
 
     type: str = "linear"
     checkpoint: str | None = None
+    cache_dir: str | None = None
     features_dir: str | None = None
     max_future_days: int = 0
 
@@ -121,8 +123,8 @@ class EvaluationConfig:
 class OutputConfig:
     """Where results land.
 
-    ``predictions_dir`` (when set) enables the per-task prediction parquets +
-    ``_subgroups.json`` for the paper-metrics bootstrap.
+    ``predictions_dir`` (when set) enables the per-task prediction parquets for
+    the paper-metrics bootstrap.
     """
 
     results_dir: str = "results/eval"

@@ -10,18 +10,21 @@ tags:
 
 # OpenMHC Leaderboard Data
 
-Per-user **substrate** behind the [OpenMHC](https://myheartcounts.stanford.edu/benchmark) wearable-health benchmark leaderboard. Each file is one method's reduced per-user, per-task values for one track; the leaderboard recompute consumes these to produce paired **skill scores**, cross-method **ranks**, and **fairness skill scores**.
+Per-user **substrate** behind the [OpenMHC](https://myheartcounts.stanford.edu/benchmark) wearable-health benchmark leaderboard. Each file is one method's reduced per-user, per-task values for one track; the leaderboard recompute consumes these to produce paired **skill scores** and cross-method **ranks**.
 
-This repo holds *reduced metrics / predictions keyed by pseudonymous participant id* — **not** raw sensor data.
+This repo holds *reduced metrics / predictions keyed by pseudonymous participant id*, plus one age group and sex per participant — **not** raw sensor data.
 
 ## Layout
 
 ```
 <track>/<method>.parquet           e.g. downstream/xgboost.parquet, imputation/locf.parquet, forecasting/seasonal_naive.parquet
 <track>/bootstrap/draws.parquet    per-draw bootstrap reference for the CIs
+demographics.parquet               one age group and sex per evaluated participant, for cohort views
 ```
 
 Tracks: `downstream` (Track 1), `imputation` (Track 2), `forecasting` (Track 3) — all live.
+
+Cohort views keep the rows of the participants in `demographics.parquet` who belong to the cohort. See [`SCHEMA.md`](SCHEMA.md#demographics).
 
 ## Schema
 
@@ -29,7 +32,7 @@ See [`SCHEMA.md`](SCHEMA.md) for the full column spec per track (and each `<trac
 
 - **Track 1 (downstream / predictive tasks)** stores the raw per-user prediction **pairs** (`y_true`, `y_pred`, `y_proba`) — its cohort-level metrics (AUPRC / Spearman / Pearson) don't decompose into a per-user error.
 - **Track 2 (imputation)** stores the per-user error `E_per_user` (MAE / `1 − AUC`).
-- **Track 3 (forecasting)** stores the **raw** per-user `metric_value` (so one file serves skill, rank, and fairness — each reducer converts/uses it on load).
+- **Track 3 (forecasting)** stores the **raw** per-user `metric_value` (so one file serves skill and rank — each reducer converts/uses it on load).
 
 ## Why per-user (not aggregate)
 

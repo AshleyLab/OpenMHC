@@ -1,2 +1,5 @@
 # @package method
 type: toto
+# null keeps the model's public default checkpoint/cache path.
+checkpoint: null
+cache_dir: null

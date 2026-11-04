@@ -228,6 +228,10 @@ class Chronos2(TSFMEncoder):
         self.prediction_length = prediction_length
         self._window_override = window_hours
 
+    def _extraction_settings(self) -> dict:
+        return {"prediction_length": self.prediction_length,
+                "window_hours_override": self._window_override}
+
     def _load_model(self, device):
         pipeline = _load_chronos2_pipeline(self.checkpoint, device)
         ctx = int(pipeline.model_context_length)

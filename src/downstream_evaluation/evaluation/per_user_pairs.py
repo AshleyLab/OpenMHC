@@ -4,14 +4,14 @@ Track 1's headline metrics (binary AUPRC, ordinal Spearman, regression Pearson)
 are cohort-level ranking / correlation metrics that do **not** decompose into a
 per-user error the way imputation's per-user MAE does. So — unlike Tracks 2/3,
 which ship a precomputed ``E_per_user`` — the Track-1 substrate ships the **raw
-per-user prediction pairs** and the leaderboard recomputes paired skill / rank /
-fairness server-side (vs. the Linear baseline) from them.
+per-user prediction pairs** and the leaderboard recomputes paired skill / rank
+server-side (vs. the Linear baseline) from them.
 
 This module pools the per-(method, task) ``test.parquet`` files written by
-``predictions_io.write_task_predictions`` into one long frame per method, expanding
-each user across the ``all`` / ``age_group`` / ``sex`` subgroups (the fairness axes,
-read from ``_subgroups.json``). One row per
-``(method, task, task_type, subgroup_attr, subgroup_value, user_id)``.
+``predictions_io.write_task_predictions`` into one long frame per method. One row per
+``(method, task, task_type, subgroup_attr, subgroup_value, user_id)``, where
+``subgroup_attr`` and ``subgroup_value`` hold the constant ``"all"``. A cohort view is
+a membership filter of these rows.
 """
 
 from __future__ import annotations
@@ -36,29 +36,26 @@ PER_USER_PAIRS_PARQUET_COLUMNS = [
     "y_proba",
 ]
 
-# Fairness subgroup axes, expanded alongside the global "all" cell.
-_SUBGROUP_ATTRS = ("age_group", "sex")
-
 
 def build_per_user_pairs(
     predictions_dir: str | Path,
     method_dir: str,
     tasks,
     *,
-    subgroups_path: str | Path | None = None,
     method_label: str | None = None,
 ) -> pd.DataFrame:
     """Pool one method's per-(task) test predictions into the long pairs substrate.
 
+    Requires label schema configuration to recover task types. Call
+    ``labels.configure(data_dir=...)`` first, or set ``MHC_DATA_DIR`` for lazy
+    configuration. Saved predictions alone do not provide the schema.
+
     Args:
         predictions_dir: directory holding ``<method_dir>/<task>/test.parquet`` (as
-            written by :func:`predictions_io.write_task_predictions`) and the shared
-            ``_subgroups.json``.
+            written by :func:`predictions_io.write_task_predictions`).
         method_dir: the on-disk method subdirectory (``model.name``).
         tasks: the task names that were evaluated — used to recover the original
             task name from its filesystem-safe directory (the mangling is one-way).
-        subgroups_path: override for the ``_subgroups.json`` location; defaults to
-            ``<predictions_dir>/_subgroups.json``.
         method_label: value for the ``method`` column (the leaderboard groups by it
             and the upload filename must match it); defaults to ``method_dir``.
 
@@ -68,8 +65,6 @@ def build_per_user_pairs(
     """
     predictions_dir = Path(predictions_dir)
     method_label = method_label or method_dir
-    subgroups_path = Path(subgroups_path) if subgroups_path else predictions_dir / "_subgroups.json"
-    sub_map = json.loads(subgroups_path.read_text()) if subgroups_path.exists() else {}
 
     frames = []
     for task in tasks:
@@ -86,15 +81,7 @@ def build_per_user_pairs(
         return pd.DataFrame(columns=PER_USER_PAIRS_PARQUET_COLUMNS)
 
     base = pd.concat(frames, ignore_index=True)
-
-    # Subgroup expansion: the global "all" cell plus one row per fairness axis. Each
-    # user's pair is duplicated under its age band and sex so the server-side fairness
-    # reducer can slice without a separate subgroup map (mirrors the Track-2 substrate).
-    expanded = [base.assign(subgroup_attr="all", subgroup_value="all")]
-    for attr in _SUBGROUP_ATTRS:
-        values = base["user_id"].map(lambda u, a=attr: sub_map.get(u, {}).get(a, "unknown"))
-        expanded.append(base.assign(subgroup_attr=attr, subgroup_value=values))
-    result = pd.concat(expanded, ignore_index=True)
+    result = base.assign(subgroup_attr="all", subgroup_value="all")
     return result[PER_USER_PAIRS_PARQUET_COLUMNS]
 
 

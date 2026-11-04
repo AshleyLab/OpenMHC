@@ -117,29 +117,6 @@ def log_results(results: dict) -> None:
             for ch_key, rate in metrics.get("fallback_rate", {}).items():
                 flat_metrics[f"{prefix}/channel/{ch_key}/fallback_rate"] = rate
 
-            # Subgroup metrics (sensitivity analysis)
-            subgroups = metrics.get("subgroups")
-            if subgroups:
-                for attr, groups in subgroups.items():
-                    for group_name, sg_metrics in groups.items():
-                        sg_prefix = f"{prefix}/subgroups/{attr}/{group_name}"
-                        if "n_samples" in sg_metrics:
-                            flat_metrics[f"{sg_prefix}/n_samples"] = sg_metrics["n_samples"]
-                        sg_cont = sg_metrics.get("continuous", {})
-                        if "mean_normalized_rmse" in sg_cont:
-                            flat_metrics[f"{sg_prefix}/mean_nRMSE"] = sg_cont[
-                                "mean_normalized_rmse"
-                            ]
-                        if "mean_normalized_mse" in sg_cont:
-                            flat_metrics[f"{sg_prefix}/mean_nMSE"] = sg_cont["mean_normalized_mse"]
-                        if "mean_normalized_mae" in sg_cont:
-                            flat_metrics[f"{sg_prefix}/mean_nMAE"] = sg_cont["mean_normalized_mae"]
-                        sg_bin = sg_metrics.get("binary", {})
-                        if "macro_balanced_accuracy" in sg_bin:
-                            flat_metrics[f"{sg_prefix}/macro_bal_acc"] = sg_bin[
-                                "macro_balanced_accuracy"
-                            ]
-
     # Filter out NaN values (wandb doesn't handle them well)
     import math
 

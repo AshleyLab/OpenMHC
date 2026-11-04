@@ -40,32 +40,15 @@ def _metrics_for(task: str, y_true, y_pred, seed: int = 42) -> dict[str, float]:
 
 
 def _combine_with_fallback(y_pred, fb, ttype: str):
-    """Merge model predictions with Linear-baseline predictions at non-finite cells.
+    """Replace non-finite outputs with the corresponding Linear predictions.
 
-    Participants the model predicted (finite ``y_pred``) keep its output;
-    participants it left non-finite take the baseline ``fb``. For ranking metrics
-    (binary / ordinal) each cohort is percentile-ranked to ``[0, 1]``
-    independently before merging, so the two independently-fit predictors sit on
-    a common scale; regression / multiclass merge raw. This reproduces the
-    per-user routing the WBM model did internally before issue #38 — now lifted
-    to the harness so any model gets it. The WBM method
-    (``models/wbm/model.py::WBMProbe``) returns non-finite for participants it
-    cannot encode, which is what triggers this substitution.
-
-    Returns ``(out, n_substituted)``.
+    Returns ``(out, n_substituted)``; neither input array is modified.
     """
     y_pred = np.asarray(y_pred, dtype=np.float64)
     fb = np.asarray(fb, dtype=np.float64)
     non_finite = ~np.isfinite(y_pred)
-    finite = ~non_finite
     out = y_pred.copy()
-    if ttype in ("binary", "ordinal") and finite.any() and non_finite.any():
-        from scipy.stats import rankdata
-
-        out[finite] = rankdata(y_pred[finite]) / max(int(finite.sum()), 1)
-        out[non_finite] = rankdata(fb[non_finite]) / max(int(non_finite.sum()), 1)
-    else:
-        out[non_finite] = fb[non_finite]
+    out[non_finite] = fb[non_finite]
     return out, int(non_finite.sum())
 
 
@@ -101,7 +84,7 @@ def _spec_inputs(loader, spec, td, ttype, streaming, with_labels):
     return cohort if streaming else [cohort.load(u) for u in cohort.user_ids]
 
 
-def _set_context(model, td) -> None:
+def _set_context(model, td, data_dir=None) -> None:
     """Hand a unified Method its per-(task, split) context, if it defines the hook.
 
     Mirrors the ``set_temporal_window`` duck-typed hook: external Methods omit it and
@@ -110,7 +93,10 @@ def _set_context(model, td) -> None:
         from openmhc._protocols import EvalContext
 
         model.set_context(
-            EvalContext(task=td.task, split=td.split, user_ids=td.user_ids, dates=td.dates)
+            EvalContext(
+                task=td.task, split=td.split, user_ids=td.user_ids,
+                dates=td.dates, data_dir=data_dir,
+            )
         )
 
 
@@ -207,9 +193,9 @@ class DownstreamEvaluator:
             )
             test_data = _spec_inputs(loader, spec, test_td, ttype, streaming, with_labels=False)
         if has_fit:
-            _set_context(model, train_td)
+            _set_context(model, train_td, self.data_dir)
             model.fit(train_data, train_td.labels, ttype)
-        _set_context(model, test_td)
+        _set_context(model, test_td, self.data_dir)
         y_pred = np.asarray(model.predict(test_data))
         # Missing-prediction fallback: when a model leaves any test prediction
         # non-finite (e.g. WBM has no weekly embedding for some participants),
@@ -233,18 +219,10 @@ class DownstreamEvaluator:
         return self._fb_loader
 
     def _apply_fallback(self, task, ttype, y_pred, train_td, test_td):
-        """Substitute the Linear baseline for non-finite per-user predictions.
+        """Fill non-finite outputs with predictions from a train-fitted Linear model.
 
-        Participants the model could predict keep its output; participants it left
-        non-finite are scored with a Linear baseline fit on the train cohort. For ranking
-        metrics (binary / ordinal) each cohort is percentile-ranked to ``[0, 1]``
-        independently before merging, so the two independently-fit predictors sit on a
-        common scale; regression merges raw (Pearson r is scale-invariant). Returns
-        ``(y_pred, n_substituted)``.
-
-        The baseline builds its own daily segments from the data root, so the fallback
-        applies to any model — cache-backed, streaming, or predict-only — not only models
-        that hand the harness raw segments.
+        The baseline uses its own daily segments. Only missing model predictions
+        are replaced.
         """
         from downstream_evaluation.models.linear import Linear
 
@@ -253,8 +231,8 @@ class DownstreamEvaluator:
         loader = self._fallback_loader(spec)
         fb_train = _spec_inputs(loader, spec, train_td, ttype, streaming=False, with_labels=True)
         fb_test = _spec_inputs(loader, spec, test_td, ttype, streaming=False, with_labels=False)
-        _set_context(fb_model, train_td)
+        _set_context(fb_model, train_td, self.data_dir)
         fb_model.fit(fb_train, train_td.labels, ttype)
-        _set_context(fb_model, test_td)
+        _set_context(fb_model, test_td, self.data_dir)
         fb = np.asarray(fb_model.predict(fb_test), dtype=np.float64)
         return _combine_with_fallback(y_pred, fb, ttype)

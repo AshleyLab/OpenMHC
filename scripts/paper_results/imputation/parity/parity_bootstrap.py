@@ -4,6 +4,8 @@ Compares a fresh ``bootstrap_draws.parquet`` (produced by the Phase B
 ``--per-user-errors-dir`` path) against the on-disk ground truth
 (``paper/bootstrap_draws.parquet``). Same seed → same boot_idx → same
 draws should round-trip byte-equal on the ``E``, ``R``, ``rank`` columns.
+Only the ground truth's ``"all"`` rows are compared: subgroup_value is a constant
+join key, and older ground-truth files may still hold age and sex rows.
 
 Assertions:
   1. Row-set equality on the 8 join keys (no rows only in new, none only
@@ -127,6 +129,7 @@ def main() -> int:
 
     new = pd.read_parquet(args.new)
     gt = pd.read_parquet(args.gt)
+    gt = gt[gt["subgroup_attr"] == "all"]
     return parity_check(new, gt)
 
 

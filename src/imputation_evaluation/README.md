@@ -206,7 +206,6 @@ Config presets live at `configs/imputation/` (repo root), composed via the
 | `output/` | `default` | `results_dir`, optional experiment name |
 | `evaluation/` | `default` | `eval_splits` (the harness always writes pairs + runs the canonical producer) |
 | `visualization/` | `off`, `on` | Visualization toggle (see Known gaps below) |
-| `sensitivity/` | `off`, `on` | Demographic subgroup metrics |
 | `wandb/` | `off`, `on` | W&B logging |
 
 The schema is the dataclass tree in [`config.py`](config.py) (`ImputationEvalConfig`); Hydra validates every override against it.
@@ -305,8 +304,7 @@ imputer class itself does not need to know about Hydra.
 ## Part 1.6 — Paper pipeline (optional): cross-method skill scores, average ranks, bootstrap CIs
 
 To reproduce the paper's headline table (skill score vs. LOCF, average rank,
-95 % bootstrap CIs, plus optional demographic-subgroup fairness summaries) run
-the three-phase pipeline below. It is fully optional and lives entirely in this
+95 % bootstrap CIs) run the three-phase pipeline below. It is fully optional and lives entirely in this
 repo — no external dependencies on the private MHC-benchmark scripts.
 
 The full imputation splits (version `full`, `sharable_users_seed42_2026.json`,
@@ -351,7 +349,7 @@ python scripts/paper_results/imputation/bootstrap_imputation_draws.py \
   --output results/paper/bootstrap_draws.parquet \
   --n-boot 1000 --seed 42 --splits test
 
-# Phase 2: aggregate → 4 sidecar CSVs in results/paper/
+# Phase 2: aggregate → 2 sidecar CSVs in results/paper/
 python scripts/paper_results/imputation/aggregate_imputation_paper_metrics.py \
   --draws results/paper/bootstrap_draws.parquet \
   --output-dir results/paper/
@@ -363,6 +361,8 @@ python scripts/paper_results/imputation/aggregate_imputation_paper_metrics.py \
 reducer consumes. Schema = `PER_USER_ERRORS_PARQUET_COLUMNS` (see
 [`evaluation/bootstrap_skill_rank.py`](evaluation/bootstrap_skill_rank.py)):
 `[method, scenario, split, channel, channel_type, subgroup_attr, subgroup_value, user_id, E_per_user]`.
+`subgroup_attr` and `subgroup_value` hold the constant `all`; a cohort view is a
+membership filter of those rows (see [`METRICS.md`](METRICS.md) §7).
 
 The canonical producer
 [`evaluation/per_user_errors.py::build_per_user_errors`](evaluation/per_user_errors.py)
@@ -441,27 +441,12 @@ downstream reducer).
 |---|---|
 | `skill_scores_bootstrap.csv` | `method, scope, split, n_tasks, mean, se, ci_lo, ci_hi, n_boot` |
 | `avg_rankings_bootstrap.csv` | same shape (mean of avg-rank) |
-| `fairness_skill_score_bootstrap.csv` | `method, scope, split, n_tasks, mean, se, ci_lo, ci_hi, n_boot` — disparity-ratio Fairness Skill Score (leaderboard's `fair_skill_score`); `scope` ∈ {`age_group`, `sex`, `overall`} |
 
-The leaderboard's Fairness Skill Score is the disparity-ratio formulation
-`1 − GeoMean_r(clip(D_j^{(G)} / D_b^{(G)}, 0.01, 100))` produced by
-[`scripts/paper_results/aggregate_fairness_skill_score.py`](../../scripts/paper_results/aggregate_fairness_skill_score.py)
-(macro-averaged across age, sex; baseline = LOCF). The engine lives in
+The engine lives in
 [`evaluation/bootstrap_skill_rank.py`](evaluation/bootstrap_skill_rank.py)
 (per-draw error reconstruction + phase-2 aggregator) with the deterministic
 point-flow definitions in
 [`evaluation/paper_metrics_core.py`](evaluation/paper_metrics_core.py).
-
-**Deprecated — `S − λ·D` fairness-adjusted skill score.** The earlier
-`fairness_subgroup_scores_bootstrap.csv` and `fairness_summary_bootstrap.csv`
-outputs implemented an `S_overall − λ · disparity(S_g)` formulation with
-pluggable disparities (`max_minus_min`, `worst_group`, `std`,
-`relative_drop`) from
-[`evaluation/disparity_metrics.py`](evaluation/disparity_metrics.py). They
-are **no longer emitted by default** by `aggregate_imputation_paper_metrics.py`
-— pass `--write-deprecated-fairness` if you still need them. The underlying
-`aggregate_skill_rank_fairness` function emits a `DeprecationWarning` when
-called. Use the disparity-ratio Fairness Skill Score above for new work.
 
 ---
 
@@ -476,7 +461,6 @@ src/imputation_evaluation/
 ├── __init__.py
 ├── config.py                  # All dataclasses (see "Configuration" below)
 ├── runner.py                  # run_eval() — library entry point
-├── sensitivity.py             # Age/sex subgroup mapping
 ├── data/
 │   ├── data_loader.py         # ImputationDataLoader (HF + splits + QA filters)
 │   ├── mask_dataset.py        # PyTorch Dataset for parallel mask generation
@@ -502,10 +486,10 @@ The package does **not** contain `methods/` or `visualization/` within `src/impu
 
 ```python
 from imputation_evaluation.runner import run_eval
-results: dict = run_eval(cfg, method=adapter, subgroup_mappings=None)
+results: dict = run_eval(cfg, method=adapter)
 ```
 
-`run_eval(config, method, *, subgroup_mappings=None)` ([`runner.py`](runner.py)) does everything `evaluate_imputation` does minus the W&B / disk-writer / visualization side effects:
+`run_eval(config, method)` ([`runner.py`](runner.py)) does everything `evaluate_imputation` does minus the W&B / disk-writer / visualization side effects:
 
 1. Loads splits via `ImputationDataLoader`.
 2. Builds the enabled mask generators via `create_mask_generators(config.masking)`.
@@ -530,7 +514,6 @@ class ImputationEvalConfig:
     output: OutputConfig        # results_dir, experiment_name
     evaluation: EvalConfig      # eval_splits (pairs are always written)
     visualization: VisualizationConfig   # see Known gaps — currently no consumer
-    sensitivity: SensitivityConfig       # demographic subgroup analysis (age + sex)
     wandb: WandbConfig          # optional W&B logging
 ```
 
@@ -554,7 +537,6 @@ Notable fields a dev would tune:
   unaffected.
 - `masking.mask_seed` — controls the RNG used by every scenario.
 - `masking.masks_file` — load pre-computed masks from `.npz` instead of regenerating, for like-for-like comparison across methods.
-- `sensitivity.enabled` / `sensitivity.age_bins` — emit per-subgroup metrics. Demographics are looked up via [`src/labels/api.py`](../labels/api.py); samples with missing demographics group under `"unknown"`.
 
 Per-scenario knobs are on the matching sub-config in `MaskingConfig` (`random_noise.patch_size`, `temporal_slice.min_block_size`, `intensity_failure.hr_threshold`, etc.) — see the defaults table in Part 1.
 

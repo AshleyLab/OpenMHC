@@ -53,6 +53,7 @@ class WBM(ReleaseLoadableMixin):
         *,
         normalization_stats_path: str | None = None,
         data_dir: str | None = None,
+        cache_dir: str | None = None,
         seed: int = 42,
         in_dim: int = 38,
         embed_dim: int = 256,
@@ -70,6 +71,7 @@ class WBM(ReleaseLoadableMixin):
                 When ``None``, the encoder falls back to the dataset's canonical
                 ``normalization_stats_hourly.json``.
             data_dir: Dataset root (else ``MHC_DATA_DIR`` / default cache).
+            cache_dir: Embedding cache directory; use a fresh one for changed inputs.
             seed: RNG seed for the probe / PCA.
             in_dim: Encoder input channels (manifest ``arch``).
             embed_dim: Representation dimensionality (manifest ``arch``).
@@ -100,6 +102,7 @@ class WBM(ReleaseLoadableMixin):
             checkpoint=str(model_path),
             seed=seed,
             normalization_stats_path=normalization_stats_path,
+            cache_dir=cache_dir,
         )
 
     @staticmethod
@@ -121,6 +124,10 @@ class WBM(ReleaseLoadableMixin):
     def set_loader(self, loader) -> None:
         """Forward the shared DataLoader to the WBM encoder."""
         self._model.set_loader(loader)
+
+    def set_temporal_window(self, temporal) -> None:
+        """Validate the full-history evaluation policy."""
+        self._model.set_temporal_window(temporal)
 
     def fit(self, data, labels, task_type) -> None:
         """Fit the SSL probe (the Linear fallback is the harness's job, issue #38)."""

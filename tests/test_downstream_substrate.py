@@ -1,13 +1,15 @@
-"""Track-1 leaderboard substrate — per-user prediction pairs (supervisor ask + #39).
+"""Track-1 leaderboard substrate — per-user prediction pairs (issue #39).
 
 Builds the substrate from synthetic per-(method, task) prediction files, so it
-needs no dataset. Verifies the schema, subgroup expansion, and parquet round-trip.
+needs no dataset. Verifies the schema, the constant "all" cell, and parquet round-trip.
 """
 
 from __future__ import annotations
 
 import json
+import sys
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -19,6 +21,8 @@ from downstream_evaluation.evaluation.per_user_pairs import (
 )
 from downstream_evaluation.evaluation.predictions_io import _safe_task
 
+pytestmark = pytest.mark.usefixtures("label_schema_environment")
+
 
 def _write_task(pred_dir, method, task, df):
     d = pred_dir / method / _safe_task(task)
@@ -26,7 +30,7 @@ def _write_task(pred_dir, method, task, df):
     df.to_parquet(d / "test.parquet", index=False)
 
 
-def test_build_per_user_pairs_schema_and_subgroups(tmp_path):
+def test_build_per_user_pairs_schema(tmp_path):
     method = "linear"
     _write_task(
         tmp_path,
@@ -49,50 +53,17 @@ def test_build_per_user_pairs_schema_and_subgroups(tmp_path):
             }
         ),
     )
-    (tmp_path / "_subgroups.json").write_text(
-        json.dumps(
-            {
-                "u0": {"age_group": "18-29", "sex": "male"},
-                "u1": {"age_group": "50-59", "sex": "female"},
-            }
-        )
-    )
 
     df = build_per_user_pairs(tmp_path, method, ["Diabetes", "age"])
 
     assert list(df.columns) == PER_USER_PAIRS_PARQUET_COLUMNS
     assert set(df["method"]) == {"linear"}
-    assert set(df["subgroup_attr"]) == {"all", "age_group", "sex"}
-    # 2 tasks × 2 users × 3 subgroup axes = 12 rows.
-    assert len(df) == 12
-    # The global cell is labelled all/all.
-    assert set(df[df.subgroup_attr == "all"]["subgroup_value"]) == {"all"}
-    # Subgroup values are looked up per user.
-    assert set(df[(df.subgroup_attr == "age_group") & (df.user_id == "u0")]["subgroup_value"]) == {
-        "18-29"
-    }
-    assert set(df[(df.subgroup_attr == "sex") & (df.user_id == "u1")]["subgroup_value"]) == {
-        "female"
-    }
+    # 2 tasks × 2 users, every row labelled all/all.
+    assert len(df) == 4
+    assert set(df["subgroup_attr"]) == set(df["subgroup_value"]) == {"all"}
     # task_type is derived from the task name.
     assert set(df[df.task == "Diabetes"]["task_type"]) == {"binary"}
     assert set(df[df.task == "age"]["task_type"]) == {"regression"}
-
-
-def test_build_per_user_pairs_unknown_subgroup(tmp_path):
-    _write_task(
-        tmp_path,
-        "m",
-        "Diabetes",
-        pd.DataFrame({"uid": ["uX"], "y_true": [1], "y_pred": [1], "y_proba": [0.9]}),
-    )
-    (tmp_path / "_subgroups.json").write_text(json.dumps({}))
-
-    df = build_per_user_pairs(tmp_path, "m", ["Diabetes"])
-
-    # A user absent from the subgroup map falls into 'unknown' on every axis.
-    assert set(df[df.subgroup_attr == "sex"]["subgroup_value"]) == {"unknown"}
-    assert set(df[df.subgroup_attr == "age_group"]["subgroup_value"]) == {"unknown"}
 
 
 def test_missing_task_files_are_skipped(tmp_path):
@@ -101,9 +72,6 @@ def test_missing_task_files_are_skipped(tmp_path):
         "m",
         "Diabetes",
         pd.DataFrame({"uid": ["u0"], "y_true": [1], "y_pred": [1], "y_proba": [0.9]}),
-    )
-    (tmp_path / "_subgroups.json").write_text(
-        json.dumps({"u0": {"age_group": "18-29", "sex": "male"}})
     )
 
     # "age" has no file → silently skipped, only Diabetes rows emitted.
@@ -117,9 +85,6 @@ def test_write_read_roundtrip_and_meta(tmp_path):
         "m",
         "Diabetes",
         pd.DataFrame({"uid": ["u0"], "y_true": [1], "y_pred": [1], "y_proba": [0.9]}),
-    )
-    (tmp_path / "_subgroups.json").write_text(
-        json.dumps({"u0": {"age_group": "18-29", "sex": "male"}})
     )
     df = build_per_user_pairs(tmp_path, "m", ["Diabetes"])
 
@@ -174,6 +139,86 @@ def test_resolve_fallback_rate_precedence(tmp_path):
     assert mod.resolve_fallback_rate(tmp_path, "linear", {}) == 0.0
 
 
+def test_producer_runs_from_saved_predictions_alone(tmp_path, monkeypatch):
+    """The substrate producer needs no group map and emits only "all" rows."""
+    import importlib.util
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1]
+    leaderboard = repo / "scripts/paper_results/downstream/leaderboard"
+    script = leaderboard / "produce_per_method_per_user_pairs.py"
+    spec = importlib.util.spec_from_file_location("produce_pairs", script)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    predictions, out = tmp_path / "predictions", tmp_path / "out"
+    _write_task(
+        predictions,
+        "wbm",
+        "Diabetes",
+        pd.DataFrame({"uid": ["u0"], "y_true": [1], "y_pred": [1], "y_proba": [0.9]}),
+    )
+    argv = ["produce", "--predictions-dir", str(predictions), "--out-dir", str(out)]
+    monkeypatch.setattr(sys, "argv", [*argv, "--methods", "wbm"])
+    assert mod.main() == 0
+    df, _ = read_per_user_pairs_parquet(out / "wbm.parquet")
+    assert set(df["subgroup_attr"]) == set(df["subgroup_value"]) == {"all"}
+
+
+def test_evaluate_prediction_output_needs_no_enrollment_file(label_schema_environment, tmp_path):
+    """A non-Linear method on non-age tasks writes its substrate from the lookup alone."""
+    import openmhc
+    from downstream_evaluation.data.provider import lookup_filename
+    from labels import api
+    from openmhc._dataset import write_dataset_marker
+
+    root = label_schema_environment.parent
+    assert not (label_schema_environment / "enrollment_info.json").exists()
+    users = {"train": ["t0", "t1"], "test": ["u0", "u1", "u2", "u3"]}
+    split = {
+        "train": users["train"] + [f"pad{i}" for i in range(586)],
+        "validation": ["v"],
+        "test": users["test"],
+    }
+    (root / "splits").mkdir()
+    (root / "splits/sharable_users_seed42_2026_xs.json").write_text(json.dumps(split))
+    write_dataset_marker(root, version="xs", n_users=593)
+    (root / "processed").mkdir()
+    pd.DataFrame(
+        {
+            "user_id": users["train"] + users["test"],
+            "date": pd.Timestamp("2025-06-01"),
+            "Diabetes": [0, 1, 0, 1, 0, 1],
+        }
+    ).to_parquet(root / "processed" / lookup_filename("daily", full_history=True))
+
+    class Constant:
+        name = "constant"
+        needs_segments = False
+
+        def set_context(self, context):
+            self.n = len(context.user_ids)
+
+        def predict(self, data):
+            return np.linspace(0.1, 0.9, self.n)
+
+    out = tmp_path / "out"
+    results = openmhc.evaluate_prediction(
+        Constant(), version="xs", tasks=["Diabetes"], data_dir=root, output_dir=out
+    )
+
+    assert sorted(results.per_user_pairs["user_id"]) == users["test"]
+    assert set(results.per_user_pairs["subgroup_attr"]) == {"all"}
+    saved, meta = read_per_user_pairs_parquet(out / "constant.parquet")
+    assert set(saved["subgroup_value"]) == {"all"}
+    assert meta["overall_fallback_rate"] == 0.0
+    assert json.loads((out / "constant/fallback.json").read_text()) == {
+        "Diabetes": {"n_fallback": 0, "n_test": 4}
+    }
+    assert not (out / "_subgroups.json").exists()
+    assert api.STORE._enrollment is None
+
+
 def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
     """reduce_substrate_to_point runs from the pooled substrate; the baseline scores 0."""
     from downstream_evaluation.evaluation.bootstrap_skill_rank import reduce_substrate_to_point
@@ -197,10 +242,6 @@ def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
                 tmp_path, method, task,
                 pd.DataFrame({"uid": uids, "y_true": yt, "y_pred": yp, "y_proba": pr}),
             )
-    (tmp_path / "_subgroups.json").write_text(
-        json.dumps({u: {"age_group": "18-29" if i % 2 else "30-39", "sex": "male" if i % 2 else "female"}
-                    for i, u in enumerate(uids)})
-    )
     df = pd.concat(
         [build_per_user_pairs(tmp_path, m, tasks, method_label=m) for m in data], ignore_index=True
     )
@@ -208,9 +249,9 @@ def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
     res = reduce_substrate_to_point(df, baseline="linear")
 
     assert set(res) == {"linear", "good"}
-    # Baseline vs self -> exactly 0 skill and 0 fairness.
+    assert set(res["good"]) == {"skill", "rank"}
+    # Baseline vs self -> exactly 0 skill.
     assert res["linear"]["skill"]["Overall"] == pytest.approx(0.0, abs=1e-12)
-    assert res["linear"]["fair_skill"] == 0.0
     # Both methods carry a finite Overall rank + skill.
     for m in ("linear", "good"):
         assert "Overall" in res[m]["rank"]
@@ -218,3 +259,21 @@ def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
     # An unknown baseline is a loud error.
     with pytest.raises(ValueError, match="baseline"):
         reduce_substrate_to_point(df, baseline="nonexistent")
+
+    # Reordering valid rows must preserve every headline result.
+    assert reduce_substrate_to_point(df.iloc[::-1]) == res
+
+    # Substrates built before S_fair was retired also hold age and sex rows. They are
+    # ignored, even when one user's rows disagree.
+    baked = pd.concat(
+        [
+            df.assign(subgroup_attr="sex", subgroup_value="male"),
+            df[df["user_id"] == "u0"].assign(subgroup_attr="sex", subgroup_value="female"),
+        ]
+    )
+    assert reduce_substrate_to_point(pd.concat([df, baked], ignore_index=True)) == res
+
+    # A cohort view is a membership filter of the "all" rows.
+    cohort = reduce_substrate_to_point(df[df["user_id"].isin(uids[:4])])
+    assert cohort["linear"]["skill"]["Overall"] == pytest.approx(0.0, abs=1e-12)
+    assert cohort["good"] != res["good"]

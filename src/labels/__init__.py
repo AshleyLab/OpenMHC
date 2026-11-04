@@ -5,14 +5,15 @@ from .api import (
     DAILY_LABELS,
     LABEL_NAMES,
     LABEL_TYPES,
-    LABEL_TYPES_PATH,
     MULTI_CATEGORICAL_NAMES,
-    ORDINAL_DICTIONARY_PATH,
     TARGET_NAMES,
     LabelResult,
     LabelTypeError,
     LabelValueError,
     LabelWindowResult,
+    age_at,
+    age_at_enrollment,
+    configure,
     get_labels,
     get_labels_contains,
     get_labels_count,
@@ -20,6 +21,7 @@ from .api import (
     get_labels_statistics,
     get_labels_windowed,
     print_labels_statistics,
+    user_demographics,
     years_between_birth_year,
 )
 
@@ -36,6 +38,9 @@ __all__ = [
     "LabelTypeError",
     "LabelValueError",
     "LabelWindowResult",
+    "age_at",
+    "age_at_enrollment",
+    "configure",
     "get_labels",
     "get_labels_contains",
     "get_labels_count",
@@ -43,5 +48,15 @@ __all__ = [
     "get_labels_statistics",
     "get_labels_windowed",
     "print_labels_statistics",
+    "user_demographics",
     "years_between_birth_year",
 ]
+
+
+def __getattr__(name: str):
+    """Expose current schema paths after explicit reconfiguration."""
+    if name in {"LABEL_TYPES_PATH", "ORDINAL_DICTIONARY_PATH"}:
+        from . import api
+
+        return getattr(api._PATHS, name.removesuffix("_PATH").lower())
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

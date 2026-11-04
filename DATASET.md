@@ -55,7 +55,11 @@ $MHC_DATA_DIR/
 ├── dataset_version.json          # marker — version + n_users (required)
 ├── labels/                       # Track 1
 │   ├── last_labels.json          # participant-level outcome labels
-│   └── context_labels.json       # participant-level covariates
+│   ├── context_labels.json       # participant-level covariates
+│   ├── enrollment_info.json      # birth_year and createdOn for age targets and groups
+│   ├── label_types.json          # required schema: names, types and target/context roles
+│   ├── ordinal_dictionary.json   # required schema: category encodings
+│   └── validity_config.json      # required schema: validity-window thresholds
 ├── splits/                       # one file, named per version:
 │   ├── sharable_users_seed42_2026.json       # full (11,894 users)
 │   └── sharable_users_seed42_2026_xs.json    # xs   (   593 users)
@@ -63,7 +67,7 @@ $MHC_DATA_DIR/
 │   ├── daily_hourly_hf/          # daily ×24h sensor tensors (HuggingFace Arrow) — Track 1
 │   ├── daily_hf/                 # daily ×1440min sensor tensors (HuggingFace Arrow) — Track 2
 │   ├── window_index_w7_s7_d5.parquet         # 7-day weekly window index — Track 1
-│   ├── weekly_labels_lookup_stride7_windowed.parquet  # weekly labels lookup (per-task forward window baked in) — Track 1
+│   ├── weekly_labels_lookup_stride7_full_history.parquet  # full-history weekly lookup for WBM — Track 1
 │   ├── daily_labels_lookup.parquet           # daily labels lookup (windowed; forward-window cap baked in) — Track 1
 │   ├── daily_labels_lookup_full_history.parquet  # daily labels lookup (full history; no forward cap; from-raw/xgboost/lsm2) — Track 1
 │   └── normalization_stats_hourly.json       # global z-score statistics
@@ -91,7 +95,18 @@ The marker pins the version and expected user count so the resolver can fail lou
 
 ### Bundled vs. dataset-root files
 
-The schema-only registry files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) ship with this code repo at `data/labels/` and remain the default for bundled metadata. Large JSON label payloads such as `last_labels.json`, `context_labels.json`, `enrollment_info.json`, `label_validity.json`, and `healthkit_daily.json` must come from your explicit dataset root unless you override them with per-file env vars.
+The label schema files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, alongside the participant payloads. Label configuration requires all three schemas and raises an error if any is missing or invalid JSON; there is no repository fallback. Legacy schema environment variables that point outside the selected schema set raise an error; unset them and select the root with `data_dir=` or `MHC_DATA_DIR`. Per-file payload overrides remain supported. `task_feature_exclusions.json` stays in the repository because it defines benchmark behavior.
+
+Schemas are restricted files on Dataverse, so reading the authoritative label
+names, types and encodings requires dataset access. The public repository keeps
+historical survey documentation, not a current machine-readable label list.
+
+### Existing dataset roots
+
+To replace an older or inconsistent root, download/extract the complete release
+into a **new or empty directory**, keeping its schemas and payloads together.
+Select it with `data_dir=` or `MHC_DATA_DIR` and call `labels.configure()`.
+`download_dataset()` rejects nonempty destinations.
 
 ## Splits
 
@@ -107,7 +122,7 @@ with values being participant IDs (strings).
 
 A (user, label) pair is "valid" if the user has at least one filtered day of wearable data in the label's time window (the `single_day` rule — it maximises the participant pool, and every Track 1 method shares it).
 
-Validity is **baked into the shipped labels lookups** — a non-sentinel cell in `daily_labels_lookup.parquet` / `weekly_labels_lookup_stride7_windowed.parquet` already marks a valid `(user, day/week)` inside the task window, so the downstream eval reads validity straight from the lookups. (The standalone `label_validity.json` still ships under `labels/` and is consumed separately by the LabelsAPI's `get_labels(return_valid_only=True)`; `label_validity.parquet` is a convenience mirror and `validity_config.json` holds the validity-window thresholds.)
+Label validity is **baked into the labels lookups**. The default daily and WBM weekly lookups use full history while retaining label-validity and sensor-quality criteria. WBM requires `weekly_labels_lookup_stride7_full_history.parquet`; datasets containing only the older windowed weekly lookup need the rebuilt artifact. Renaming the old file does not restore excluded entries. The standalone `label_validity.json` is also consumed by `get_labels(return_valid_only=True)`; `label_validity.parquet` mirrors it and `validity_config.json` holds the validity-window thresholds.
 
 ## Data Use Agreement
 The MHC dataset is shared under a Data Use Agreement (DUA) covering responsible-use terms for participant-derived health data. Downloading from the Hub triggers a click-through DUA acceptance.

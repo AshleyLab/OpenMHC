@@ -1,8 +1,8 @@
 """Regression tests for two Track 1 scoring-correctness fixes.
 
 B1 — ordinal predictions must be scored (and persisted) on their RAW rank order, not
-     rounded to int. The rank-merge fallback produces values in ``(0, 1]``; ``np.round``
-     would collapse them to ``{0, 1}`` and turn Spearman's rho into a median-split binary.
+     rounded to int. Continuous ordinal scores in ``(0, 1]`` would collapse to
+     ``{0, 1}`` under ``np.round``, turning Spearman into a median-split binary.
 B5 — ``compute_binary_metrics`` must not clip scores into ``[1e-10, 1 - 1e-10]`` before
      AUPRC. ``average_precision_score`` is rank-based, so clipping ties every out-of-``(0, 1)``
      score at a bound and distorts the metric for score-valued (logit) submissions.
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 from scipy.stats import rankdata, spearmanr
 from sklearn.metrics import average_precision_score
 
@@ -19,6 +20,8 @@ from downstream_evaluation.evaluation.evaluator import _metrics_for
 from downstream_evaluation.evaluation.metrics import compute_binary_metrics, get_task_type
 from downstream_evaluation.evaluation.predictions_io import write_task_predictions
 from labels.api import LABEL_NAMES
+
+pytestmark = pytest.mark.usefixtures("label_schema_environment")
 
 
 def _an_ordinal_task() -> str:
@@ -31,7 +34,7 @@ def test_ordinal_metric_scores_raw_ranks_not_rounded():
     rng = np.random.default_rng(0)
     n = 200
     y_true = rng.integers(0, 4, size=n)  # ordinal levels 0..3
-    # Simulate a fallback-merged ordinal prediction: distinct percentile ranks in (0, 1].
+    # Exercise a valid continuous ordinal submission with distinct scores in (0, 1].
     y_pred = rankdata(rng.normal(size=n)) / n
 
     out = _metrics_for(task, y_true, y_pred, seed=0)

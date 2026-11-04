@@ -3,3 +3,5 @@ type: wbm
 # Was the WBM_CHECKPOINT env var. null = the default SSL ref; override with a
 # local .ckpt path (e.g. the wandb-cached copy) for offline compute nodes.
 checkpoint: null
+# Use a fresh cache directory for changed checkpoints/datasets.
+cache_dir: null

@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts" / "paper_results" / "imputation"
 if str(_SCRIPT_DIR) not in sys.path:
@@ -105,10 +106,7 @@ def _phase2_cfg(method_filter: list[str] | None = None) -> dict:
         "baseline_method": "locf",
         "clip_lower": 0.01,
         "clip_upper": 100.0,
-        "lambda_fairness": 0.5,
-        "fairness_combine": "linear_penalty",
         "ci_level": 0.95,
-        "disparity_fns": [],
     }
     if method_filter is not None:
         cfg["method_filter"] = method_filter
@@ -131,22 +129,8 @@ def test_phase2_aggregate_passes_method_filter(captured_cmds):
     assert cmd[i + 1 : i + 4] == ["locf", "lsm2", "linear"]
 
 
-def test_phase2_fairness_passes_method_filter(captured_cmds):
-    """The fairness sidecar receives the same ``method_filter`` as the aggregator.
-
-    Both aggregators must get the same filter so the two CSVs stay in lockstep.
-    """
-    cfg = _phase2_cfg(method_filter=["locf", "lsm2", "linear"])
-    run_paper_pipeline._phase2_fairness_skill_score(cfg, dry_run=True)
-
-    assert len(captured_cmds) == 1
-    cmd = captured_cmds[0]
-    i = cmd.index("--method-filter")
-    assert cmd[i + 1 : i + 4] == ["locf", "lsm2", "linear"]
-
-
 def test_phase2_no_method_filter_when_unset(captured_cmds):
-    """An absent / null / empty ``method_filter`` makes neither helper emit the flag.
+    """An absent / null / empty ``method_filter`` emits no flag.
 
     Phase 2 then sees every method in the parquet (the aggregator's pre-existing
     default behaviour).
@@ -154,7 +138,6 @@ def test_phase2_no_method_filter_when_unset(captured_cmds):
     for cfg in (_phase2_cfg(), _phase2_cfg(method_filter=None), _phase2_cfg(method_filter=[])):
         captured_cmds.clear()
         run_paper_pipeline._phase2_aggregate(cfg, dry_run=True)
-        run_paper_pipeline._phase2_fairness_skill_score(cfg, dry_run=True)
         for cmd in captured_cmds:
             assert "--method-filter" not in cmd
 
@@ -163,14 +146,47 @@ def test_phase2_raises_if_baseline_not_in_filter(captured_cmds):
     """A ``method_filter`` that excludes the baseline raises before any subprocess launch.
 
     The driver enforces that the baseline method stays in the comparison pool;
-    without it, skill / fairness rows would be empty (the per-task paired ratio
+    without it, skill rows would be empty (the per-task paired ratio
     joins against the baseline). The direct CLI doesn't enforce this; the
     YAML-driven path does, because the cfg dict is in hand and can fail fast.
     """
     cfg = _phase2_cfg(method_filter=["lsm2", "linear"])  # no 'locf'!
     with pytest.raises(ValueError, match="excludes the baseline"):
         run_paper_pipeline._phase2_aggregate(cfg, dry_run=True)
-    with pytest.raises(ValueError, match="excludes the baseline"):
-        run_paper_pipeline._phase2_fairness_skill_score(cfg, dry_run=True)
     # Nothing was dispatched — the guardrail fires before _run is called.
     assert captured_cmds == []
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "include_fairness",
+        "age_bins",
+        "exclude_unknown",
+        "lambda_fairness",
+        "fairness_combine",
+        "disparity_fns",
+        "bca",
+    ],
+)
+def test_retired_fairness_keys_fail(key, tmp_path, monkeypatch, captured_cmds):
+    """A sweep that still asks for fairness must not run without it."""
+    config = tmp_path / "sweep.yaml"
+    config.write_text(yaml.safe_dump({key: False, "methods": []}))
+    monkeypatch.setattr(sys, "argv", ["run", "--sweep-config", str(config)])
+    with pytest.raises(SystemExit, match=key):
+        run_paper_pipeline.main()
+    assert not captured_cmds
+
+
+@pytest.mark.parametrize(
+    "sweep",
+    [
+        "configs/paper/sweep_methods.yaml",
+        "jobs/sherlock/imputation_eval/sweep_methods.yaml",
+        "jobs/sherlock/imputation_eval/sweep_methods_no_dense.yaml",
+    ],
+)
+def test_shipped_sweeps_have_no_retired_keys(sweep):
+    cfg = yaml.safe_load((Path(__file__).resolve().parent.parent / sweep).read_text())
+    assert not run_paper_pipeline.RETIRED_KEYS & set(cfg)

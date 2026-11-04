@@ -1,170 +1,131 @@
 #!/usr/bin/env python3
-"""Generate the arXiv *main* downstream (prediction-task) table from the bootstrap CSVs.
+"""Generate current Track 1 main and per-task tables from aggregate CSVs.
 
-Reads the downstream bootstrap CSVs (``skill_scores_bootstrap.csv``,
-``avg_rankings_bootstrap.csv``, ``fairness_skill_score_bootstrap.csv``) and emits
-the full ``\\begin{table*}...\\end{table*}`` block for the main Track-1 results
-table (booktabs rules, per-column ``customblue!N`` blue gradient, bold best cell),
-mirroring the forecasting and imputation tables.
+Select one results directory explicitly. Reference manifest hashes, when present,
+are checked before reading values. Both tables are validated and rendered before
+writing; no metrics are recomputed. Outputs default to <results-dir>/tables/.
 
-Uncertainty is a 95% bootstrap confidence interval rendered as an asymmetric
-``value^{+upper}_{-lower}`` super/subscript (not the SE). The center is the
-deterministic ``point`` estimate for every column; the interval is the percentile
-CI (``ci_lo``/``ci_hi``) except ``S_fair`` (from
-``fairness_skill_score_bootstrap.csv``, scope ``overall``), which uses the BCa
-interval (``bca_lo``/``bca_hi``).
+The LaTeX fragments require booktabs, graphicx, and xcolor with its table option.
+They define their own color and estimate macro and need no manuscript commands.
 
-Linear is the baseline: in every skill / fairness / domain column it renders as a
-plain ``$0.0$`` (no CI, no color); it still gets a real value+CI in the rank
-column. Rows are sorted by overall skill (descending).
+Usage::
 
-The paper preamble must define ``customblue`` (xcolor/colortbl) and provide
-``tabularx`` + ``booktabs`` — same dependencies as the forecasting/imputation
-tables; ``\\est`` is provided inline.
-
-Usage:
-    python scripts/paper_results/downstream/make_downstream_latex_tables.py \
-        --results-dir results/paper/20260703_track1fix \
-        --out results/paper/20260703_track1fix/downstream_main_results_table.tex
+    PYTHONPATH=src python scripts/paper_results/downstream/make_downstream_latex_tables.py \
+        --results-dir results/paper
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
+import io
+import json
+import math
 from pathlib import Path
 
+from downstream_evaluation.evaluation.skill_score import DEFAULT_PRIMARY_METRICS, TASK_DOMAIN_MAP
+from openmhc._constants import BENCHMARK_TASKS, TASK_DISPLAY_NAMES
+
 REFERENCE = "linear"
-
-# key -> latex label. Order here is irrelevant (rows are skill-sorted at render).
-METHODS: dict[str, str] = {
-    "lsm2": r"\textsc{LSM-2}",
-    "xgboost": r"\textsc{XGBoost}",
+METHODS = {
+    "linear": r"\textsc{Linear} (reference)",
     "multirocket": r"\textsc{MultiRocket}",
-    "wbm": r"\textsc{WBM}",
+    "xgboost": r"\textsc{XGBoost}",
     "gru_d": r"\textsc{GRU-D}",
-    "linear": r"\textsc{Linear} (baseline)",
-    "chronos2": r"\textsc{Chronos-2}",
-    "toto": r"\textsc{Toto}",
+    "lsm2": r"\textsc{LSM-2}",
+    "wbm": r"\textsc{WBM}",
+    "toto": r"\textsc{Toto} (FT)",
+    "chronos2": r"\textsc{Chronos-2} (FT)",
 }
-
-SKILL = "skill_scores_bootstrap.csv"
-RANK = "avg_rankings_bootstrap.csv"
-FAIR = "fairness_skill_score_bootstrap.csv"
-
-# (header, csv, scope, center, lo, hi, scale100, lower_better, ref_zero)
-COLUMNS: list[tuple[str, str, str, str, str, str, bool, bool, bool]] = [
-    (r"$R\,\downarrow$",            RANK,  "Overall",                     "point", "ci_lo",  "ci_hi",  False, True,  False),
-    (r"$S\,\uparrow$",              SKILL, "Overall",                     "point", "ci_lo",  "ci_hi",  True,  False, True),
-    (r"$S_{\mathrm{fair}}\,\uparrow$", FAIR, "overall",                  "point", "bca_lo", "bca_hi", True,  False, True),
-    (r"Demo.~$\uparrow$",           SKILL, "Demographics",                "point", "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Body~$\uparrow$",            SKILL, "Body metrics and biomarkers", "point", "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Medical~$\uparrow$",         SKILL, "Medical conditions",          "point", "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Mental~$\uparrow$",          SKILL, "Mental well-being",           "point", "ci_lo",  "ci_hi",  True,  False, True),
-    (r"Sleep~$\uparrow$",           SKILL, "Sleep and lifestyle",         "point", "ci_lo",  "ci_hi",  True,  False, True),
+GROUPS = {
+    "Statistical Models": ("xgboost", "multirocket", "linear"),
+    "Supervised Neural Models": ("gru_d",),
+    "Time-Series Foundation Models": ("chronos2", "toto"),
+    "Wearable Foundation Models": ("lsm2", "wbm"),
+}
+DOMAINS = {
+    "Demographics": "Demographics",
+    "Medical conditions": r"Medical Conditions \& Risk",
+    "Body metrics and biomarkers": r"Vitals \& Blood Biomarkers",
+    "Mental well-being": "Mental Well-Being",
+    "Sleep and lifestyle": r"Sleep \& Lifestyle",
+}
+FILES = {
+    "skill": "skill_scores_bootstrap.csv",
+    "rank": "avg_rankings_bootstrap.csv",
+    "task": "task_metrics_bootstrap.csv",
+}
+METRIC_LABELS = {"auprc": "AUPRC", "spearman_r": r"Spearman $\rho$", "pearson_r": "Pearson $r$"}
+MAIN_COLUMNS = [("rank", "Overall"), ("skill", "Overall")] + [
+    ("skill", domain) for domain in DOMAINS
 ]
 
-NCOL = len(COLUMNS) + 1  # + method column
 
-
-def _header() -> str:
-    """Build the table preamble + header row from COLUMNS (keeps them in sync)."""
-    col_spec = "*{%d}{>{\\centering\\arraybackslash}m{1.15cm}}" % len(COLUMNS)
-    head_cells = "\n".join(rf"& \mbox{{{c[0]}}}" for c in COLUMNS)
-    return rf"""\begin{{table*}}[t]
-\centering
-\captionsetup{{width=0.98\textwidth}}
-\caption{{
-\textbf{{Prediction-task Results.}}
-We report Average Rank $R$, Aggregate Skill Score $S$
-(in \%; $0=\textsc{{Linear}}$ baseline), Fairness-adjusted Skill Score
-$S_{{\mathrm{{fair}}}}$, and per-domain Skill Scores for \textit{{Demographics}},
-\textit{{Body}} metrics, \textit{{Medical}} conditions, \textit{{Mental}}
-well-being, and \textit{{Sleep}}. Values are point estimates on the held-out test
-split; subscripts and superscripts indicate the $95\%$ bootstrap confidence
-interval ($1000$ resamples): the percentile interval for every column except
-$S_{{\mathrm{{fair}}}}$, which uses the bias-corrected and accelerated (BCa) interval.
-}}
-\label{{tab:downstream_grouped_model_summary}}
-
-\providecommand{{\est}}[3]{{%
-  \ensuremath{{#1^{{\scriptscriptstyle +#2}}_{{\scriptscriptstyle -#3}}}}%
-}}
-
-\small
-\renewcommand{{\arraystretch}}{{1.16}}
-\setlength{{\tabcolsep}}{{2.2pt}}
-
-\begin{{tabularx}}{{\textwidth}}{{
-    >{{\raggedright\arraybackslash}}X
-    {col_spec}
-}}
-\toprule[1.4pt]
-
-\textbf{{Method}}
-{head_cells} \\
-
-\midrule
-"""
-
-
-FOOTER = r"""\bottomrule[1.4pt]
-\end{tabularx}
-\end{table*}
-"""
-
-
-def load_metric(
-    path: Path, scope: str, center_col: str, lo_col: str, hi_col: str
-) -> dict[str, tuple[float, float, float]]:
-    """Return {method: (center, lo, hi)} for one scope."""
-    out: dict[str, tuple[float, float, float]] = {}
-    with path.open() as f:
-        reader = csv.DictReader(f)
-        fields = reader.fieldnames or []
-        missing = [c for c in (center_col, lo_col, hi_col) if c not in fields]
+def load_results(results_dir: Path) -> dict:
+    """Read a complete eight-method result set, checking any reference manifest."""
+    manifest_path = results_dir / "manifest.json"
+    hashes = None
+    if manifest_path.exists():
+        hashes = json.loads(manifest_path.read_text())["files_sha256"]
+    results = {}
+    for kind, name in FILES.items():
+        contents = (results_dir / name).read_bytes()
+        if hashes is not None and hashlib.sha256(contents).hexdigest() != hashes.get(name):
+            raise ValueError(f"Reference hash mismatch: {name}; use CSVs from one verified run")
+        key_col = "task" if kind == "task" else "scope"
+        center_col = "value" if kind == "task" else "point"
+        reader = csv.DictReader(io.StringIO(contents.decode()))
+        required = {"method", key_col, center_col, "ci_lo", "ci_hi"}
+        if kind == "task":
+            required.update(("task_type", "metric"))
+        missing = required - set(reader.fieldnames or [])
         if missing:
-            raise SystemExit(f"{path.name}: columns {missing} not in header {fields!r}")
-        for r in reader:
-            if r["scope"] != scope:
-                continue
-            c = r[center_col]
-            if c in ("", None):
-                continue
-            center = float(c)
-            lo = float(r[lo_col]) if r[lo_col] not in ("", None) else center
-            hi = float(r[hi_col]) if r[hi_col] not in ("", None) else center
-            out[r["method"]] = (center, lo, hi)
-    return out
-
-
-def load_columns(results_dir: Path) -> list[dict[str, tuple[float, float, float]]]:
-    """Load each column's {method: (center, lo, hi)} map, in COLUMNS order."""
-    return [
-        load_metric(results_dir / fname, scope, center, lo, hi)
-        for _h, fname, scope, center, lo, hi, _s100, _lower, _ref in COLUMNS
-    ]
+            raise ValueError(f"{name}: missing columns {sorted(missing)}")
+        rows = {}
+        for row in reader:
+            key = (row["method"], row[key_col])
+            if key in rows:
+                raise ValueError(f"{name}: duplicate row {key}")
+            values = tuple(float(row[col]) for col in (center_col, "ci_lo", "ci_hi"))
+            if not all(math.isfinite(value) for value in values) or values[1] > values[2]:
+                raise ValueError(f"{name}: invalid estimate or interval for {key}")
+            if kind == "skill" and key[0] == REFERENCE and values != (0.0, 0.0, 0.0):
+                raise ValueError(f"{name}: Linear reference skill must be zero for {key}")
+            if kind == "task" and DEFAULT_PRIMARY_METRICS.get(row["task_type"]) != row["metric"]:
+                raise ValueError(f"{name}: inconsistent task type and metric for {key}")
+            rows[key] = {"values": values, "metric": row.get("metric")}
+        scopes = BENCHMARK_TASKS if kind == "task" else ["Overall", *DOMAINS]
+        expected = {(method, scope) for method in METHODS for scope in scopes}
+        if set(rows) != expected:
+            raise ValueError(
+                f"{name}: incomplete or unexpected rows; "
+                f"missing={sorted(expected - rows.keys())}, extra={sorted(rows.keys() - expected)}"
+            )
+        results[kind] = rows
+    for task in BENCHMARK_TASKS:
+        metrics = {results["task"][method, task]["metric"] for method in METHODS}
+        if len(metrics) != 1:
+            raise ValueError(f"Inconsistent metrics across methods for {task}")
+    return results
 
 
 def intensity(value: float, vmin: float, vmax: float, lower_better: bool) -> int:
-    """Per-column min-max intensity in [0, 100] (global over all methods)."""
+    """Return a per-column color intensity between zero and 100."""
     if vmax == vmin:
         return 0
     frac = (vmax - value) / (vmax - vmin) if lower_better else (value - vmin) / (vmax - vmin)
     return round(frac * 100)
 
 
-def fmt_cell(
-    method: str, center: float, lo: float, hi: float,
-    scale100: bool, ref_zero: bool, n: int, is_best: bool,
-) -> str:
-    """One LaTeX cell: optional color + ``\\est{value}{upper}{lower}``."""
+def fmt_cell(method, center, lo, hi, scale100, ref_zero, n, is_best) -> str:
+    """Format rank/skill with the rounding used by the verified paper exports."""
     if ref_zero and method == REFERENCE:
-        return r"$0.0$"  # baseline reference: plain, no CI, no color
+        return r"$0.0$"
     if scale100:
         s, num = 100.0, f"{center * 100:+.1f}"
     else:
-        s, num = 1.0, f"{center:.2f}"  # rank: 2 decimals, no sign
+        s, num = 1.0, f"{center:.2f}"
     up = f"{(hi - center) * s:.1f}" if scale100 else f"{(hi - center):.2f}"
     down = f"{(center - lo) * s:.1f}" if scale100 else f"{(center - lo):.2f}"
     body = rf"\mathbf{{{num}}}" if is_best else num
@@ -172,53 +133,155 @@ def fmt_cell(
     return rf"{color}\est{{{body}}}{{{up}}}{{{down}}}"
 
 
-def build_body(cols: list[dict[str, tuple[float, float, float]]]) -> str:
-    """Render one data row per method, sorted by overall skill (descending)."""
-    lines: list[str] = []
-    bounds = []
-    for ci in range(len(COLUMNS)):
-        vals = [cols[ci][m][0] for m in METHODS if m in cols[ci]]
-        bounds.append((min(vals), max(vals)) if vals else (0.0, 0.0))
+def render_cells(results: dict, kind: str, scope: str) -> dict[str, str]:
+    """Format one task or summary across all methods using a common color scale."""
+    rows = results[kind]
+    scale = 100 if kind == "skill" else 1
+    centers = [rows[method, scope]["values"][0] * scale for method in METHODS]
+    best = min(centers) if kind == "rank" else max(centers)
+    cells = {}
+    for method in METHODS:
+        point, lo, hi = rows[method, scope]["values"]
+        n = intensity(point * scale, min(centers), max(centers), kind == "rank")
+        is_best = point * scale == best
+        if kind == "task":
+            number = f"{point:.3f}"
+            if is_best:
+                number = rf"\mathbf{{{number}}}"
+            color = rf"\cellcolor{{customblue!{n}}}" if n else ""
+            cells[method] = rf"{color}\est{{{number}}}{{{hi - point:.3f}}}{{{point - lo:.3f}}}"
+        else:
+            cells[method] = fmt_cell(
+                method,
+                point,
+                lo,
+                hi,
+                kind == "skill",
+                kind == "skill",
+                n,
+                is_best and method != REFERENCE,
+            )
+    return cells
 
-    skill_idx = next(i for i, c in enumerate(COLUMNS) if c[1] == SKILL and c[2] == "Overall")
-    order = sorted(METHODS, key=lambda m: -cols[skill_idx][m][0])
 
-    for m in order:
-        row = [METHODS[m]]
-        for ci, col in enumerate(COLUMNS):
-            _h, _f, _sc, _ctr, _lo, _hi, scale100, lower, ref_zero = col
-            center, lo, hi = cols[ci][m]
-            vmin, vmax = bounds[ci]
-            n = intensity(center, vmin, vmax, lower)
-            best_val = vmin if lower else vmax
-            is_best = (center == best_val) and (m != REFERENCE)
-            row.append("& " + fmt_cell(m, center, lo, hi, scale100, ref_zero, n, is_best))
-        row[-1] = row[-1] + r" \\"
-        lines.append("\n".join(row))
-        lines.append("")
-    return "\n".join(lines) + "\n"
+def _table(caption: str, label: str, headers: list[str], rows: list[str], text_columns: int) -> str:
+    """Wrap rows in a portable table fragment with local formatting definitions."""
+    columns = "l" * text_columns + "c" * (len(headers) - text_columns)
+    header = " & ".join(headers) + r" \\"
+    body = "\n".join(rows)
+    return rf"""% Requires booktabs, graphicx, and \usepackage[table]{{xcolor}}.
+\begin{{table}}[htbp]
+\centering
+\definecolor{{customblue}}{{RGB}}{{205,227,245}}
+\providecommand{{\est}}[3]{{\ensuremath{{#1^{{\scriptscriptstyle +#2}}_{{\scriptscriptstyle -#3}}}}}}
+\caption{{{caption}}}
+\label{{{label}}}
+\small
+\renewcommand{{\arraystretch}}{{1.15}}
+\setlength{{\tabcolsep}}{{3pt}}
+\resizebox{{\linewidth}}{{!}}{{%
+\begin{{tabular}}{{{columns}}}
+\toprule
+{header}
+\midrule
+{body}
+\bottomrule
+\end{{tabular}}%
+}}
+\end{{table}}
+"""
+
+
+def render_main(results: dict) -> str:
+    """Render seven summary columns, ordered by rank within each method class."""
+    columns = [render_cells(results, kind, scope) for kind, scope in MAIN_COLUMNS]
+    rows = []
+    for title, methods in GROUPS.items():
+        rows.append(r"\multicolumn{8}{l}{\textit{" + title + r"}} \\")
+        ordered = sorted(methods, key=lambda m: results["rank"][m, "Overall"]["values"][0])
+        for method in ordered:
+            rows.append(
+                " & ".join([METHODS[method], *(column[method] for column in columns)]) + r" \\"
+            )
+        rows.append(r"\midrule")
+    rows.pop()
+    return _table(
+        "Prediction tasks: overall average rank $R$, overall skill $S$ and five domain "
+        r"skills (\%; Linear reference). Values are held-out point estimates with "
+        "percentile bootstrap intervals. Methods are ordered by rank within each class.",
+        "tab:health_outcome_main_results",
+        ["Method", r"$R\downarrow$", r"$S\uparrow$", *DOMAINS.values()],
+        rows,
+        1,
+    )
+
+
+def render_per_task(results: dict) -> str:
+    """Render all task metrics, domain summaries and overall summaries."""
+    rows = []
+
+    def append_row(label, metric, kind, scope):
+        cells = render_cells(results, kind, scope)
+        rows.append(" & ".join([label, metric, *(cells[m] for m in METHODS)]) + r" \\")
+
+    for domain, title in DOMAINS.items():
+        rows.append(r"\multicolumn{10}{l}{\textit{" + title + r"}} \\")
+        tasks = sorted(
+            (task for task in BENCHMARK_TASKS if TASK_DOMAIN_MAP[task] == domain),
+            key=lambda task: TASK_DISPLAY_NAMES[task],
+        )
+        for task in tasks:
+            metric = results["task"][REFERENCE, task]["metric"]
+            append_row(TASK_DISPLAY_NAMES[task], METRIC_LABELS[metric], "task", task)
+        append_row("Domain Avg. Rank", r"$R\downarrow$", "rank", domain)
+        append_row(r"Domain Skill (\%)", r"$S\uparrow$", "skill", domain)
+        rows.append(r"\midrule")
+    append_row("Macro Avg. Rank", r"$R\downarrow$", "rank", "Overall")
+    append_row(r"Overall Skill (\%)", r"$S\uparrow$", "skill", "Overall")
+    return _table(
+        "Prediction per-task results: AUPRC (binary), Spearman correlation (ordinal), "
+        "and Pearson correlation (regression), all higher is better. Values are point "
+        "estimates with percentile bootstrap intervals. Overall rank and skill weight "
+        "the five domains equally.",
+        "tab:main_results",
+        ["Task", "Metric", *METHODS.values()],
+        rows,
+        2,
+    )
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--results-dir", type=Path, default=Path("results/paper/20260703_track1fix"))
-    p.add_argument("--out", type=Path, default=None, help="Default: <results-dir>/downstream_main_results_table.tex")
-    p.add_argument("--dry-run", action="store_true", help="Print to stdout instead of writing.")
-    args = p.parse_args()
-
-    cols = load_columns(args.results_dir)
-    missing = [m for m in METHODS if m not in cols[0]]
-    if missing:
-        raise SystemExit(f"Methods missing from CSVs: {missing}")
-
-    table = _header() + build_body(cols) + FOOTER
+    """Validate one results directory and export both tables without editing a paper."""
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--results-dir", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, help="Default: <results-dir>/tables")
+    parser.add_argument("--out", type=Path, help="Override the main table path only")
+    parser.add_argument("--dry-run", action="store_true", help="Print both tables without writing")
+    args = parser.parse_args()
+    try:
+        results = load_results(args.results_dir)
+        main_table, per_task = render_main(results), render_per_task(results)
+        input_names = {*FILES.values(), "manifest.json", "bootstrap_draws.meta.json"}
+        manifest_path = args.results_dir / "manifest.json"
+        if manifest_path.exists():
+            input_names.update(json.loads(manifest_path.read_text())["files_sha256"])
+    except (OSError, ValueError, KeyError) as exc:
+        parser.error(str(exc))
     if args.dry_run:
-        print(table)
+        print(main_table + "\n" + per_task)
         return
-    out = args.out or (args.results_dir / "downstream_main_results_table.tex")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(table)
-    print(f"Wrote {out} ({len(table)} bytes)")
+    output_dir = args.output_dir or args.results_dir / "tables"
+    main_path = args.out or output_dir / "downstream_main_results_table.tex"
+    task_path = output_dir / "downstream_per_task_results_table.tex"
+    paths = [main_path.resolve(), task_path.resolve()]
+    # Protect sources and provenance, while allowing generated tables to be replaced.
+    protected = {(args.results_dir / name).resolve() for name in input_names}
+    if len(set(paths)) != 2 or protected.intersection(paths):
+        parser.error("Output paths must be distinct and must not overwrite input files")
+    for path, table in ((main_path, main_table), (task_path, per_task)):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(table)
+        print(f"Wrote {path}")
 
 
 if __name__ == "__main__":

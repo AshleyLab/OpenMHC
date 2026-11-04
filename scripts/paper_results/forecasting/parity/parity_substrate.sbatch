@@ -10,14 +10,13 @@
 
 # Full forecasting substrate parity gate (Gate B + Gate C-pre): the substrate-driven
 # reducers must reproduce the committed forecasting_bca_20260618 CSVs (skill + rank +
-# bootstraps + fairness, the latter still under the current max-min disparity).
+# bootstraps).
 # CPU-only, single-process pandas; ~30-45 min. Submit:
 #   mkdir -p /simurgh/u/schuetzn/myheartcounts-dataset/scratch/parity_logs
 #   sbatch scripts/paper_results/forecasting/parity/parity_substrate.sbatch
 
 set -euo pipefail
 
-export MHC_DATA_DIR=/simurgh/u/schuetzn/OpenMHC-Full/data
 cd /simurgh/u/schuetzn/myheartcounts-dataset
 
 /simurgh/u/schuetzn/conda/envs/openmhc/bin/python \

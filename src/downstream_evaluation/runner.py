@@ -9,7 +9,7 @@ pretrained) is scored as-is. Encoder-style methods run the uniform ``openmhc.Lin
 inside ``fit`` / ``predict``; end-to-end methods own their head.
 
 All cohort / temporal / label logic comes from :class:`TaskDataProvider` (the
-labels lookup). The model only ever sees a participant's *eligible* data,
+labels lookup plus age API). The model only ever sees a participant's *eligible* data,
 at the granularity it declares via ``input_granularity`` (default daily).
 """
 
@@ -45,7 +45,9 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     spec = getattr(model, "data_spec", None)
     grain = spec.provider_granularity if spec is not None else getattr(model, "input_granularity", "daily")
     lookup = f"{config.data_dir}/processed/{lookup_filename(grain, config.temporal.is_full_history)}"
-    provider = TaskDataProvider(lookup, config.split_users, granularity=grain)
+    provider = TaskDataProvider(
+        lookup, config.split_users, granularity=grain, data_dir=config.data_dir
+    )
 
     if spec is not None:
         # DataSpec models: build a loader at the spec's resolution; the evaluator builds a
@@ -75,9 +77,7 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
             model.set_loader(loader)
         loader_for_run = loader if needs_segments else None
 
-    # Hand the temporal-window policy to models that build their own windows from raw
-    # (Toto/Chronos-2); cohort/lookup models ignore it (their window is baked into the
-    # lookup parquet). Duck-typed so new from-raw models opt in with one method.
+    # Let models apply or validate the temporal policy.
     if hasattr(model, "set_temporal_window"):
         model.set_temporal_window(config.temporal)
 
@@ -88,27 +88,11 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     )
     results = evaluator.run(provider, loader_for_run, model, config.tasks, spec=spec)
 
-    # Predictions export: alongside the per-(method, task) parquets the evaluator
-    # wrote, persist one shared per-user subgroup map (age_group + sex) for the
-    # fairness bootstrap. Demographics come from the daily lookup regardless of the
-    # model's granularity, so the map covers the widest set of users.
+    # Persist per-task fallback counts alongside the predictions so the offline
+    # substrate producer can compute this method's fallback rate without re-running it.
     if config.predictions_dir is not None:
-        from downstream_evaluation.evaluation.predictions_io import (
-            write_fallback_sidecar,
-            write_subgroup_map,
-        )
+        from downstream_evaluation.evaluation.predictions_io import write_fallback_sidecar
 
-        test_users: set[str] = set()
-        for task in config.tasks:
-            try:
-                test_users.update(provider.task_data(task, "test").user_ids.tolist())
-            except KeyError:
-                continue
-        daily_lookup = f"{config.data_dir}/processed/{lookup_filename('daily', config.temporal.is_full_history)}"
-        write_subgroup_map(config.predictions_dir, daily_lookup, test_users)
-
-        # Persist per-task fallback counts alongside the predictions so the offline
-        # substrate producer can compute this method's fallback rate without re-running it.
         method_name = getattr(model, "name", type(model).__name__)
         per_task_counts = {
             task: {"n_fallback": r["n_fallback"], "n_test": r["n_test"]}

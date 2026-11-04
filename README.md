@@ -22,6 +22,12 @@ What can this repository and the OpenMHC dataset be useful for?
 
 - **Dataset:** see [DATASET.md](DATASET.md)
 
+## Intended Use
+
+**Intended use:** research, methodological comparison, and reproduction of the OpenMHC benchmark.
+
+**Out of scope:** diagnosis, screening, prognosis, prospective risk prediction, clinical decision support, or any other medical decision-making. OpenMHC's medical condition labels are self-reported and have no diagnosis dates, and benchmark performance does not establish clinical utility. Any diagnostic, prognostic, or screening claim requires independent validation using temporally aligned, clinically adjudicated outcomes in the target population.
+
 ## Release Plan
 
 - [ ] Release OpenMHC dataset (upon paper acceptance)
@@ -329,7 +335,7 @@ Public submissions must use the standard evaluation protocol for the selected
 track, including the canonical dataset version, split file, masking or
 forecasting configuration, and label-validity criterion.
 
-Maintainers compute leaderboard-level skill scores, fair skill scores, and
+Maintainers compute leaderboard-level skill scores and
 average ranks from the submitted substrate during ingestion. Track 1 is scored
 against the linear-probe baseline, Track 2 against LOCF, and Track 3 against
 Seasonal Naive. See
@@ -355,14 +361,14 @@ for the Track 1 / Track 2 per-method substrate columns and dtypes, and
 | `configs/` | Hydra configs for evaluation, training, sweeps, and output layout |
 | `jobs/` | SLURM wrappers for Sherlock and SC cluster runs |
 | `tools/` and `scripts/` | Release, leaderboard, parity, and paper-result utilities |
-| `data/labels/` | Bundled schema-only label metadata |
+| `data/labels/` | Benchmark feature exclusions and historical survey documentation |
 | `data/imputation/masks/` | Bundled precomputed imputation masks for reproducible scoring |
 | `notebooks/quickstart_benchmark.ipynb` | End-to-end benchmark example notebook |
 | `notebooks/example_lsm2_representation_extraction.ipynb` | Extract representations from the pretrained LSM2 daily encoder |
 | `tools/leaderboard_docs/` | Docs mirrored into the HF leaderboard dataset repo |
 
 The participant data itself is not tracked in this repository. See
-[DATASET.md](DATASET.md) for download instructions and expected layout.
+[DATASET.md](DATASET.md) for access requirements, download instructions and expected layout.
 
 ## Citation
 
@@ -379,4 +385,4 @@ release are available.
 ## License
 
 Code: MIT. Dataset: governed by a separate Data Use Agreement (see
-[DATASET.md](DATASET.md)), Models OpenRAIL;
+[DATASET.md](DATASET.md)). Models: [BigScience OpenRAIL-M](https://www.licenses.ai/s/BigScience-Open-RAIL-M-License.pdf).

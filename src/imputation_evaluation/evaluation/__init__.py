@@ -5,7 +5,7 @@ __all__ = [
     "PairWriter",
     "aggregate_pairs",
     "compute_per_draw_errors",
-    "aggregate_skill_rank_fairness",
+    "aggregate_skill_rank",
     "read_draws_parquet",
     "write_draws_parquet",
     "read_per_user_errors_parquet",
@@ -35,12 +35,10 @@ def __getattr__(name: str):
         )
 
         return compute_per_draw_errors
-    elif name == "aggregate_skill_rank_fairness":
-        from imputation_evaluation.evaluation.bootstrap_skill_rank import (
-            aggregate_skill_rank_fairness,
-        )
+    elif name == "aggregate_skill_rank":
+        from imputation_evaluation.evaluation.bootstrap_skill_rank import aggregate_skill_rank
 
-        return aggregate_skill_rank_fairness
+        return aggregate_skill_rank
     elif name == "read_draws_parquet":
         from imputation_evaluation.evaluation.bootstrap_skill_rank import read_draws_parquet
 

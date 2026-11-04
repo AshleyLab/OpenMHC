@@ -6,6 +6,9 @@ The OpenMHC dataset is distributed through Harvard Dataverse and will be made av
 
 **One root per version.** Every OpenMHC dataset root must contain a `dataset_version.json` marker declaring which release lives there (`xs` or `full`), and the public eval API cross-checks that marker against the `version=` you pass. The two therefore cannot share a directory — put each under its own root and point `MHC_DATA_DIR` (or `data_dir=`) at whichever one you want to use.
 
+Extract each complete release into a new or empty directory. For replacing an
+existing root, see [migration guidance](../DATASET.md#existing-dataset-roots).
+
 Recommended layout for keeping both side by side:
 
 ```
@@ -183,6 +186,9 @@ $CACHE/
 ├── labels/
 │   ├── last_labels.json
 │   ├── context_labels.json
+│   ├── label_types.json                       # REQUIRED dataset schema
+│   ├── ordinal_dictionary.json                # REQUIRED dataset schema
+│   ├── validity_config.json                   # REQUIRED dataset schema
 │   ├── label_validity.json
 │   ├── clip_dates.json
 │   └── ...
@@ -197,7 +203,7 @@ $CACHE/
 │   ├── window_index_w7_s7_d5.parquet
 │   ├── daily_labels_lookup.parquet
 │   ├── daily_labels_lookup_full_history.parquet
-│   └── weekly_labels_lookup_stride7_windowed.parquet
+│   └── weekly_labels_lookup_stride7_full_history.parquet
 ├── forecasting_sample_index/                  # Track 3
 │   ├── sample_index_P_24_M_H_7_3_S_100.json   # used by evaluate_forecasting (horizon 24)
 │   ├── day_remain_mask.json

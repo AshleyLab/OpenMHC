@@ -20,7 +20,6 @@ from imputation_evaluation.config import (
     MaskingConfig,
     MethodConfig,
     OutputConfig,
-    SensitivityConfig,
     VisualizationConfig,
     WandbConfig,
 )
@@ -48,7 +47,6 @@ def register_configs() -> None:
             "output": OutputConfig,
             "evaluation": EvalConfig,
             "visualization": VisualizationConfig,
-            "sensitivity": SensitivityConfig,
             "wandb": WandbConfig,
         },
     )
@@ -79,6 +77,9 @@ def main(cfg: DictConfig) -> dict[str, Any]:
     and returns the results dict.
     """
     OmegaConf.resolve(cfg)
+    # dict_to_dataclass drops unknown keys, so a config still asking for this would be ignored.
+    if "sensitivity" in cfg:
+        raise ValueError("`sensitivity` was retired with S_fair. Remove it from the config.")
     typed_cfg: ImputationEvalConfig = dict_to_dataclass(ImputationEvalConfig, cfg)
 
     method, manifest = METHOD_REGISTRY.build(cfg.method.type, typed_cfg.method, typed_cfg.data)

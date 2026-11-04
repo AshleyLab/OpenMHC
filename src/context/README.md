@@ -36,10 +36,11 @@ print(result.matched_timestamp, result.value)
 ## Data sources
 
 Reads the selected dataset's `labels/context_labels.json` via the shared
-`LabelsStore` in `labels.api`. See the [Labels API data sources](../labels/README.md#data-sources)
-for dataset paths and overrides. No additional data files.
-Context names and types come from the same dataset's schemas. Configure before
-inspecting `CONTEXT_NAMES` or switching datasets.
+`LabelsStore` in `labels.api`. Context names and types come from that dataset's
+schemas. Call `labels.configure()` before inspecting `CONTEXT_NAMES` or
+switching datasets; a first context query can configure from `MHC_DATA_DIR`.
+See the [Labels API data sources](../labels/README.md#data-sources) for dataset
+paths and overrides. No additional data files.
 
 ## Variable dictionary
 

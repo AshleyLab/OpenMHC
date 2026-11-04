@@ -1,11 +1,12 @@
 # Labels API
 
-This module exposes a fast, in-memory lookup for label values with automatic type enforcement.
+This module exposes an in-memory lookup for stored label values with automatic type enforcement.
 
 ## Public surface
-- `labels.configure(data_dir=None)`: select a dataset and refresh schemas and cached payloads.
+- `labels.configure(data_dir=None)`: select a dataset for labels and devices, refreshing metadata and cached payloads in place.
 - `labels.age_at(health_code, date)`: calculate calendar-year age at an explicit `pandas.Timestamp`.
 - `labels.age_at_enrollment(health_code)`: calculate calendar-year age at enrollment `createdOn`.
+- `labels.user_demographics(user_ids, paths=None)`: return `{user_id: {"age_group": ..., "sex": ...}}`. This is the one definition of each participant's age and sex groups.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
@@ -25,16 +26,31 @@ This module exposes a fast, in-memory lookup for label values with automatic typ
 - `label_types.json`: maps each label to its semantic type (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
 
 ## Variable dictionary
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for variable definitions, original survey options, release mappings, observed values and iOS sources.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for variable definitions, original survey options, release mappings, observed values and iOS sources. The dataset schema determines the labels available in a selected release.
 
-All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, with no repository fallback. Reading these restricted Dataverse files requires dataset access. Select the dataset with `data_dir=` or `MHC_DATA_DIR`; unset legacy schema overrides that point elsewhere, since configuration rejects them.
+All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`. Configuration requires the complete schema set; missing files or invalid JSON raise an error, with no repository fallback. The legacy variables `LABEL_TYPES_PATH`, `ORDINAL_DICTIONARY_PATH` and `VALIDITY_CONFIG_PATH` cannot redirect schemas: configuration raises an error if any points elsewhere. Unset those variables and select a dataset root instead.
+
+Reading these restricted Dataverse files requires dataset access. See [DATASET.md](../../DATASET.md#bundled-vs-dataset-root-files) for schema access requirements and existing-root migration.
+
+Participant payloads also default to `<dataset_root>/labels/`. Optional payload overrides include `LABELS_DATA_PATH` and `ENROLLMENT_DATA_PATH`; use files from the same dataset.
 ```bash
 export MHC_DATA_DIR=/path/to/openmhc-dataset
 ```
 
-Call `labels.configure(data_dir=...)` before inspecting metadata or switching datasets. Metadata containers are empty until configuration; a first label query can configure from `MHC_DATA_DIR`.
+For direct API calls, use `labels.configure(data_dir="/path/to/dataset")` before
+querying, inspecting `LABEL_NAMES` / `TARGET_NAMES` / `CONTEXT_NAMES`, or switching datasets. Metadata containers are empty until configuration. A first label query can configure lazily from `MHC_DATA_DIR`. Evaluation entry points configure this
+automatically. An explicit `data_dir=` overrides `MHC_DATA_DIR`; explicit payload
+overrides take precedence over either root.
 
-Optional payload overrides include `LABELS_DATA_PATH` and `ENROLLMENT_DATA_PATH`; use files from the same dataset.
+Configuration refreshes metadata in place and clears cached payloads without
+changing environment variables or reloading modules. Call `configure()` again
+after changing overrides. Configuration is process-global; use separate processes
+for concurrent evaluations of different datasets.
+
+All three schema files are validated before a configuration change is applied;
+invalid schemas leave the previous configuration intact. Repeated evaluations
+of the same paths retain loaded caches; an explicit `configure()` forces a refresh.
+Imputation workers receive the resolved configuration from their parent process.
 
 ## Usage
 ```python
@@ -62,16 +78,19 @@ result = get_labels(
 )
 print(result.matched_timestamp, result.value)  # value is bool
 
-# look up the stored age label (returns float)
-age = get_labels(
+# calculate calendar-year age at a specific date (returns int)
+age = age_at("user-123", pd.Timestamp("2020-01-14"))
+print(age)  # date.year - birth_year, not exact birthday-based age
+
+# retrieve the existing stored age label at its matched observation date
+stored_age = get_labels(
     health_code="user-123",
     timestamp=pd.Timestamp("2020-01-14"),
     label="age",
 )
-print(age.value)  # e.g., 25.0
+print(stored_age.matched_timestamp, stored_age.value)
 
-# Calculate calendar-year age at an explicit date or at enrollment
-print(age_at("user-123", pd.Timestamp("2020-01-14")))
+# calculate calendar-year age at enrollment for subgroup reporting
 print(age_at_enrollment("user-123"))
 
 # handle type enforcement errors
@@ -89,6 +108,34 @@ print(stats_df.head())
 # print statistics table for all labels
 print_labels_statistics()
 ```
+
+`age_at` requires a valid `pandas.Timestamp` and uses its calendar year without
+timezone conversion. It raises `KeyError` for a missing participant or birth year
+and `ValueError` for invalid dates, invalid birth years, or dates before the birth
+year. The enrolment reader accepts a legacy `birthdate` field when `birth_year` is
+absent. The separate source-only birthdate JSON is not loaded by this function.
+This function does not change the stored-value behavior of `get_labels(..., label="age")`.
+
+The benchmark age convention is `reference_date.year - birth_year`. Use the
+existing age-label timestamp for the Track 1 target and enrollment `createdOn`
+for age groups. Evaluation callers now follow these references.
+`age_at_enrollment(health_code)` uses `createdOn` and the same age arithmetic;
+missing metadata raises `KeyError`, and invalid metadata raises `ValueError`. This convention does not count completed birthdays or divide elapsed days
+by a year length.
+
+Track 1 retains lookup cohorts and eligible days/weeks, including missing-target
+exclusions. Its age target requires one dated age observation per participant;
+missing or ambiguous metadata for an eligible target raises instead of silently
+changing the cohort. TSFM age anchors use that same observation. Linear's age
+covariate uses the age-label date and retains lookup missingness and zero filling.
+`user_demographics` retains participants with missing/invalid enrollment metadata
+as `unknown`.
+
+During release construction, shift the private full birthdate by the same offset
+as the reference dates, then retain its year. The age-preserving offset generator
+checks equality at enrollment and existing age-label timestamps; this does not
+guarantee equality at arbitrary other query dates. The API requires only the
+released birth year, not the private full-birthdate file.
 
 ## Type Enforcement
 
@@ -163,7 +210,7 @@ work                      bool         0.00         1.00         1.00         2
 ```
 
 ## Behavior
-- For labels in `labels.json`, the closest timestamp is chosen; ties favor the earlier point.
+- For labels in `last_labels.json`, the closest timestamp is chosen; ties favor the earlier point.
 - Age lookups return the stored `age` label value from `last_labels.json`.
 - Calculated age is `reference_date.year - birth_year`. Track 1 targets and Linear age covariates use the existing age-label timestamp; age subgroups in all three tracks use enrollment `createdOn`. This counts calendar years, not completed birthdays.
 

@@ -19,8 +19,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from forecasting_evaluation.metrics import fair_skill_score
-from forecasting_evaluation.metrics import fairness_skill_score_summary as fair
 from forecasting_evaluation.metrics import grouped_metric_rank_summary as rank
 from forecasting_evaluation.metrics import skill_score_summary as skill
 from forecasting_evaluation.metrics.bootstrap_skill_rank import _draw_replica_frame, _resample
@@ -94,22 +92,6 @@ def test_rank_reader_macro_vs_micro(tmp_path):
     # n_values reports the total finite-cell count regardless of mode.
     assert int(macro.set_index("channel_idx").loc[0, "n_values"]) == 5
     assert int(micro.set_index("channel_idx").loc[0, "n_values"]) == 5
-
-
-def test_fairness_reader_macro_vs_micro(tmp_path):
-    """The fairness error table yields macro vs micro per-user errors from uneven windows."""
-    _write_metric(tmp_path / "m", "mae", {"u0": [_ch0(1.0, 1.0, 1.0, 1.0), _ch0(3.0)]})
-    common = dict(
-        models=_models(tmp_path, ["m"]),
-        continuous_metrics=["mae"],
-        binary_metrics=[],
-        continuous_channel_indices=(0,),
-        binary_channel_indices=(),
-    )
-    macro = fair._build_error_table(**common, within_user_aggregation="macro")
-    micro = fair._build_error_table(**common, within_user_aggregation="micro")
-    assert macro.set_index("channel_idx").loc[0, "error"] == pytest.approx(2.0)
-    assert micro.set_index("channel_idx").loc[0, "error"] == pytest.approx(1.4)
 
 
 def _skill_summary(models, within):
@@ -214,57 +196,3 @@ def test_bootstrap_identity_matches_point_both_modes(tmp_path):
         point_scores[within] = point_score
 
     assert point_scores["macro"] != pytest.approx(point_scores["micro"], abs=1e-6)
-
-
-def _fair_overall(error_df, demographics, model):
-    """Disparity-ratio fair skill score (``overall`` scope) for one model."""
-    out = fair_skill_score.compute_fair_skill_scores_from_errors(
-        error_df,
-        demographics,
-        attrs=("age_group",),
-        baseline_method="baseline",
-    )
-    row = out[(out["model"] == model) & (out["scope"] == "overall")]
-    return float(row["fair_skill_score"].iloc[0])
-
-
-def test_fair_skill_score_macro_vs_micro(tmp_path):
-    """End-to-end disparity-ratio fair skill score moves between micro and macro.
-
-    Counterpart to ``test_skill_tables_macro_vs_micro`` for the fairness metric:
-    the uneven-count fixtures only differed at ``_build_error_table`` before; this
-    drives the full disparity-ratio score. ``age_group`` has two subgroups, and
-    only the model's *young* user has uneven per-window cell counts, so its
-    subgroup error — hence the model gap ``D_m``, hence the ratio against the
-    baseline gap ``D_b`` — depends on the mode:
-
-        young model error: macro 2.0, micro 1.4   (windows [1,1,1,1] and [3])
-        old   model error: 4.0 (uniform, both modes)
-        baseline gap D_b = |4.0 - 2.0| = 2.0 (uniform, both modes)
-        macro: D_m = 2.0 -> ratio 1.0 -> S = 0.0
-        micro: D_m = 2.6 -> ratio 1.3 -> S = -0.3
-    """
-    # u0 -> young, u1 -> old; both models score both users (paired cohort).
-    _write_metric(tmp_path / "baseline", "mae", {"u0": [_ch0(2.0, 2.0)], "u1": [_ch0(4.0, 4.0)]})
-    _write_metric(
-        tmp_path / "good",
-        "mae",
-        {"u0": [_ch0(1.0, 1.0, 1.0, 1.0), _ch0(3.0)], "u1": [_ch0(4.0, 4.0)]},
-    )
-    models = _models(tmp_path, ["baseline", "good"])
-    demographics = {"u0": {"age_group": "young"}, "u1": {"age_group": "old"}}
-    common = dict(
-        models=models,
-        continuous_metrics=["mae"],
-        binary_metrics=[],
-        continuous_channel_indices=(0,),
-        binary_channel_indices=(),
-    )
-    macro_err = fair._build_error_table(**common, within_user_aggregation="macro")
-    micro_err = fair._build_error_table(**common, within_user_aggregation="micro")
-
-    assert _fair_overall(macro_err, demographics, "good") == pytest.approx(0.0, abs=1e-9)
-    assert _fair_overall(micro_err, demographics, "good") == pytest.approx(-0.3, abs=1e-9)
-    # The baseline's self-ratio is 1, so its fair skill score is 0 under both modes.
-    assert _fair_overall(macro_err, demographics, "baseline") == pytest.approx(0.0, abs=1e-9)
-    assert _fair_overall(micro_err, demographics, "baseline") == pytest.approx(0.0, abs=1e-9)

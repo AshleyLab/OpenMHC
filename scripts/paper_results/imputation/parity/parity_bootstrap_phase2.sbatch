@@ -12,8 +12,7 @@
 # statistical bar (mean ± 5×SE). Byte parity on draws failed due to:
 #   - float32 storage in per_user_errors (Δ ≲ 1e-3 on large-magnitude E)
 #   - cat_collapsed:* R formula split (existing path floors per-channel
-#     INSIDE the nanmean; producer stores unfloored nanmean — semantic
-#     divergence specific to the unknown subgroup)
+#     INSIDE the nanmean; producer stores unfloored nanmean)
 #   - subtle rank-pool composition differences
 # All three are small; the statistical CSV match is the right scientific bar.
 
@@ -31,17 +30,12 @@ PAPER=/scratch/users/schuetzn/openmhc-imputation-eval/paper
 VERIF=/scratch/users/schuetzn/openmhc-imputation-eval/paper-verification
 mkdir -p "$VERIF/bootstrap_phase2"
 
-echo "=== (1/3) Phase 2 skill + rank ==="
+echo "=== (1/2) Phase 2 skill + rank ==="
 python scripts/paper_results/imputation/aggregate_imputation_paper_metrics.py \
     --draws "$VERIF/bootstrap/bootstrap_draws.parquet" \
     --output-dir "$VERIF/bootstrap_phase2/"
 
-echo "=== (2/3) Phase 2 fairness ==="
-python scripts/paper_results/aggregate_fairness_skill_score.py \
-    --draws "$VERIF/bootstrap/bootstrap_draws.parquet" \
-    --output "$VERIF/bootstrap_phase2/fairness_skill_score_bootstrap.csv"
-
-echo "=== (3/3) Parity diff vs paper/*_bootstrap.csv ==="
+echo "=== (2/2) Parity diff vs paper/*_bootstrap.csv ==="
 python - <<'PYEOF'
 import logging
 from pathlib import Path
@@ -58,7 +52,7 @@ JOIN_KEYS = ["method", "scope", "split"]
 TOL = 5.0  # × SE
 failed = False
 
-for name in ("skill_scores_bootstrap.csv", "avg_rankings_bootstrap.csv", "fairness_skill_score_bootstrap.csv"):
+for name in ("skill_scores_bootstrap.csv", "avg_rankings_bootstrap.csv"):
     new_path = VERIF / name
     gt_path = PAPER / name
     if not new_path.exists() or not gt_path.exists():
