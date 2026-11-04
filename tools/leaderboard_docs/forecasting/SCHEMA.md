@@ -85,7 +85,7 @@ Source of truth: `CATEGORY_SCOPES` in `src/forecasting_evaluation/metrics/metric
 Unlike Track 2, the forecasting substrate is keyed by `user_id` only and carries
 **no `subgroup_attr` / `subgroup_value` columns**. Submitters do **not** ship
 subgroup rows — `evaluate_forecasting` emits exactly the columns above. A cohort
-view filters these rows by `user_id` membership.
+view filters these rows by `user_id` membership in `demographics.parquet`.
 
 ## `<method>.meta.json`
 

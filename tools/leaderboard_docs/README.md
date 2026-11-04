@@ -12,16 +12,19 @@ tags:
 
 Per-user **substrate** behind the [OpenMHC](https://myheartcounts.stanford.edu/benchmark) wearable-health benchmark leaderboard. Each file is one method's reduced per-user, per-task values for one track; the leaderboard recompute consumes these to produce paired **skill scores** and cross-method **ranks**.
 
-This repo holds *reduced metrics / predictions keyed by pseudonymous participant id* — **not** raw sensor data.
+This repo holds *reduced metrics / predictions keyed by pseudonymous participant id*, plus one age group and sex per participant — **not** raw sensor data.
 
 ## Layout
 
 ```
 <track>/<method>.parquet           e.g. downstream/xgboost.parquet, imputation/locf.parquet, forecasting/seasonal_naive.parquet
 <track>/bootstrap/draws.parquet    per-draw bootstrap reference for the CIs
+demographics.parquet               one age group and sex per evaluated participant, for cohort views
 ```
 
 Tracks: `downstream` (Track 1), `imputation` (Track 2), `forecasting` (Track 3) — all live.
+
+Cohort views keep the rows of the participants in `demographics.parquet` who belong to the cohort. See [`SCHEMA.md`](SCHEMA.md#demographics).
 
 ## Schema
 

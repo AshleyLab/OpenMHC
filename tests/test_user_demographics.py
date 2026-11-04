@@ -65,6 +65,7 @@ def test_age_group_boundaries(label_schema_environment, age, expected):
         ((" female ",), "female"),
         (("Other",), "unknown"),
         ((None,), "unknown"),
+        ((1,), "unknown"),
         (("Male", "Female"), "female"),
     ],
 )
@@ -165,6 +166,36 @@ def test_all_unknown_ages_are_reported_explicitly(reader, record, label_schema_e
     assert "no usable age groups" in warnings[0]
 
 
+@READERS
+def test_a_cohort_with_no_sex_labels_is_reported(reader, label_schema_environment, caplog):
+    """A labels file without BiologicalSex must not silently empty the sex cohorts."""
+    caplog.set_level(logging.WARNING)
+    enrollment = {"u": {"birth_year": 1980, "createdOn": "2020-01-01"}}
+
+    def sex_warnings():
+        return [r for r in caplog.records if "usable BiologicalSex" in r.getMessage()]
+
+    _write(label_schema_environment, enrollment)
+    paths = _paths(reader, label_schema_environment)
+    assert labels.user_demographics(["u"], paths=paths)["u"]["sex"] == "unknown"
+    assert len(sex_warnings()) == 1
+
+    caplog.clear()
+    assert labels.user_demographics([], paths=paths) == {}
+    assert not sex_warnings()
+
+
+def test_partial_sex_coverage_does_not_warn(label_schema_environment, caplog):
+    caplog.set_level(logging.WARNING)
+    _write(
+        label_schema_environment,
+        {"u": {"birth_year": 1980, "createdOn": "2020-01-01"}},
+        {"u": _sex("Male")},
+    )
+    labels.user_demographics(["u", "absent"])
+    assert not [r for r in caplog.records if "usable BiologicalSex" in r.getMessage()]
+
+
 @pytest.mark.parametrize("name", ["enrollment_info.json", "last_labels.json"])
 def test_broken_files_raise_instead_of_becoming_unknown(label_schema_environment, name):
     """A file problem is not a missing value, even for a cohort with no users."""
@@ -172,6 +203,8 @@ def test_broken_files_raise_instead_of_becoming_unknown(label_schema_environment
     (label_schema_environment / name).write_text("{")
     with pytest.raises(ValueError):
         labels.user_demographics(["u"])
+    with pytest.raises(ValueError):
+        labels.user_demographics([])
 
 
 @READERS

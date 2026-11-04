@@ -24,8 +24,8 @@ The substrate parquets are the canonical inputs for:
 - The cluster-bootstrap reference at `imputation/bootstrap*/` is reduced
   from these substrates, so any change here propagates downstream.
 
-A cohort view is a membership filter of the `subgroup_attr == "all"` rows. Files
-built before `S_fair` was retired also hold `age_group` and `sex` rows; no reducer
+A cohort view is a membership filter of the `subgroup_attr == "all"` rows by
+`demographics.parquet` at the repo root. Files built before `S_fair` was retired also hold `age_group` and `sex` rows; no reducer
 in the code repo reads them.
 
 ## Loading

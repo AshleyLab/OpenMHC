@@ -35,7 +35,8 @@ reducers:
   `compute_skill_scores(mode="paired")`.
 - **Rank** — `compute_average_rankings` → `aggregate_task_ranks_to_scopes`.
 
-`HEADLINE_SCOPE="overall"`. Skill and rank filter to `subgroup_attr == "all"`.
+`HEADLINE_SCOPE="overall"`. Skill and rank filter to `subgroup_attr == "all"`. Cohort
+views keep those rows for the participants in the cohort, using `demographics.parquet`.
 
 ## Adding / updating a method (no Space rebuild)
 
@@ -52,7 +53,9 @@ reducers:
    `--fallback-rate` records `fallback_rate` in the sidecar (issue #39);
    omit it and the value is read from the substrate's `<m>.parquet.meta.json`
    provenance sidecar if present, else the row shows "n/a". The `method` column is
-   validated against `<m>` for `imputation` and `downstream`.
+   validated against `<m>` for `imputation` and `downstream`. The upload stops if the
+   file has users absent from `demographics.parquet`, because they would be left out
+   of every cohort view.
 2. The Space recomputes only on **restart** (in-process cache, no auto-refresh).
    Restart it to pick up the new/changed method. Uploading to the dataset does
    *not* trigger a Space rebuild; only pushing to the Space does.
@@ -64,6 +67,30 @@ reducers:
    > baseline — and reads `fallback_rate` from the sidecar. So a new downstream
    > substrate appears on the next restart, exactly like the other two tracks.
    > (It does not reuse the imputation per-cell-mean path.)
+
+## The demographics file
+
+`demographics.parquet` (`user_id`, `age_group`, `sex`) is the only source of cohort
+membership. `tools/build_leaderboard_demographics.py` builds it with
+`labels.user_demographics`, for the users already in published substrates, and stops
+if any of them has an unknown age group. Rebuild it when a substrate adds users or the
+age or sex rule changes, then upload both files in one commit:
+
+```bash
+python tools/build_leaderboard_demographics.py --data-dir <dataset> --out-dir <dir>
+```
+
+```python
+HfApi().upload_folder(
+    folder_path="<dir>",
+    repo_id="MyHeartCounts/OpenMHC-leaderboard-data",
+    repo_type="dataset",
+    allow_patterns=["demographics.parquet", "demographics.meta.json"],
+    commit_message=...,
+)
+```
+
+Restart the Space afterwards, as for a new method.
 
 Dataset visibility, if needed:
 `HfApi().update_repo_settings(repo_id, private=False, repo_type="dataset")`

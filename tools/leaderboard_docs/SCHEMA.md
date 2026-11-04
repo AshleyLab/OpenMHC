@@ -24,7 +24,7 @@ One row per `(method, task, task_type, subgroup_attr, subgroup_value, user_id)`.
 
 Because the metrics are cohort-level (AUPRC / Spearman / Pearson), a single per-user error like Track 2's `E_per_user` is not well-defined. The leaderboard pools every `downstream/*.parquet` and recomputes the paired skill score and average rank against the `linear` baseline. Missing-prediction fallback is already applied — a participant the model could not score is substituted with the `linear` baseline before the pairs are written — so there are no NaN pairs.
 
-A cohort view is a membership filter of these rows. Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
+A cohort view is a membership filter of these rows by [`demographics.parquet`](#demographics). Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
 
 ## Track 2 — Imputation
 
@@ -50,7 +50,7 @@ One row per `(method, scenario, split, channel, channel_type, subgroup_attr, sub
 
 NaN values are dropped — a user with no data for a cell simply has no row.
 
-A cohort view is a membership filter of these rows. Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
+A cohort view is a membership filter of these rows by [`demographics.parquet`](#demographics). Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
 
 ## Track 3 — Forecasting
 
@@ -70,6 +70,18 @@ One row per `(model, group, metric, channel_idx, channel_name, user_id)`. Unlike
 ### From `metric_value` to error
 
 The skill reducer converts on load: continuous error = `metric_value` (MAE, lower=better); binary error = `max(1 − auroc, 0.005)`. Rank uses `metric_value` directly. Stored at **float64** (vs Track 2's float32) for byte-exact reproduction of the published aggregates.
+
+## Demographics
+
+`demographics.parquet` holds one row per participant in a published substrate. It is the only source of cohort membership, for all three tracks. `demographics.meta.json` records the rules, the code commit, the dataset version and the substrate revision it was built from.
+
+| column | type | description |
+|---|---|---|
+| `user_id` | string | pseudonymous participant id |
+| `age_group` | string | `18-29`, `30-39`, `40-49`, `50-59` or `60+`, from age at enrollment (`createdOn` year minus `birth_year`) |
+| `sex` | string | `male`, `female` or `unknown`, from the latest `BiologicalSex` label |
+
+Each participant has one group across all tracks. Like the dataset, this file is covered by the [Data Use Agreement](https://github.com/AshleyLab/myheartcounts-dataset/blob/main/DATASET.md#data-use-agreement).
 
 ## Conventions
 

@@ -64,7 +64,7 @@ compression.
 ### Cohort views
 
 Every `(task, user)` cell appears once, with `subgroup_attr = subgroup_value = "all"`.
-A cohort view is a membership filter of these rows.
+A cohort view is a membership filter of these rows by `demographics.parquet` at the repo root.
 `evaluate_prediction(output_dir=...)` emits them automatically.
 
 > **Older snapshots.** Files built before `S_fair` was retired also hold
