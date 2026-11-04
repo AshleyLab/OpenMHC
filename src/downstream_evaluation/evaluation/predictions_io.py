@@ -199,7 +199,8 @@ def write_subgroup_map(
         logger.warning(
             "%d/%d users have unknown age groups. Check birth_year and createdOn "
             "in enrollment_info.json and the age-bin range.%s",
-            unknown, len(subgroups),
+            unknown,
+            len(subgroups),
             " Age-based fairness has no usable age groups." if unknown == len(subgroups) else "",
         )
     out_dir = Path(predictions_dir)

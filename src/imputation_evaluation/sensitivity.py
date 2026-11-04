@@ -87,15 +87,15 @@ def get_user_demographics(
         demographics[uid] = {"age_at_enrollment": age, "sex": sex}
 
     unknown = sum(
-        row["age_at_enrollment"] is None
-        or bin_age(row["age_at_enrollment"], age_bins) == "unknown"
+        row["age_at_enrollment"] is None or bin_age(row["age_at_enrollment"], age_bins) == "unknown"
         for row in demographics.values()
     )
     if unknown:
         logger.warning(
             "%d/%d users have unknown age groups. Check birth_year and createdOn "
             "in enrollment_info.json and the age-bin range.%s",
-            unknown, len(demographics),
+            unknown,
+            len(demographics),
             " Age-based fairness has no usable age groups." if unknown == len(demographics) else "",
         )
 

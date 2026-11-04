@@ -469,6 +469,11 @@ class EnrollmentIndex:
         if not isinstance(enrollment, dict):
             raise ValueError("Enrollment metadata must be a JSON object keyed by user ID")
         self._enrollment = enrollment
+        self._has_birth_years = any(
+            isinstance(record, dict)
+            and (record.get("birth_year") is not None or record.get("birthdate") is not None)
+            for record in enrollment.values()
+        )
 
     def get(self, health_code: str) -> dict[str, Any] | None:
         """Get enrollment information for a health code.
@@ -501,6 +506,12 @@ class EnrollmentIndex:
             # Transition fallback for pre-migration enrollment fixtures/files.
             birthdate = user.get("birthdate")
             if birthdate is None:
+                if self._has_birth_years:
+                    raise KeyError(
+                        f"Enrollment record lacks birth_year for healthCode: {health_code}. "
+                        "Other records in this file have it, so this is a gap in this record "
+                        "rather than an outdated release."
+                    )
                 raise KeyError(
                     f"Enrollment metadata lacks birth_year for healthCode: {health_code}. "
                     "Download a dataset release containing birth_year into a new directory "
