@@ -306,7 +306,7 @@ def _post_process_xs(dest: Path) -> None:
     The Dataverse XS deposit lays files out with directory labels: large
     HuggingFace Arrow / HDF5 archives under ``archives/`` and metadata under
     ``data/`` (``data/processed``, ``data/labels``, ``data/splits``,
-    ``data/forecasting_sample_index``). After the outer zip and the nested
+    ``data/forecasting_sample_index``, ``data/imputation``). After the outer zip and the nested
     tarballs are extracted, this moves everything to the canonical paths the
     evaluation API expects (``processed/daily_hf``, ``splits/``, ``labels/``,
     ``forecasting_sample_index/``, ``hourly_trajectory/``, …) and removes the
@@ -314,7 +314,7 @@ def _post_process_xs(dest: Path) -> None:
     """
     # Detect metadata collisions before moving any extracted files. Keeping old
     # root schemas while silently leaving the new release under data/ is unsafe.
-    metadata_subdirs = ("splits", "labels", "forecasting_sample_index")
+    metadata_subdirs = ("splits", "labels", "forecasting_sample_index", "imputation")
     for sub in metadata_subdirs:
         source, target = dest / "data" / sub, dest / sub
         if source.is_dir() and target.exists():
@@ -378,6 +378,18 @@ def _post_process_full(dest: Path) -> None:
     concatenated and streamed into ``tarfile`` before they can be unpacked.
     The part files are removed on success.
     """
+    # Masks are loose release files, so install them even when there are no
+    # multipart archives (for example, an already extracted bundle).
+    source, target = dest / "data" / "imputation", dest / "imputation"
+    if source.is_dir():
+        if target.exists():
+            raise FileExistsError(
+                f"Cannot install dataset masks from {source}: {target} already exists. "
+                "Extract or download the complete release into a fresh directory; "
+                "do not mix files from different releases."
+            )
+        source.rename(target)
+
     archives_dir = dest / "archives"
     if not archives_dir.exists():
         return

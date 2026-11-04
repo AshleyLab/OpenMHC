@@ -33,15 +33,17 @@ from openmhc._results import ForecastingResults, ImputationResults, PredictionRe
 
 logger = logging.getLogger(__name__)
 
-# Pre-computed max91d masks shipped with this repo (val/ + test/ subdirs, one
-# .npz per scenario).  These are required for full-dataset evaluation because
-# regenerating masks on the fly produces a different random sample each run,
-# which would make leaderboard scores non-reproducible.
-_REPO_ROOT = Path(__file__).parent.parent.parent
-_MAX91D_MASKS_DIR = (
-    _REPO_ROOT / "data" / "imputation" / "masks" / "sharable_users_seed42_2026_max91d"
-)
-_XS_MASKS_DIR = _REPO_ROOT / "data" / "imputation" / "masks" / "sharable_users_seed42_2026_xs"
+# Canonical masks belong to the selected dataset and share its sample dates.
+_MASK_SUBDIRS = {
+    "full": "sharable_users_seed42_2026_max91d",
+    "xs": "sharable_users_seed42_2026_xs",
+}
+
+
+def _dataset_masks_dir(root: Path, version: str) -> Path:
+    return root / "imputation" / "masks" / _MASK_SUBDIRS[version]
+
+
 _LFS_POINTER_STUB_MAX_BYTES = 4096
 
 
@@ -52,18 +54,15 @@ _SPLIT_FILENAMES: dict[str, str] = {
 
 
 def _raise_if_lfs_pointer_masks(mask_dir: Path) -> None:
-    sample_npz = next(mask_dir.glob("**/*.npz"), None)
-    if sample_npz is None:
-        return
-    sample_size = sample_npz.stat().st_size
-    if sample_size >= _LFS_POINTER_STUB_MAX_BYTES:
-        return
-    raise RuntimeError(
-        f"Mask file {sample_npz} is {sample_size} bytes — it looks like a "
-        "git-lfs pointer stub. Full-dataset evaluation requires the real "
-        "precomputed masks for reproducible leaderboard scores. Run `git lfs pull` "
-        "and retry."
-    )
+    for sample_npz in mask_dir.glob("**/*.npz"):
+        if sample_npz.stat().st_size >= _LFS_POINTER_STUB_MAX_BYTES:
+            continue
+        if not sample_npz.read_bytes().startswith(b"version https://git-lfs.github.com/spec/v1"):
+            continue
+        raise RuntimeError(
+            f"Mask file {sample_npz} is a git-lfs pointer stub. Download the real masks "
+            "accompanying the selected dataset and retry."
+        )
 
 
 @dataclass
@@ -154,7 +153,9 @@ class _DatasetPaths:
             daily_hourly_hf=root / "processed" / "daily_hourly_hf",
             daily_hf=root / "processed" / "daily_hf",
             window_index=root / "processed" / "window_index_w7_s7_d5.parquet",
-            weekly_labels_lookup=root / "processed" / "weekly_labels_lookup_stride7_full_history.parquet",
+            weekly_labels_lookup=root
+            / "processed"
+            / "weekly_labels_lookup_stride7_full_history.parquet",
             daily_labels_lookup=root / "processed" / "daily_labels_lookup.parquet",
             splits_file=root / "splits" / _SPLIT_FILENAMES[version],
             norm_stats=root / "processed" / "normalization_stats_hourly.json",
@@ -577,9 +578,7 @@ def evaluate_imputation(
     Raises:
         TypeError: If ``imputer`` does not implement ``impute``.
         ValueError: If an unknown masking scenario name or version is provided.
-        FileNotFoundError: If no dataset is found, or if the full dataset is
-            selected but the pre-computed max91d masks are missing from the
-            repository.
+        FileNotFoundError: If the dataset or its required precomputed masks are missing.
     """
     from openmhc._constants import MASKING_SCENARIOS
 
@@ -621,38 +620,20 @@ def evaluate_imputation(
     masking_cfg.workout_gap.enabled = "workout_gap" in scenario_list
     masking_cfg.intensity_failure.enabled = "intensity_failure" in scenario_list
 
-    if paths.version == "full":
-        if not _MAX91D_MASKS_DIR.exists():
+    masks_dir = _dataset_masks_dir(paths.root, paths.version)
+    # Context length changes window assembly, not the daily prediction targets.
+    use_precomputed = paths.version == "full" or (seed == 42 and max_samples is None)
+    if use_precomputed:
+        if not masks_dir.is_dir():
             raise FileNotFoundError(
-                f"Pre-computed masks not found at:\n  {_MAX91D_MASKS_DIR}\n\n"
-                "Full-dataset evaluation requires the max91d masks to ensure "
-                "reproducible leaderboard scores across runs. The masks ship with "
-                "this repository — make sure you cloned it with `git clone` and "
-                "installed with `pip install -e .`. If the masks directory is "
-                "missing, re-clone or check that `data/imputation/masks/` was not "
-                "excluded by a sparse-checkout or .gitignore rule."
+                f"Pre-computed masks not found at:\n  {masks_dir}\n\n"
+                "Download the masks accompanying this dataset release into "
+                "the dataset's imputation/masks/ directory. Masks must use the "
+                "same participant dates as the selected dataset."
             )
-        _raise_if_lfs_pointer_masks(_MAX91D_MASKS_DIR)
-        masking_cfg.masks_file = str(_MAX91D_MASKS_DIR)
-    elif (
-        paths.version == "xs"
-        and seed == 42
-        and n_days == 1
-        and max_samples is None
-        and _XS_MASKS_DIR.exists()
-    ):
-        # XS ships precomputed masks too (mirrors `full`), but only for the
-        # canonical full-split config they were generated for: seed 42,
-        # single-day windows, all XS val+test samples. A scenario subset still
-        # loads fine (the cache holds all six). Other seed / n_days, or a
-        # max_samples-bounded run, fall through to on-the-fly generation below:
-        # the cache spans the full split, so its applicable indices would
-        # overrun a max_samples-limited dataset — and bounded generation is
-        # cheap anyway (it only masks the small subset). On-the-fly over the
-        # full split is the slow case (~20 min) this cache exists to avoid.
-        masking_cfg.masks_file = str(_XS_MASKS_DIR)
-    # else (xs with a non-canonical config, max_samples set, or cache absent):
-    # masks_file stays None → runner generates masks on the fly.
+        _raise_if_lfs_pointer_masks(masks_dir)
+        masking_cfg.masks_file = str(masks_dir)
+    # Non-canonical or bounded XS runs generate masks for their selected samples.
 
     data_cfg = DataConfig(
         daily_hf_dir=str(paths.daily_hf),
@@ -738,9 +719,7 @@ def evaluate_imputation(
                 (per_user_df["subgroup_attr"].astype(str) == "all")
                 & (per_user_df["subgroup_value"].astype(str) == "all")
             ].copy()
-            combined = pd.concat(
-                [this_method_df, baseline_df], ignore_index=True
-            )
+            combined = pd.concat([this_method_df, baseline_df], ignore_index=True)
             combined = combined.rename(columns={"E_per_user": "E"})
             for col in ("method", "scenario", "split", "channel", "channel_type", "user_id"):
                 combined[col] = combined[col].astype(str)

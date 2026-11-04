@@ -9,6 +9,11 @@ The OpenMHC dataset is distributed through Harvard Dataverse and will be made av
 Extract each complete release into a new or empty directory. For replacing an
 existing root, see [migration guidance](../DATASET.md#existing-dataset-roots).
 
+Include the release's precomputed imputation masks. Copying `data/imputation/`
+below installs them at `<dataset_root>/imputation/masks/`, alongside `processed/`,
+`labels/`, and `splits/`. Use the masks for the same release and date variant;
+see [mask paths and requirements](../DATASET.md#bundled-vs-dataset-root-files).
+
 Recommended layout for keeping both side by side:
 
 ```
@@ -47,6 +52,7 @@ The ZIP contains an `archives/` directory with five tar.gz files and a `data/` t
 cp -r "$CACHE/data/splits"                    "$CACHE/"
 cp -r "$CACHE/data/labels"                    "$CACHE/"
 cp -r "$CACHE/data/forecasting_sample_index"  "$CACHE/"
+cp -r "$CACHE/data/imputation"               "$CACHE/"
 mkdir -p "$CACHE/processed"
 cp    "$CACHE/data/processed/"*.json          "$CACHE/processed/"
 cp    "$CACHE/data/processed/"*.parquet       "$CACHE/processed/"
@@ -126,6 +132,7 @@ unzip openmhc-full.zip -d "$CACHE"
 cp -r "$CACHE/data/splits"                    "$CACHE/"
 cp -r "$CACHE/data/labels"                    "$CACHE/"
 cp -r "$CACHE/data/forecasting_sample_index"  "$CACHE/"
+cp -r "$CACHE/data/imputation"               "$CACHE/"
 mkdir -p "$CACHE/processed"
 cp    "$CACHE/data/processed/"*.json          "$CACHE/processed/"
 cp    "$CACHE/data/processed/"*.parquet       "$CACHE/processed/"
@@ -204,6 +211,7 @@ $CACHE/
 │   ├── daily_labels_lookup.parquet
 │   ├── daily_labels_lookup_full_history.parquet
 │   └── weekly_labels_lookup_stride7_full_history.parquet
+├── imputation/masks/                          # Track 2 — matching release masks
 ├── forecasting_sample_index/                  # Track 3
 │   ├── sample_index_P_24_M_H_7_3_S_100.json   # used by evaluate_forecasting (horizon 24)
 │   ├── day_remain_mask.json

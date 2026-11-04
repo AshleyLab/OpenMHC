@@ -31,7 +31,7 @@ common_overrides:
   - data.version=full
   - data.daily_hf_dir=${MHC_CACHE}/processed/daily_hf
   - data.split_file=${MHC_CACHE}/splits/sharable_users_seed42_2026.json
-  - +masking.masks_file=${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/masks/sharable_users_seed42_2026_max91d
+  - +masking.masks_file=${MHC_CACHE}/imputation/masks/sharable_users_seed42_2026_max91d
   - seed=42
 
 # Phase 1 (bootstrap_imputation_draws.py)

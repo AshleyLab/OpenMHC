@@ -362,12 +362,12 @@ for the Track 1 / Track 2 per-method substrate columns and dtypes, and
 | `jobs/` | SLURM wrappers for Sherlock and SC cluster runs |
 | `tools/` and `scripts/` | Release, leaderboard, parity, and paper-result utilities |
 | `data/labels/` | Benchmark feature exclusions and historical survey documentation |
-| `data/imputation/masks/` | Bundled precomputed imputation masks for reproducible scoring |
 | `notebooks/quickstart_benchmark.ipynb` | End-to-end benchmark example notebook |
 | `notebooks/example_lsm2_representation_extraction.ipynb` | Extract representations from the pretrained LSM2 daily encoder |
 | `tools/leaderboard_docs/` | Docs mirrored into the HF leaderboard dataset repo |
 
-The participant data itself is not tracked in this repository. See
+Participant data and precomputed imputation masks are not tracked in this repository.
+Masks belong under `<dataset_root>/imputation/masks/`. See
 [DATASET.md](DATASET.md) for access requirements, download instructions and expected layout.
 
 ## Citation

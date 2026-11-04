@@ -16,7 +16,7 @@ _COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${_COMMON_DIR}/../_env.sh"
 
 # --- Eval-specific paths ------------------------------------------------------
-# Dataset cache populated by ``openmhc.download_dataset(version="full")``.
+# Installed Full dataset root (see docs/manual-dataset-setup.md).
 # 292 GB, 11894 users, 2.82M daily rows. version="full".
 export DAILY_HF_DIR=${MHC_CACHE}/processed/daily_hf
 export SPLIT_FILE=${MHC_CACHE}/splits/sharable_users_seed42_2026.json
@@ -28,8 +28,8 @@ export RUNS_ROOT=${OUT_BASE}/runs       # one subdir per method (sweep config la
 export PAPER_OUT=${OUT_BASE}/paper
 
 # Mask files for strict parity with MHC-benchmark's max91d ablation.
-# Materialized once from your DVC cache, if you have one.
-export MASKS=${OUT_BASE}/masks/sharable_users_seed42_2026_max91d
+# Distributed with the matching dataset release.
+export MASKS=${MHC_CACHE}/imputation/masks/sharable_users_seed42_2026_max91d
 
 # --- Hydra / W&B housekeeping -------------------------------------------------
 export HYDRA_FULL_ERROR=1
