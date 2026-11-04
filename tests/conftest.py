@@ -104,3 +104,15 @@ def label_schema_environment(monkeypatch, tmp_path, write_label_schemas):
         vars(store).update(store_state)
         vars(device_store).clear()
         vars(device_store).update(device_state)
+
+
+@pytest.fixture
+def write_age_dataset(write_label_schemas):
+    """Create a complete synthetic schema root for age-specific payloads."""
+    return write_label_schemas
+
+
+@pytest.fixture
+def age_label_environment(label_schema_environment):
+    """Reuse schema setup and restore both configured and unconfigured states."""
+    return label_schema_environment

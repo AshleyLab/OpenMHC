@@ -1110,7 +1110,27 @@ def reduce_substrate_to_point(
     overall}}``: ``scope`` is ``"Overall"`` plus each health domain, ``skill`` the
     domain-balanced skill vs ``baseline``, ``rank`` the cross-method average rank, and
     ``fair_skill`` the disparity-ratio fairness skill (over ``subgroup_attributes``).
+
+    Raises ``ValueError`` if a user has conflicting subgroup assignments across
+    methods or tasks. Regenerate those substrates with one demographic definition
+    before pooling them; choosing the first row would make scores order-dependent.
     """
+    subgroup_map: dict[str, dict[str, str]] = {}
+    for attr in subgroup_attributes:
+        cell = substrate.loc[
+            substrate["subgroup_attr"] == attr, ["user_id", "subgroup_value"]
+        ].astype(str).drop_duplicates()
+        conflicting = cell["user_id"].duplicated(keep=False)
+        if conflicting.any():
+            n_users = cell.loc[conflicting, "user_id"].nunique()
+            raise ValueError(
+                f"Conflicting {attr} assignments for {n_users} user(s). "
+                "Regenerate all substrates with the same demographic definition "
+                "before combining methods or tasks."
+            )
+        for uid, val in cell.itertuples(index=False):
+            subgroup_map.setdefault(uid, {})[attr] = val
+
     all_cell = substrate[substrate["subgroup_attr"] == "all"]
     methods = sorted(all_cell["method"].astype(str).unique())
     if baseline not in methods:
@@ -1127,12 +1147,6 @@ def reduce_substrate_to_point(
             "task_type": str(g["task_type"].iloc[0]),
         }
     aligned = align_across_methods(aligned_raw)
-
-    subgroup_map: dict[str, dict[str, str]] = {}
-    for attr in subgroup_attributes:
-        cell = substrate[substrate["subgroup_attr"] == attr][["user_id", "subgroup_value"]]
-        for uid, val in cell.drop_duplicates("user_id").itertuples(index=False):
-            subgroup_map.setdefault(str(uid), {})[attr] = str(val)
 
     tasks = sorted(aligned[methods[0]].keys())
     full_idx = {t: np.arange(len(aligned[methods[0]][t]["uids"])) for t in tasks}

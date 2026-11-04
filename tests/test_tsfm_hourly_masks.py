@@ -81,6 +81,7 @@ def test_default_cache_is_separate_from_legacy_cache(cls, full_history):
     old = Path("results") / f"{encoder.name}_embeddings" / variant
     assert encoder._resolve_cache_dir() == old / tsfm.INPUT_PREPROCESSING_VERSION
     assert encoder._resolve_cache_dir() != old
+    assert encoder._resolve_cache_dir() != old / "canonical_hourly_mask_v1"
 
 
 def write_cache(encoder, version):
@@ -98,7 +99,7 @@ def write_cache(encoder, version):
 
 
 @pytest.mark.parametrize("cls", [Chronos2, Toto])
-@pytest.mark.parametrize("version", [None, "old_preprocessing"])
+@pytest.mark.parametrize("version", [None, "old_preprocessing", "canonical_hourly_mask_v1"])
 def test_legacy_cache_rejected_before_loading_or_writing(cls, version, tmp_path, monkeypatch):
     encoder = cls(cache_dir=str(tmp_path))
     path, _ = write_cache(encoder, version)

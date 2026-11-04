@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -47,10 +48,7 @@ from forecasting_evaluation.metrics.skill_score_summary import (  # noqa: E402
 DEFAULT_AGE_BINS = (18, 30, 40, 50, 60)
 DEFAULT_DEMOGRAPHIC_ATTRS = ("age_group", "sex")
 
-# Enrollment exposes only a birth *year*, so age is anchored to a single
-# reference date shared with Track 1 (downstream_evaluation.config.LABEL_REFERENCE_DATE),
-# i.e. age = AGE_REFERENCE_DATE.year − birth_year for every user.
-AGE_REFERENCE_DATE = "2020-06-01"
+logger = logging.getLogger(__name__)
 
 
 def _last_value(entries: dict[str, Any], user_id: str) -> Any | None:
@@ -100,34 +98,43 @@ def load_user_demographics(
     labels_path: str | Path,
     enrollment_path: str | Path,
     age_bins: tuple[int, ...] = DEFAULT_AGE_BINS,
-    reference_date: str = AGE_REFERENCE_DATE,
 ) -> dict[str, dict[str, str]]:
     """Load age-group and sex labels for the requested users.
 
-    Age is ``reference_date.year − birth_year`` (enrollment exposes only a birth
-    *year*), anchoring every user to the same reference as Track 1. Sex is the
-    latest ``BiologicalSex`` label value.
+    Age uses each user's enrollment createdOn and birth year. Missing or invalid
+    enrollment metadata gives an unknown age group. Sex is the latest
+    BiologicalSex label value. Unknown counts are logged; unreadable or malformed
+    enrollment files raise.
     """
+    from labels.api import EnrollmentIndex, _load_enrollment
+
     labels_file = Path(labels_path)
     enrollment_file = Path(enrollment_path)
     with labels_file.open("r", encoding="utf-8") as file:
         labels_data = json.load(file)
-    with enrollment_file.open("r", encoding="utf-8") as file:
-        enrollment = json.load(file)
-
-    reference_year = pd.Timestamp(reference_date).year
+    enrollment_index = EnrollmentIndex(_load_enrollment(enrollment_file))
     sex_entries = labels_data.get("BiologicalSex", {})
 
     demographics: dict[str, dict[str, str]] = {}
     for user_id in sorted(user_ids):
-        record = enrollment.get(user_id)
-        birth_year = record.get("birth_year") if isinstance(record, dict) else None
-        age = reference_year - int(birth_year) if birth_year else None
+        try:
+            age = enrollment_index.age_at_enrollment(user_id)
+        except (KeyError, ValueError):
+            age = None
         sex_value = _last_value(sex_entries, user_id)
         demographics[user_id] = {
             "age_group": bin_age(age, age_bins=age_bins),
             "sex": normalize_sex(sex_value),
         }
+    unknown = sum(row["age_group"] == "unknown" for row in demographics.values())
+    if unknown:
+        logger.warning(
+            "%d/%d users have unknown age groups. Check birth_year and createdOn "
+            "in enrollment_info.json and the age-bin range.%s",
+            unknown,
+            len(demographics),
+            " Age-based fairness has no usable age groups." if unknown == len(demographics) else "",
+        )
     return demographics
 
 
@@ -749,9 +756,13 @@ def main() -> None:
     from openmhc._label_paths import LabelPaths
 
     paths = LabelPaths.resolve(args.data_dir)
-    labels_path = Path(args.labels_path).expanduser().resolve() if args.labels_path else paths.labels
+    labels_path = (
+        Path(args.labels_path).expanduser().resolve() if args.labels_path else paths.labels
+    )
     enrollment_path = (
-        Path(args.enrollment_path).expanduser().resolve() if args.enrollment_path else paths.enrollment
+        Path(args.enrollment_path).expanduser().resolve()
+        if args.enrollment_path
+        else paths.enrollment
     )
     if labels_path is None or enrollment_path is None:
         raise ValueError(

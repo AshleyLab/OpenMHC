@@ -56,6 +56,7 @@ $MHC_DATA_DIR/
 ├── labels/                       # Track 1
 │   ├── last_labels.json          # participant-level outcome labels
 │   ├── context_labels.json       # participant-level covariates
+│   ├── enrollment_info.json      # birth_year and createdOn for age targets and groups
 │   ├── label_types.json          # required schema: names, types and target/context roles
 │   ├── ordinal_dictionary.json   # required schema: category encodings
 │   └── validity_config.json      # required schema: validity-window thresholds

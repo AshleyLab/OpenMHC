@@ -92,8 +92,11 @@ That join needs **no private data**: every forecasting user also appears in
 `imputation/locf.parquet`, which carries per-user `age_group` / `sex` subgroup
 rows under the canonical 18/30/40/50/60 age bins. Reusing that partition gives
 forecasting fairness the identical user→subgroup mapping as imputation, with no
-extra artifact. This is exactly what the live leaderboard does, and it
-reproduces the published `S_fair` point estimates:
+extra artifact. Use the LOCF substrate from the same demographic-definition
+revision as the other fairness artifacts.
+After the enrollment-age migration, this means one enrollment-age group per
+participant. The join reproduces published `S_fair` point estimates only when
+the substrate and demographic revisions match those used for publication:
 
 ```python
 demo = {}                                     # {user_id: {age_group, sex}}
@@ -102,14 +105,16 @@ imp = pd.read_parquet(
     columns=["subgroup_attr", "subgroup_value", "user_id"])
 for attr in ("age_group", "sex"):
     sub = imp[imp.subgroup_attr.astype(str) == attr][
-        ["user_id", "subgroup_value"]].drop_duplicates()
+        ["user_id", "subgroup_value"]].astype(str).drop_duplicates()
+    if sub.user_id.duplicated().any():
+        raise ValueError(f"Conflicting {attr} assignments; regenerate the LOCF substrate")
     for uid, val in sub.itertuples(index=False):
         demo.setdefault(str(uid), {})[attr] = str(val)
 
 err  = to_error_df(substrate, user_col="user_id")   # canonical error conversion
 fair = compute_fair_skill_scores_from_errors(
     err, demo, baseline_method="seasonal_naive")
-fair[fair.scope == "overall"]                       # == published S_fair points
+fair[fair.scope == "overall"]                       # compare with matching-revision S_fair
 ```
 
 > **Use the `_from_errors` entry point.** Track 3 passes **per-user** errors plus

@@ -9,7 +9,7 @@ pretrained) is scored as-is. Encoder-style methods run the uniform ``openmhc.Lin
 inside ``fit`` / ``predict``; end-to-end methods own their head.
 
 All cohort / temporal / label logic comes from :class:`TaskDataProvider` (the
-labels lookup). The model only ever sees a participant's *eligible* data,
+labels lookup plus age API). The model only ever sees a participant's *eligible* data,
 at the granularity it declares via ``input_granularity`` (default daily).
 """
 
@@ -45,7 +45,17 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     spec = getattr(model, "data_spec", None)
     grain = spec.provider_granularity if spec is not None else getattr(model, "input_granularity", "daily")
     lookup = f"{config.data_dir}/processed/{lookup_filename(grain, config.temporal.is_full_history)}"
-    provider = TaskDataProvider(lookup, config.split_users, granularity=grain)
+    provider = TaskDataProvider(
+        lookup, config.split_users, granularity=grain, data_dir=config.data_dir
+    )
+
+    if config.predictions_dir is not None:
+        from labels.api import STORE
+
+        # The subgroup export needs enrollment even when age is not an evaluated
+        # task. Fail before loading sensor data or running models, not after scoring.
+        provider.validate_label_dataset()
+        _ = STORE.enrollment
 
     if spec is not None:
         # DataSpec models: build a loader at the spec's resolution; the evaluator builds a
@@ -88,8 +98,8 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
 
     # Predictions export: alongside the per-(method, task) parquets the evaluator
     # wrote, persist one shared per-user subgroup map (age_group + sex) for the
-    # fairness bootstrap. Demographics come from the daily lookup regardless of the
-    # model's granularity, so the map covers the widest set of users.
+    # fairness bootstrap. Age uses enrollment createdOn; sex comes from the daily
+    # lookup regardless of model granularity.
     if config.predictions_dir is not None:
         from downstream_evaluation.evaluation.predictions_io import (
             write_fallback_sidecar,

@@ -55,6 +55,7 @@ def write_task(model, complete=True):
         "dataset",
         "source",
         "policy",
+        "age_anchor_v1",
         "missing_identity",
         "incomplete",
     ],
@@ -63,7 +64,10 @@ def test_tsfm_rejects_mismatch_before_model_load_or_writes(inputs, cls, change, 
     """The same cache path cannot silently cross checkpoints, datasets or policies."""
     root, checkpoint, cache = inputs
     kwargs = dict(data_dir=str(root), checkpoint=str(checkpoint), cache_dir=str(cache))
-    path = write_task(cls(**kwargs), complete=change != "incomplete")
+    with monkeypatch.context() as old_version:
+        if change == "age_anchor_v1":
+            old_version.setattr(tsfm, "INPUT_PREPROCESSING_VERSION", "canonical_hourly_mask_v1")
+        path = write_task(cls(**kwargs), complete=change != "incomplete")
     if change == "checkpoint":
         other = checkpoint.with_name("other.ckpt")
         other.write_bytes(b"checkpoint B")
