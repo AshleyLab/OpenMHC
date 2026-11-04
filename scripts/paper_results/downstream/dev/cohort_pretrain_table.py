@@ -44,7 +44,7 @@ import pandas as pd
 from wbm_cohort_ablation import subset_predictions, wbm_real_masks
 
 from downstream_evaluation.evaluation.bootstrap_skill_rank import (
-    aggregate_skill_rank_fairness,
+    aggregate_skill_rank,
     align_across_methods,
     compute_per_draw_errors,
     load_bootstrap_test_users,
@@ -100,11 +100,9 @@ def cohort_tables(
         align_across_methods(method_tasks),
         n_bootstrap=n_bootstrap,
         seed=seed,
-        subgroup_map=None,
-        subgroup_attributes=None,
         test_uids=test_uids,
     )
-    tables = aggregate_skill_rank_fairness(
+    tables = aggregate_skill_rank(
         draws, baseline=baseline, clip_lower=clip_lower, clip_upper=clip_upper, ci_level=ci_level
     )
     out = []

@@ -13,9 +13,9 @@ The parquet is produced by the evaluation run — pass both `output_dir=` and
 `method_name="<method>"` to `openmhc.evaluate_prediction` and it writes
 `<method>.parquet` with the `method` column set to `<method>`. Upload that file
 verbatim; do not hand-author it. The maintainers concatenate every
-`downstream/*.parquet` and recompute the paired skill score, fair skill score,
-and average rank against the `linear` baseline during ingestion, so the columns
-and dtypes below must match exactly.
+`downstream/*.parquet` and recompute the paired skill score and average rank
+against the `linear` baseline during ingestion, so the columns and dtypes below
+must match exactly.
 
 > **Why pairs and not a per-user error?** Unlike imputation/forecasting (whose
 > per-user MAE is a clean per-user quantity), Track-1's headline metrics — binary
@@ -45,8 +45,8 @@ compression.
 | `method` | string (dict) | your method identifier; **must equal the `<method>` filename stem** — set it via `evaluate_prediction(method_name="<method>")` (defaults to `model.name`) |
 | `task` | string (dict) | benchmark task name (one of the 32 `BENCHMARK_TASKS`) |
 | `task_type` | string (dict) | `binary`, `ordinal`, `multiclass`, or `regression` |
-| `subgroup_attr` | string (dict) | `all` (global cell), `age_group`, or `sex` |
-| `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (age bucket, sex value, or `unknown`) |
+| `subgroup_attr` | string (dict) | `all` |
+| `subgroup_value` | string (dict) | `all` |
 | `user_id` | string (dict) | participant id from the canonical split |
 | `y_true` | float32 | ground-truth label for this `(task, user)` |
 | `y_pred` | float32 | the model's prediction, by task type: a thresholded class for binary, a rounded class for multiclass, and the continuous score for ordinal and regression (ordinal is scored with rank-based Spearman, so the raw score is kept rather than rounded to a class) |
@@ -61,14 +61,15 @@ compression.
 - **Structurally-absent tasks are omitted, not NaN-filled.** A task with no
   eligible test cohort simply has no rows.
 
-### Subgroup rows are required for fairness
+### Cohort views
 
-Every `(task, user)` cell appears three times: once with `subgroup_attr = "all"`
-(the global cell used for skill and rank) and once for each demographic attribute
-(`age_group`, `sex`) the user belongs to. The fairness skill score is computed
-only from the `age_group` / `sex` rows, so a submission that ships only
-`subgroup_attr = "all"` will score `NaN` fairness.
-`evaluate_prediction(output_dir=...)` emits all three automatically.
+Every `(task, user)` cell appears once, with `subgroup_attr = subgroup_value = "all"`.
+A cohort view is a membership filter of these rows.
+`evaluate_prediction(output_dir=...)` emits them automatically.
+
+> **Older snapshots.** Files built before `S_fair` was retired also hold
+> `age_group` and `sex` rows, which repeat each user's pairs. No reducer in the code
+> repo reads them; filter on `subgroup_attr == "all"`.
 
 ## `<method>.meta.json`
 
@@ -88,7 +89,7 @@ Tiny display sidecar the leaderboard reads to render the row, produced by
 ## Conventions
 
 - Evaluated against the canonical split `sharable_users_seed42_2026` (`test`).
-- Track-1 baseline for skill / fairness: `linear` (server-side; do not submit it).
+- Track-1 baseline for skill: `linear` (server-side; do not submit it).
 - Must use the standard evaluation protocol — canonical dataset version, split
   file, task set, and label-validity criterion.
 

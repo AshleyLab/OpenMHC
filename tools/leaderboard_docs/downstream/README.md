@@ -4,7 +4,7 @@ This directory holds the **per-method substrate** for the OpenMHC Track-1 (outco
 prediction) leaderboard. Each method ships two files:
 
 ```
-downstream/<method>.parquet         # per-user prediction pairs (method × task × subgroup × user)
+downstream/<method>.parquet         # per-user prediction pairs (method × task × user)
 downstream/<method>.meta.json       # display + diagnostic sidecar
 ```
 
@@ -22,7 +22,7 @@ server-side against the `linear` baseline.
 The substrate parquets are the canonical inputs for:
 
 - The OpenMHC HF Space (`MyHeartCounts/OpenMHC`) — the live leaderboard table (skill /
-  fair-skill / average-rank vs the `linear` baseline). The Space **reduces these substrates
+  average-rank vs the `linear` baseline). The Space **reduces these substrates
   live on every page load** — point estimate vs the `linear` baseline — exactly like the
   imputation and forecasting tracks. So once your `<method>.parquet` (+ `.meta.json`) is on
   the dataset, **it goes straight onto the board** — reduced live vs `linear`, with no
@@ -60,7 +60,9 @@ print(json.loads(open(meta_p).read()))
 ## Pooled substrate
 
 The pooled per-user frame across all methods is the concatenation of the per-method
-parquets (93,528 rows/method for the canonical 32-task config):
+parquets (30,999 rows/method for the canonical 32-task config). Files built before
+`S_fair` was retired hold three times that, with `age_group` and `sex` rows; filter
+on `subgroup_attr == "all"`:
 
 ```python
 import glob, pandas as pd
@@ -93,7 +95,7 @@ changes — see `docs/leaderboard-maintenance.md`.)
 
 ```bash
 # (1) Eval — run each method through the public API, saving per-(method, task)
-#     test predictions + the shared _subgroups.json.
+#     test predictions.
 METHOD=xgboost MHC_DATA_DIR=<data> PREDICTIONS_DIR=results/eval/final/predictions \
   python scripts/run_eval.py                      # repeat for the 8 methods
 

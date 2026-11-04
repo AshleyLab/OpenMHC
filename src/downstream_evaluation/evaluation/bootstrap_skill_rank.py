@@ -5,20 +5,16 @@ Two-phase, mirroring the imputation paper-metrics pipeline:
 * Phase 1 — :func:`compute_per_draw_errors` samples the declared test participants
   with replacement, sharing each draw across all tasks and methods. It recomputes
   every method's per-task primary metric on eligible participants and records the
-  error ``E = 1 − metric`` globally and per demographic subgroup as a long-format
-  draws frame (:func:`write_draws_parquet` persists it).
+  error ``E = 1 − metric`` as a long-format draws frame (:func:`write_draws_parquet`
+  persists it).
 
-* Phase 2 — :func:`aggregate_skill_rank_fairness` reconstructs each draw's per-task
+* Phase 2 — :func:`aggregate_skill_rank` reconstructs each draw's per-task
   metric (``1 − E``) and reduces the draws to ``point / SE / 95 % CI`` for the macro
-  (domain-balanced) **skill score** vs the baseline, the **average rank** (both
-  Overall + per-domain), and the per-subgroup **fairness** skill table. The headline
-  disparity-ratio Fairness Skill Score (domain-balanced, BCa) is produced separately
-  by ``aggregate_fairness_skill_score.py``.
+  (domain-balanced) **skill score** vs the baseline and the **average rank** (both
+  Overall + per-domain).
 
 The runnable CLIs are ``scripts/paper_results/downstream/bootstrap_downstream_draws.py`` (phase
 1) and ``scripts/paper_results/downstream/aggregate_downstream_paper_metrics.py`` (phase 2).
-Fairness rows require ``predictions_dir/_subgroups.json`` (per-user {age_group, sex});
-without it only the global (``subgroup_attr="all"``) rows are produced.
 """
 
 from __future__ import annotations
@@ -28,7 +24,6 @@ import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
-from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -188,18 +183,6 @@ def align_across_methods(
     return aligned
 
 
-def load_subgroup_map(predictions_dir: Path) -> dict[str, dict[str, str]] | None:
-    """Load ``predictions_dir/_subgroups.json`` ({user_id: {attr: value}}), or None if absent."""
-    path = predictions_dir / "_subgroups.json"
-    if not path.exists():
-        log.warning("No subgroup map at %s — fairness stats will be NaN", path)
-        return None
-    with path.open() as f:
-        sg = json.load(f)
-    log.info("Loaded subgroup map for %d users from %s", len(sg), path)
-    return sg
-
-
 def _test_population(test_uids: Sequence[str]) -> np.ndarray:
     if isinstance(test_uids, (str, bytes)):
         raise ValueError("test_uids must contain participant IDs, not a filename or string")
@@ -277,16 +260,6 @@ def _per_domain_skill_from_ratios(
     return out
 
 
-def _macro_skill_from_ratios(
-    ratios: dict[str, float],
-    domain_map: dict[str, str],
-    clip_lower: float,
-    clip_upper: float,
-) -> float:
-    """Macro (domain-balanced) skill score = ``Overall`` from the per-domain dict."""
-    return _per_domain_skill_from_ratios(ratios, domain_map, clip_lower, clip_upper)["Overall"]
-
-
 def _ratios_for_method(
     per_task_metric: dict[str, dict[str, float]],
     method: str,
@@ -297,36 +270,6 @@ def _ratios_for_method(
     for task, vals in per_task_metric.items():
         m_val = vals.get(method)
         b_val = vals.get(baseline)
-        if m_val is None or b_val is None:
-            continue
-        m_err = 1.0 - m_val
-        b_err = 1.0 - b_val
-        if not (np.isfinite(m_err) and np.isfinite(b_err) and b_err > 0):
-            continue
-        out[task] = m_err / b_err
-    return out
-
-
-def _ratios_subgroup_vs_global_baseline(
-    sub_per_task: dict[str, dict[str, float]],
-    global_per_task: dict[str, dict[str, float]],
-    method: str,
-    baseline: str,
-) -> dict[str, float]:
-    """Per-subgroup E_method / *global* E_baseline per task.
-
-    The subgroup-S numerator uses the method's per-subgroup error, but the
-    denominator stays
-    on the baseline's *global* error so every subgroup's S is on the same
-    yardstick. This is what makes the baseline's per-subgroup S non-zero
-    (proportional to how much the baseline's subgroup performance differs
-    from its overall performance), and therefore Linear's disparity / FairS
-    are non-trivial: FairS_baseline = 0 − λ · D̄_baseline.
-    """
-    out: dict[str, float] = {}
-    for task, vals in sub_per_task.items():
-        m_val = vals.get(method)
-        b_val = global_per_task.get(task, {}).get(baseline)
         if m_val is None or b_val is None:
             continue
         m_err = 1.0 - m_val
@@ -390,22 +333,11 @@ def _per_task_metric_on_indices(
     methods: list[str],
     tasks: list[str],
     task_indices_b: dict[str, np.ndarray],
-    mask_per_task: dict[str, np.ndarray] | None = None,
 ) -> dict[str, dict[str, float]]:
-    """Compute per-task per-method metric on the resampled rows.
-
-    If ``mask_per_task[t]`` is provided (a boolean mask indexing into the
-    resampled rows), only those rows are used — used for per-subgroup metrics.
-    Tasks with fewer than 2 samples after masking are skipped silently.
-    """
+    """Compute per-task per-method metric on the resampled rows."""
     out: dict[str, dict[str, float]] = {}
     for t in tasks:
         idx = task_indices_b[t]
-        if mask_per_task is not None:
-            mask = mask_per_task.get(t)
-            if mask is None or mask.sum() < 2:
-                continue
-            idx = idx[mask]
         tt = aligned[methods[0]][t]["task_type"]
         fn = PRIMARY_METRIC_FN.get(tt)
         if fn is None:
@@ -424,31 +356,8 @@ def _per_task_metric_on_indices(
     return out
 
 
-def _build_subgroup_masks(
-    aligned: dict[str, dict[str, dict]],
-    tasks: list[str],
-    methods: list[str],
-    subgroup_map: dict[str, dict[str, str]],
-    attributes: list[str],
-) -> dict[str, dict[str, dict[str, np.ndarray]]]:
-    """Pre-compute {task: {attribute: {value: mask_into_uid_order}}}.
-
-    Mask is over the canonical uid order (same for all methods after alignment).
-    Reused inside the bootstrap loop with the resampled indices.
-    """
-    out: dict[str, dict[str, dict[str, np.ndarray]]] = {}
-    for t in tasks:
-        uids = aligned[methods[0]][t]["uids"]
-        out[t] = {}
-        for attr in attributes:
-            attr_per_uid = np.array([subgroup_map.get(u, {}).get(attr, "unknown") for u in uids])
-            values = sorted(set(attr_per_uid.tolist()))
-            out[t][attr] = {v: (attr_per_uid == v) for v in values}
-    return out
-
-
 # ---------------------------------------------------------------------------
-# Two-phase pipeline: per-draw errors (phase 1) -> skill/rank/fairness (phase 2)
+# Two-phase pipeline: per-draw errors (phase 1) -> skill/rank (phase 2)
 # ---------------------------------------------------------------------------
 
 DRAW_COLS = [
@@ -472,19 +381,18 @@ def compute_per_draw_errors(
     aligned: dict[str, dict[str, dict]],
     n_bootstrap: int,
     seed: int,
-    subgroup_map: dict[str, dict[str, str]] | None = None,
-    subgroup_attributes: list[str] | None = None,
     domain_map: dict[str, str] = TASK_DOMAIN_MAP,
     *,
     test_uids: Sequence[str],
 ) -> pd.DataFrame:
-    """Phase 1: per-(method, task, subgroup, draw) error ``E = 1 - metric``.
+    """Phase 1: per-(method, task, draw) error ``E = 1 - metric``.
 
     Each replicate samples the full ``test_uids`` population once. Its participant
-    multiplicities are shared across tasks, methods and demographic subgroups;
-    task eligibility is fixed and the resampled task sizes can vary. The original
-    eligible cohorts supply the point estimates. Protocol metadata is attached
-    to the returned frame and persisted by :func:`write_draws_parquet`.
+    multiplicities are shared across tasks and methods; task eligibility is fixed
+    and the resampled task sizes can vary. The original eligible cohorts supply the
+    point estimates. ``subgroup_attr`` and ``subgroup_value`` hold the constant
+    ``"all"``. Protocol metadata is attached to the returned frame and persisted by
+    :func:`write_draws_parquet`.
     """
     methods = list(aligned.keys())
     if not methods or not aligned[methods[0]]:
@@ -530,23 +438,16 @@ def compute_per_draw_errors(
     for b in range(n_bootstrap):
         counts[b] = np.bincount(rng.integers(len(users), size=len(users)), minlength=len(users))
 
-    do_fairness = subgroup_map is not None and subgroup_attributes
-    attribute_masks = (
-        _build_subgroup_masks(aligned, tasks, methods, subgroup_map, subgroup_attributes)
-        if do_fairness
-        else {}
-    )
-
     rows: list[dict] = []
-    omitted = {"all": 0, "subgroups": 0}
+    omitted = {"all": 0}
     global_omissions = []
 
-    def _emit(per_task: dict[str, dict[str, float]], attr: str, value: str, b: int) -> None:
+    def _emit(per_task: dict[str, dict[str, float]], b: int) -> None:
         for t, method_vals in per_task.items():
             dom = domain_map.get(t)
             for m, metric in method_vals.items():
                 if metric is None or not np.isfinite(metric):
-                    omitted["all" if attr == "all" else "subgroups"] += 1
+                    omitted["all"] += 1
                     continue
                 rows.append(
                     {
@@ -554,45 +455,22 @@ def compute_per_draw_errors(
                         "task": t,
                         "task_type": task_type[t],
                         "domain": dom,
-                        "subgroup_attr": attr,
-                        "subgroup_value": value,
+                        "subgroup_attr": "all",
+                        "subgroup_value": "all",
                         "draw": b,
                         "E": 1.0 - float(metric),
                     }
                 )
 
     def _emit_for_indices(idx_b: dict[str, np.ndarray], b: int) -> None:
-        """Emit global + per-subgroup errors for one set of row indices (draw ``b``)."""
+        """Emit errors for one set of row indices (draw ``b``)."""
         per_task_global = _per_task_metric_on_indices(aligned, methods, tasks, idx_b)
         for t, values in per_task_global.items():
             missing = [m for m, value in values.items() if not np.isfinite(value)]
             if missing:
                 global_omissions.append({"task": t, "draw": b, "methods": missing,
                                          "sample_size": len(idx_b[t])})
-        _emit(per_task_global, "all", "all", b)
-        if do_fairness:
-            for attr in subgroup_attributes:
-                values = sorted({v for t in tasks for v in attribute_masks[t][attr]})
-                for value in values:
-                    masks_b: dict[str, np.ndarray] = {}
-                    for t in tasks:
-                        cm = attribute_masks[t][attr].get(value)
-                        if cm is None:
-                            continue
-                        m_b = cm[idx_b[t]]
-                        # Skip only an empty cell — a metric on zero users is undefined.
-                        # Every nonempty subgroup counts; no minimum-size floor (its noise
-                        # is already carried in the bootstrap CI, and non-finite metrics are
-                        # dropped at emit). Matches the imputation track.
-                        if not m_b.any():
-                            continue
-                        masks_b[t] = m_b
-                    if not masks_b:
-                        continue
-                    sub_per_task = _per_task_metric_on_indices(
-                        aligned, methods, tasks, idx_b, mask_per_task=masks_b
-                    )
-                    _emit(sub_per_task, attr, value, b)
+        _emit(per_task_global, b)
 
     # Point estimate first — the full cohort in order, no resampling — then the B
     # paired bootstrap resamples that quantify its standard error.
@@ -612,7 +490,6 @@ def compute_per_draw_errors(
         "counts_sha256": hashlib.sha256(counts.tobytes()).hexdigest(),
         "counts_dtype": str(counts.dtype), "counts_shape": list(counts.shape),
         "point_draw": POINT_DRAW, "error_storage_dtype": "float32",
-        "subgroup_sampling": "restrict each shared participant draw to fixed subgroup membership",
         "undefined_policy": "omit nonfinite metric cells; single-class targets omitted across all methods",
         "undefined_metric_cells": omitted, "global_omissions": global_omissions,
     }
@@ -648,12 +525,11 @@ def _summarise(values: list[float], ci_level: float, point: float | None = None)
     """Deterministic point + bootstrap mean + SE / percentile-CI for one quantity.
 
     ``values`` are the bootstrap draws (the point draw excluded). ``point`` is the
-    full-cohort deterministic estimate and is the reported centre for every quantity —
-    skill score, average rank, and the BCa-corrected fairness skill score alike; the
-    draws supply only the SE and the percentile CI around it. ``mean``, the bootstrap
-    mean of those draws, is returned alongside as a diagnostic (the gap between the two
-    centres measures the resampling bias). When ``point`` is omitted the centre falls
-    back to the bootstrap mean.
+    full-cohort deterministic estimate and is the reported centre for skill score and
+    average rank alike; the draws supply only the SE and the percentile CI around it.
+    ``mean``, the bootstrap mean of those draws, is returned alongside as a diagnostic
+    (the gap between the two centres measures the resampling bias). When ``point`` is
+    omitted the centre falls back to the bootstrap mean.
     """
     arr = np.asarray(values, dtype=np.float64)
     arr = arr[np.isfinite(arr)]
@@ -677,7 +553,7 @@ def _summarise(values: list[float], ci_level: float, point: float | None = None)
     }
 
 
-def aggregate_skill_rank_fairness(
+def aggregate_skill_rank(
     draws: pd.DataFrame,
     baseline: str,
     *,
@@ -686,18 +562,15 @@ def aggregate_skill_rank_fairness(
     domain_map: dict[str, str] = TASK_DOMAIN_MAP,
     ci_level: float = 0.95,
 ) -> dict[str, pd.DataFrame]:
-    """Phase 2: summarise per-draw errors into skill / rank / subgroup tables.
+    """Phase 2: summarise per-draw errors into skill / rank tables.
 
-    Reconstructs each draw's per-task metric (``1 - E``) and reuses the point
-    helpers, so per-draw skill/rank match the one-pass bootstrap exactly. Returns
-    ``{skill_scores, avg_rankings, fairness_subgroup_scores}`` (mean / se /
-    percentile ci at ``ci_level``). The headline fairness metric — the
-    disparity-ratio Fairness Skill Score — is produced separately by
-    ``aggregate_fairness_skill_score.py``.
+    Reconstructs each draw's per-task metric (``1 - E``) from the ``subgroup_attr ==
+    "all"`` rows and reuses the point helpers, so per-draw skill/rank match the one-pass
+    bootstrap exactly. Returns ``{skill_scores, avg_rankings}`` (mean / se / percentile
+    ci at ``ci_level``).
     """
     methods = sorted(draws["method"].unique())
     glob = draws[draws["subgroup_attr"] == "all"]
-    sub = draws[draws["subgroup_attr"] != "all"]
     n_boot = int(draws.loc[draws["draw"] != POINT_DRAW, "draw"].nunique())
 
     task_dom = dict(zip(glob["task"], glob["domain"]))
@@ -708,11 +581,9 @@ def aggregate_skill_rank_fairness(
 
     skill_draws: dict[str, dict[str, list[float]]] = {m: {} for m in methods}
     rank_draws: dict[str, dict[str, list[float]]] = {m: {} for m in methods}
-    subS_draws: dict[str, dict[tuple[str, str], list[float]]] = {m: {} for m in methods}
     # Point estimates (full cohort, draw == POINT_DRAW) — the reported values.
     skill_point: dict[str, dict[str, float]] = {m: {} for m in methods}
     rank_point: dict[str, dict[str, float]] = {m: {} for m in methods}
-    subS_point: dict[str, dict[tuple[str, str], float]] = {m: {} for m in methods}
 
     for b, g in glob.groupby("draw"):
         is_point = b == POINT_DRAW
@@ -738,25 +609,6 @@ def aggregate_skill_rank_fairness(
                 else:
                     rank_draws[m].setdefault(scope, []).append(per_m[m])
 
-        if sub.empty:
-            continue
-        sub_b = sub[sub["draw"] == b]
-        for (attr, value), gv in sub_b.groupby(["subgroup_attr", "subgroup_value"]):
-            sub_per_task: dict[str, dict[str, float]] = {}
-            for t, m_, e_ in zip(gv["task"], gv["method"], gv["E"]):
-                sub_per_task.setdefault(t, {})[m_] = 1.0 - e_
-            for m in methods:
-                s_sub = _macro_skill_from_ratios(
-                    _ratios_subgroup_vs_global_baseline(sub_per_task, per_task_metric, m, baseline),
-                    domain_map,
-                    clip_lower,
-                    clip_upper,
-                )
-                if is_point:
-                    subS_point[m][(attr, value)] = s_sub
-                else:
-                    subS_draws[m].setdefault((attr, value), []).append(s_sub)
-
     skill_rows, rank_rows = [], []
     for m in methods:
         for scope in ["Overall", *domains]:
@@ -772,315 +624,14 @@ def aggregate_skill_rank_fairness(
                 row["n_boot"] = n_boot
                 rank_rows.append(row)
 
-    subgroup_rows = []
-    for m in methods:
-        for (attr, value), vals in subS_draws[m].items():
-            subgroup_rows.append(
-                {
-                    "method": m,
-                    "demographic_attr": attr,
-                    "subgroup": value,
-                    **_summarise(vals, ci_level, subS_point[m].get((attr, value))),
-                    "n_boot": n_boot,
-                }
-            )
-
     return {
         "skill_scores": pd.DataFrame(skill_rows),
         "avg_rankings": pd.DataFrame(rank_rows),
-        "fairness_subgroup_scores": pd.DataFrame(subgroup_rows),
     }
 
 
 # ---------------------------------------------------------------------------
-# BCa (bias-corrected & accelerated) interval — a point-anchored alternative to
-# the percentile CI for the fairness disparity-ratio skill score, which is skewed
-# and downward-biased (its bootstrap mean sits below the point, so the percentile
-# CI is biased low). BCa re-anchors the interval near the reported point estimate
-# and corrects for bias (z0) and skew/acceleration (a), second-order accurate. The
-# acceleration is estimated from the leave-one-user-out jackknife. Φ / Φ⁻¹ come
-# from ``statistics.NormalDist`` (no scipy dependency).
-# ---------------------------------------------------------------------------
-
-_NORM = NormalDist()
-
-
-def _jackknife_acceleration(jack: np.ndarray) -> float:
-    """BCa acceleration from leave-one-out jackknife values (nan-aware).
-
-    ``a = Σ d³ / (6 · (Σ d²)^{3/2})`` with ``d = mean_i(θ₍ᵢ₎) − θ₍ᵢ₎``. Returns
-    ``0.0`` when fewer than two finite values are present or ``Σ d² == 0``.
-    """
-    arr = np.asarray(jack, dtype=np.float64)
-    finite = arr[np.isfinite(arr)]
-    if finite.size < 2:
-        return 0.0
-    d = finite.mean() - finite
-    s2 = float(np.sum(d**2))
-    if s2 == 0.0:
-        return 0.0
-    return float(np.sum(d**3)) / (6.0 * s2**1.5)
-
-
-def _bca_interval(
-    draws: np.ndarray, point: float, jack: np.ndarray, ci_level: float
-) -> tuple[float, float]:
-    """Bias-corrected & accelerated CI for one statistic.
-
-    Args:
-        draws: bootstrap draws ``θ*_b`` (NaN-dropped).
-        point: the deterministic point estimate ``θ̂`` (the reported value).
-        jack: leave-one-user-out jackknife values ``θ₍ᵢ₎`` (NaN-aware).
-        ci_level: e.g. 0.95 -> a 2.5/97.5 percentile-equivalent interval.
-
-    Guards (fall back to the plain percentile interval): empty/non-finite point,
-    non-finite ``z0``/``a``, or a zero BCa denominator ``1 − a(z0 + z_q)``. All
-    draws equal -> ``[point, point]``. When ``z0 = a = 0`` the adjusted percentiles
-    reduce to ``α/2`` and ``1 − α/2``, i.e. the percentile interval exactly.
-    """
-    arr = np.asarray(draws, dtype=np.float64)
-    finite = arr[np.isfinite(arr)]
-    n = int(finite.size)
-    alpha = 1.0 - ci_level
-
-    def _percentile() -> tuple[float, float]:
-        if n == 0:
-            return float("nan"), float("nan")
-        return (
-            float(np.percentile(finite, 100.0 * (alpha / 2.0))),
-            float(np.percentile(finite, 100.0 * (1.0 - alpha / 2.0))),
-        )
-
-    if n == 0 or not np.isfinite(point):
-        return _percentile()
-    if np.ptp(finite) == 0.0:
-        return float(point), float(point)
-
-    # Bias correction z0 from the fraction of draws below the point (clipped so
-    # an extreme point still yields a finite z0).
-    prop = float(np.count_nonzero(finite < point)) / n
-    prop = min(max(prop, 0.5 / n), 1.0 - 0.5 / n)
-    z0 = _NORM.inv_cdf(prop)
-    a = _jackknife_acceleration(jack)
-    if not (np.isfinite(z0) and np.isfinite(a)):
-        return _percentile()
-
-    out: list[float] = []
-    for z_q in (_NORM.inv_cdf(alpha / 2.0), _NORM.inv_cdf(1.0 - alpha / 2.0)):
-        denom = 1.0 - a * (z0 + z_q)
-        if denom == 0.0 or not np.isfinite(denom):
-            return _percentile()
-        adj = z0 + (z0 + z_q) / denom
-        if not np.isfinite(adj):
-            return _percentile()
-        frac = min(max(_NORM.cdf(adj), 0.0), 1.0)
-        out.append(float(np.percentile(finite, 100.0 * frac)))
-    return out[0], out[1]
-
-
-def _pad_jackknife_maps(per_user_maps: list[dict[tuple, float]]) -> dict[tuple, np.ndarray]:
-    """Align a list of per-user ``{key: value}`` maps into ``{key: array}``.
-
-    The k-th array entry is user k's leave-one-out value, NaN where that user's
-    recompute lacked the key (so every key spans all users, NaN-aware downstream).
-    """
-    keys: set[tuple] = set()
-    for m in per_user_maps:
-        keys |= m.keys()
-    return {
-        key: np.array([m.get(key, np.nan) for m in per_user_maps], dtype=np.float64) for key in keys
-    }
-
-
-# ---------------------------------------------------------------------------
-# Leave-one-user-out jackknife of the disparity-ratio fairness skill score.
-# Feeds the BCa acceleration term. Re-runs the *exact* point flow on the cohort
-# minus each user, so ``jackknife_fairness_skill(...)[1]`` (the full-cohort point)
-# reproduces the draws POINT_DRAW value by construction.
-# ---------------------------------------------------------------------------
-
-
-def mean_pairwise_abs_diff(values) -> float:
-    """Subgroup disparity ``D``: mean ``|E_a − E_c|`` over all unordered subgroup pairs.
-
-    The **mean absolute pairwise difference** (MAPD) of the per-subgroup errors,
-    using every subgroup relationship rather than only the two extremes. For
-    ``|G| = 2`` it collapses to ``|E_a − E_b|``; for ``|G| ≥ 3`` it smooths over
-    every pair. NaN if fewer than 2 finite values. It is sensitive to duplicate
-    subgroup values (a duplicate adds a zero-diff pair), so callers must pass one
-    error per subgroup value. Mirrors the Track-2/3 ``_mapd``.
-    """
-    vals = np.asarray(values, dtype=float)
-    vals = vals[np.isfinite(vals)]
-    if vals.size < 2:
-        return float("nan")
-    d = np.abs(vals[:, None] - vals[None, :])
-    return float(np.mean(d[np.triu_indices(vals.size, k=1)]))
-
-
-def _attr_disparity_ratio_skill(
-    g: pd.DataFrame,
-    methods: list[str],
-    baseline: str,
-    clip_lower: float,
-    clip_upper: float,
-    domain_map: dict[str, str] = TASK_DOMAIN_MAP,
-) -> dict[str, float]:
-    """Disparity-ratio fairness skill ``{method: S}`` for one (attribute, draw) slice.
-
-    ``g`` carries columns ``task, method, subgroup_value, E``. Per task the disparity
-    ``D`` is the mean unordered-pairwise ``|ΔE|`` over subgroup values (MAPD,
-    :func:`mean_pairwise_abs_diff`), computed for the model and the baseline over the
-    subgroup values **common to both** (inner join). A task is dropped when fewer than
-    two common subgroups exist (MAPD is undefined, and a lone subgroup gives
-    ``D_model = 0`` → a free near-perfect score) or when ``D_baseline ≤ 0`` /
-    non-finite. ``ratio = clip(D_model / D_baseline)``; the per-method score is the
-    **domain-balanced** macro of those ratios (:func:`_macro_skill_from_ratios`, the
-    same reducer the headline skill score uses): per-domain ``1 − geomean``, then the
-    mean over domains — so the fairness skill score aggregates identically to the skill
-    score and average rank (each health domain weighted equally, not by its task
-    count). Shared by the draws path (``aggregate_fairness_skill_score``) and the
-    leave-one-user-out jackknife so the two are identical by construction.
-    """
-    out: dict[str, float] = {}
-    # Per (task, method): the subgroup_value → E map. The disparity for a task is taken
-    # over the subgroup set each method shares with the baseline (inner join), so
-    # D_model and D_baseline always span the same subgroups; a task with < 2 common
-    # subgroups is dropped.
-    sub_e: dict[tuple[str, str], dict[str, float]] = {
-        (t, m_): dict(zip(gg["subgroup_value"], gg["E"]))
-        for (t, m_), gg in g.groupby(["task", "method"])
-    }
-    tasks = {t for (t, _) in sub_e}
-    for m in methods:
-        ratios: dict[str, float] = {}
-        for t in tasks:
-            base_map = sub_e.get((t, baseline))
-            model_map = sub_e.get((t, m))
-            if base_map is None or model_map is None:
-                continue
-            common = set(base_map) & set(model_map)
-            if len(common) < 2:
-                continue
-            d_base = mean_pairwise_abs_diff([base_map[s] for s in common])
-            d_model = mean_pairwise_abs_diff([model_map[s] for s in common])
-            if not (np.isfinite(d_base) and d_base > 0 and np.isfinite(d_model)):
-                continue
-            ratios[t] = d_model / d_base
-        if ratios:
-            out[m] = _macro_skill_from_ratios(ratios, domain_map, clip_lower, clip_upper)
-    return out
-
-
-def _fairness_skill_from_indices(
-    aligned: dict[str, dict[str, dict]],
-    methods: list[str],
-    tasks: list[str],
-    attributes: tuple[str, ...],
-    attribute_masks: dict[str, dict[str, dict[str, np.ndarray]]],
-    idx_per_task: dict[str, np.ndarray],
-    baseline: str,
-    clip_lower: float,
-    clip_upper: float,
-    domain_map: dict[str, str] = TASK_DOMAIN_MAP,
-) -> dict[tuple[str, str], float]:
-    """``{(method, scope): S}`` (scopes = each attribute + ``overall``) on given row indices.
-
-    Recomputes the per-(task, method, subgroup) error ``E = 1 − metric`` on the
-    supplied per-task row indices (mirrors phase-1's per-subgroup emit: skip a
-    subgroup cell that is empty, has < 2 users, or yields a non-finite metric),
-    then reduces with :func:`_attr_disparity_ratio_skill`. ``overall`` is the mean
-    over attributes that produced a score (mirrors the draws-path macro).
-    """
-    per_attr: dict[str, dict[str, float]] = {}
-    out: dict[tuple[str, str], float] = {}
-    for attr in attributes:
-        rows: list[dict] = []
-        values = sorted({v for t in tasks for v in attribute_masks[t][attr]})
-        for value in values:
-            masks_b: dict[str, np.ndarray] = {}
-            for t in tasks:
-                cm = attribute_masks[t][attr].get(value)
-                if cm is None:
-                    continue
-                m_b = cm[idx_per_task[t]]
-                if not m_b.any():
-                    continue
-                masks_b[t] = m_b
-            if not masks_b:
-                continue
-            per_task = _per_task_metric_on_indices(
-                aligned, methods, tasks, idx_per_task, mask_per_task=masks_b
-            )
-            for t, method_vals in per_task.items():
-                for m, metric in method_vals.items():
-                    if metric is None or not np.isfinite(metric):
-                        continue
-                    rows.append(
-                        {"task": t, "method": m, "subgroup_value": value, "E": 1.0 - float(metric)}
-                    )
-        if not rows:
-            continue
-        g = pd.DataFrame(rows, columns=["task", "method", "subgroup_value", "E"])
-        for m, s in _attr_disparity_ratio_skill(
-            g, methods, baseline, clip_lower, clip_upper, domain_map
-        ).items():
-            out[(m, attr)] = s
-            per_attr.setdefault(m, {})[attr] = s
-    for m in methods:
-        vals = [per_attr[m][a] for a in attributes if m in per_attr and a in per_attr[m]]
-        if vals:
-            out[(m, "overall")] = float(np.mean(vals))
-    return out
-
-
-def jackknife_fairness_skill(
-    aligned: dict[str, dict[str, dict]],
-    subgroup_map: dict[str, dict[str, str]],
-    attributes: tuple[str, ...],
-    baseline: str,
-    *,
-    clip_lower: float,
-    clip_upper: float,
-    domain_map: dict[str, str] = TASK_DOMAIN_MAP,
-) -> tuple[dict[tuple[str, str], np.ndarray], dict[tuple[str, str], float]]:
-    """Exact leave-one-user-out jackknife of the disparity-ratio fairness skill score.
-
-    Re-runs the deterministic point flow (:func:`_fairness_skill_from_indices`) on
-    the aligned per-user predictions minus each user. Returns
-    ``(jack_by_key, point_by_key)`` where ``jack_by_key[(method, scope)]`` is the
-    array of leave-one-user-out S values over the cohort (NaN where a scope is
-    absent for that recompute) and ``point_by_key`` is the full-cohort S (== the
-    draws POINT_DRAW value). Scopes = each attribute in ``attributes`` + ``overall``.
-    ~U deterministic recomputes (U = distinct users across tasks).
-    """
-    methods = list(aligned.keys())
-    tasks = sorted(aligned[methods[0]].keys())
-    attribute_masks = _build_subgroup_masks(aligned, tasks, methods, subgroup_map, list(attributes))
-    full_idx = {t: np.arange(len(aligned[methods[0]][t]["uids"])) for t in tasks}
-    point = _fairness_skill_from_indices(
-        aligned, methods, tasks, attributes, attribute_masks, full_idx, baseline, clip_lower, clip_upper,
-        domain_map,
-    )
-    pos = {t: {u: i for i, u in enumerate(aligned[methods[0]][t]["uids"])} for t in tasks}
-    users = sorted({u for t in tasks for u in aligned[methods[0]][t]["uids"]})
-    per_user_maps: list[dict[tuple, float]] = []
-    for u in users:
-        idx_u = {}
-        for t in tasks:
-            p = pos[t].get(u)
-            idx_u[t] = full_idx[t] if p is None else np.delete(full_idx[t], p)
-        per_user_maps.append(
-            _fairness_skill_from_indices(
-                aligned, methods, tasks, attributes, attribute_masks, idx_u, baseline, clip_lower, clip_upper,
-                domain_map,
-            )
-        )
-    return _pad_jackknife_maps(per_user_maps), point
-
-
-# ---------------------------------------------------------------------------
-# Live leaderboard reduce — point skill / rank / fairness straight from the
+# Live leaderboard reduce — point skill / rank straight from the
 # per-user-pairs substrate, no bootstrap. The Track-1 leaderboard reduces this on
 # each load (mirroring the imputation / forecasting tracks), so the board equals the
 # paper's point estimate by construction.
@@ -1091,46 +642,23 @@ def reduce_substrate_to_point(
     substrate: pd.DataFrame,
     baseline: str = "linear",
     *,
-    subgroup_attributes: tuple[str, ...] = ("age_group", "sex"),
     clip_lower: float = DEFAULT_CLIP_LOWER,
     clip_upper: float = DEFAULT_CLIP_UPPER,
     domain_map: dict[str, str] = TASK_DOMAIN_MAP,
 ) -> dict[str, dict]:
-    """Point skill / rank / fairness per method from the pooled per-user-pairs substrate.
+    """Point skill / rank per method from the pooled per-user-pairs substrate.
 
-    Reconstructs the aligned per-(method, task) predictions and the fairness subgroup
-    map from the long substrate frame (the :mod:`per_user_pairs` layout: the ``all``
-    cell holds the pairs, the ``age_group`` / ``sex`` cells the subgroup values), then
+    Reconstructs the aligned per-(method, task) predictions from the long substrate
+    frame's ``subgroup_attr == "all"`` rows (the :mod:`per_user_pairs` layout), then
     runs the same point reducers the bootstrap uses — on the full cohort, with no
     resampling. Reusing those reducers makes the result identical to the paper's ``point``
     column by construction (the substrate stores float32 pairs, so values match the
     float64 paper point to ~1e-6, immaterial at leaderboard display precision).
 
-    Returns ``{method: {"skill": {scope: value}, "rank": {scope: value}, "fair_skill":
-    overall}}``: ``scope`` is ``"Overall"`` plus each health domain, ``skill`` the
-    domain-balanced skill vs ``baseline``, ``rank`` the cross-method average rank, and
-    ``fair_skill`` the disparity-ratio fairness skill (over ``subgroup_attributes``).
-
-    Raises ``ValueError`` if a user has conflicting subgroup assignments across
-    methods or tasks. Regenerate those substrates with one demographic definition
-    before pooling them; choosing the first row would make scores order-dependent.
+    Returns ``{method: {"skill": {scope: value}, "rank": {scope: value}}}``: ``scope`` is
+    ``"Overall"`` plus each health domain, ``skill`` the domain-balanced skill vs
+    ``baseline``, and ``rank`` the cross-method average rank.
     """
-    subgroup_map: dict[str, dict[str, str]] = {}
-    for attr in subgroup_attributes:
-        cell = substrate.loc[
-            substrate["subgroup_attr"] == attr, ["user_id", "subgroup_value"]
-        ].astype(str).drop_duplicates()
-        conflicting = cell["user_id"].duplicated(keep=False)
-        if conflicting.any():
-            n_users = cell.loc[conflicting, "user_id"].nunique()
-            raise ValueError(
-                f"Conflicting {attr} assignments for {n_users} user(s). "
-                "Regenerate all substrates with the same demographic definition "
-                "before combining methods or tasks."
-            )
-        for uid, val in cell.itertuples(index=False):
-            subgroup_map.setdefault(uid, {})[attr] = val
-
     all_cell = substrate[substrate["subgroup_attr"] == "all"]
     methods = sorted(all_cell["method"].astype(str).unique())
     if baseline not in methods:
@@ -1153,12 +681,6 @@ def reduce_substrate_to_point(
     per_task = _per_task_metric_on_indices(aligned, methods, tasks, full_idx)
     ranks = _per_domain_avg_rank(per_task, methods, domain_map)
 
-    masks = _build_subgroup_masks(aligned, tasks, methods, subgroup_map, list(subgroup_attributes))
-    fair = _fairness_skill_from_indices(
-        aligned, methods, tasks, tuple(subgroup_attributes), masks, full_idx,
-        baseline, clip_lower, clip_upper, domain_map,
-    )
-
     out: dict[str, dict] = {}
     for m in methods:
         skill = _per_domain_skill_from_ratios(
@@ -1167,6 +689,5 @@ def reduce_substrate_to_point(
         out[m] = {
             "skill": skill,
             "rank": {scope: ranks[scope][m] for scope in ranks},
-            "fair_skill": fair.get((m, "overall"), 0.0 if m == baseline else float("nan")),
         }
     return out

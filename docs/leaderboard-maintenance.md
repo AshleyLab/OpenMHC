@@ -60,7 +60,7 @@ reducers:
    > **Track 1 (downstream)** is wired the same way (since 2026-07). The Space's
    > `compute_downstream_rows` runs `reduce_substrate_to_point`
    > (`downstream_evaluation/evaluation/bootstrap_skill_rank.py`) on the per-user
-   > *pairs* — point skill / rank / disparity-ratio fairness vs the `linear`
+   > *pairs* — point skill / rank vs the `linear`
    > baseline — and reads `fallback_rate` from the sidecar. So a new downstream
    > substrate appears on the next restart, exactly like the other two tracks.
    > (It does not reuse the imputation per-cell-mean path.)

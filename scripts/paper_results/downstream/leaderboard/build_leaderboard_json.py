@@ -2,10 +2,9 @@
 
 Reads a current ``leaderboard.json`` seed (``--current``), replaces the
 ``downstream`` array with values from the phase-2 sidecar CSVs
-(``skill_scores_bootstrap.csv``, ``fairness_skill_score_bootstrap.csv``,
-``avg_rankings_bootstrap.csv``), and writes the result. Other track arrays
-(``imputation``, ``forecasting``) are preserved verbatim; ``generated_at`` is
-bumped to today.
+(``skill_scores_bootstrap.csv``, ``avg_rankings_bootstrap.csv``), and writes the
+result. Other track arrays (``imputation``, ``forecasting``) are preserved verbatim;
+``generated_at`` is bumped to today.
 
 NOTE — provisional bits to confirm against the live leaderboard schema before
 publishing: the method registry :data:`METHODS` (csv key → display name → type),
@@ -89,7 +88,6 @@ def _build_section(
     methods: list[tuple[str, str, str]],
     *,
     skill: dict[str, float],
-    fair: dict[str, float],
     rank: dict[str, float],
     doms: dict[str, dict[str, float]],
     submitted_on: str,
@@ -110,7 +108,6 @@ def _build_section(
             "mtype": mtype,
             "sectionRank": i,
             "skill": _fmt_pct(skill[key]),
-            "fair_skill": _fmt_pct(fair.get(key, float("nan"))),
             "rank": _fmt_rank(rank[key]),
             "submitter": SUBMITTER,
             "submitted_on": submitted_on,
@@ -139,7 +136,6 @@ def main() -> None:
     # unchanged — only the reported center moves from the bootstrap mean to the point.
     skill = _load_scope(paper_dir / "skill_scores_bootstrap.csv", "Overall", "point")
     rank = _load_scope(paper_dir / "avg_rankings_bootstrap.csv", "Overall", "point")
-    fair = _load_scope(paper_dir / "fairness_skill_score_bootstrap.csv", "overall", "point")
     doms = _load_domains(paper_dir / "skill_scores_bootstrap.csv", "point")
 
     missing = [k for k, _, _ in METHODS if k not in skill]
@@ -149,7 +145,6 @@ def main() -> None:
     section = _build_section(
         METHODS,
         skill=skill,
-        fair=fair,
         rank=rank,
         doms=doms,
         submitted_on=args.submitted_on,

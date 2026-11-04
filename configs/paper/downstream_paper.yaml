@@ -34,9 +34,8 @@ methods:
 split_file: null  # null -> declared split from data_dir / MHC_DATA_DIR and version
 n_bootstrap: 1000
 seed: 42
-fairness_attributes: [age_group, sex]
 
-# Phase 2 — skill / rank / fairness aggregation (aggregate_*).
+# Phase 2 — skill / rank aggregation (aggregate_*).
 baseline_method: linear
 clip_lower: 0.01          # robustness clamp on the per-task error ratio before the geomean
 clip_upper: 100.0

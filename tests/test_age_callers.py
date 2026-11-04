@@ -1,4 +1,4 @@
-"""Keep target dates and eligibility while using enrollment ages for subgroups."""
+"""Keep target dates and eligibility while using enrollment ages for age groups."""
 
 import json
 
@@ -198,22 +198,19 @@ def test_linear_age_covariate_keeps_reference_missingness_and_exclusions(caller_
     )
 
 
-def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_path):
-    """Survey/sample/fixed dates cannot change enrollment subgroups in any track."""
-    from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
+def test_demographics_use_enrollment_and_keep_unknown_users(caller_dataset):
+    """Survey/sample/fixed dates cannot change enrollment age groups."""
     from openmhc._label_paths import LabelPaths
 
     folder, _ = caller_dataset
     users = ["known", "no_target", "missing_year", "no_date", "bad_date", "bad_year", "absent"]
-    out = tmp_path / "predictions"
-    write_subgroup_map(out, users)
-    prediction = json.loads((out / "_subgroups.json").read_text())
+    configured = api.user_demographics(users)
     explicit = api.user_demographics(users, paths=LabelPaths.resolve(folder.parent))
     expected = {u: "unknown" for u in users}
     expected.update(known="30-39", no_target="40-49")
-    assert {u: prediction[u]["age_group"] for u in users} == expected
+    assert {u: configured[u]["age_group"] for u in users} == expected
     assert {u: explicit[u]["age_group"] for u in users} == expected
-    assert prediction["known"]["sex"] == explicit["known"]["sex"] == "male"
+    assert configured["known"]["sex"] == explicit["known"]["sex"] == "male"
     assert api.age_at_enrollment("known") == 39
     assert api.age_at("known", pd.Timestamp("2025-06-01")) == 45
 
@@ -235,7 +232,6 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
     import labels
     from downstream_evaluation.data.provider import TaskDataProvider
     from downstream_evaluation.demo_covariates import build_demo_user_lookup_from_labels_df
-    from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
 
     folder, lookup = caller_dataset
     b = tmp_path / "dataset_b"
@@ -256,6 +252,4 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
         demo = build_demo_user_lookup_from_labels_df(lookup, ["age"])
         assert demo["known"][0] == target_age
         assert labels.age_at_enrollment("known") == enrollment_age
-        write_subgroup_map(tmp_path / "predictions", ["known"])
-        groups = json.loads((tmp_path / "predictions/_subgroups.json").read_text())
-        assert groups["known"]["age_group"] == group
+        assert labels.user_demographics(["known"])["known"]["age_group"] == group

@@ -2,29 +2,27 @@
 
 This subdir holds the **Phase-1 bootstrap reference** for the Track-1 (outcome
 prediction) leaderboard recompute — the long-format per-draw error frame that the
-skill / rank / fairness CIs reduce from.
+skill / rank CIs reduce from.
 
 ## Layout
 
 ```
 downstream/bootstrap/
-├── draws.parquet      # per-(method, task, subgroup, draw) error E = 1 − metric
-└── draws.meta.json    # provenance: seed, n_boot, methods, n_tasks, fairness attrs
+├── draws.parquet      # per-(method, task, draw) error E = 1 − metric
+└── draws.meta.json    # provenance: seed, n_boot, methods, n_tasks
 ```
 
 ## What's it for
 
 Each row of `draws.parquet` is one bootstrap draw of one task for one method,
 carrying the per-draw error `E = 1 − metric` (binary AUPRC, ordinal Spearman,
-regression Pearson). Phase-2 reduces the same frame three ways, all paired vs the
+regression Pearson). Phase-2 reduces the same frame two ways, both paired vs the
 `linear` baseline:
 
 - **Skill score** `S = 1 − geomean_task(E_method / E_linear)` — domain-balanced
   macro; per-(method, scope) mean / SE / percentile-CI across draws.
 - **Average rank** — per-(method, scope) mean of the per-draw cross-method rank
   (lower `E` → rank 1).
-- **Fairness skill score** — per-attribute disparity ratio over the `age_group` /
-  `sex` subgroup rows, with BCa intervals.
 
 The per-method `downstream/<method>.parquet` substrate (the raw user pairs, one level
 up) is the *input* the draws were bootstrapped from; this frame is the precomputed
@@ -38,7 +36,6 @@ code repo. The current snapshot was built with:
 - `seed = 42`, `n_boot = 1000`
 - `split = test`, canonical `sharable_users_seed42_2026`
 - 8 methods (see `draws.meta.json:methods`), 32 tasks, baseline `linear`
-- fairness attributes `age_group`, `sex`
 
 Parity of this frame against the uploaded per-method substrate is enforced by
 `scripts/paper_results/downstream/parity/parity_substrate.py` (a substrate-driven

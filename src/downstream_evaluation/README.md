@@ -22,7 +22,7 @@ openmhc.evaluate_prediction(model, tasks)
 
 **Data layer** (`src/downstream_evaluation/data/`):
 
-- `**provider.py` — who and what.** `TaskDataProvider` reads the labels lookup (one parquet per granularity) and derives, per `(task, split)`: the cohort, their labels, and the dates of each user's eligible days. Age values are calculated through the Labels API at the existing age-label timestamp; lookup eligibility is preserved. Age subgroups use enrollment `createdOn`.
+- `**provider.py` — who and what.** `TaskDataProvider` reads the labels lookup (one parquet per granularity) and derives, per `(task, split)`: the cohort, their labels, and the dates of each user's eligible days. Age values are calculated through the Labels API at the existing age-label timestamp; lookup eligibility is preserved.
 - `**loader.py` — the bytes.** `DataLoader` reads `daily_hourly_hf` once per run (lazily, on first access), indexes it by `(user_id, date)`, and serves every access pattern: `bind()` (a task cohort's eligible segments), `segment_store()` (the whole store, for global-fit models), `user_days()` (date-ascending days, for timeline builders), `as_daily_rows()` (raw-form rows, for window-index consumers).
 - `**splits.py`** reads the frozen train/validation/test user split.
 
@@ -101,7 +101,7 @@ remote alias, and dataset edits that preserve file sizes and modification times,
 are not detected by these offline checks.
 
 
-**3. Run the paper pipeline** (bootstrap CIs, skill/rank/fairness aggregates) — one config drives every phase:
+**3. Run the paper pipeline** (bootstrap CIs, skill/rank aggregates) — one config drives every phase:
 
 ```bash
 PYTHONPATH=src python scripts/paper_results/downstream/run_paper_pipeline.py \
@@ -109,10 +109,16 @@ PYTHONPATH=src python scripts/paper_results/downstream/run_paper_pipeline.py \
 ```
 
 `--skip-eval` uses the predictions from step 2. The config records input/output
-directories, methods, bootstrap count/seed, baseline, and fairness settings. Keep
-`MHC_DATA_DIR` set to the same dataset used for evaluation: bootstrap samples its
-declared test split. Use `split_file` only to select the exact split used by those
-predictions. To reuse existing bootstrap draws too, add `--skip-phase1`.
+directories, methods, bootstrap count/seed, and baseline. Keep `MHC_DATA_DIR` set to
+the same dataset used for evaluation: bootstrap samples its declared test split. Use
+`split_file` only to select the exact split used by those predictions. To reuse
+existing bootstrap draws too, add `--skip-phase1`.
+
+The `subgroup_attr` and `subgroup_value` columns of the leaderboard substrate and the
+draws hold the constant `all`. A cohort view is a membership filter of the substrate's
+rows. Saving predictions and building the substrate do not read
+`enrollment_info.json`; only the `age` task, Linear's age covariate and the Linear
+fallback for missing predictions do.
 
 ### Generate Track 1 tables
 

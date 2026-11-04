@@ -5,10 +5,10 @@ Reads per-(method, task) prediction parquets emitted by the eval pipeline when
 ``--output.save_predictions true`` is set, samples the declared test split once
 per replicate with participant multiplicities shared across tasks and methods,
 and writes ``bootstrap_draws.parquet``:
-a long-format frame of per-(method, task, subgroup, draw) error ``E = 1 − metric``.
+a long-format frame of per-(method, task, draw) error ``E = 1 − metric``.
 
 Phase 2 (``aggregate_downstream_paper_metrics.py``) turns those draws into the
-skill / rank / fairness sidecar CSVs without re-resampling.
+skill / rank sidecar CSVs without re-resampling.
 
 Usage::
 
@@ -18,10 +18,6 @@ Usage::
         --methods linear multirocket mae toto chronos2 xgboost wbm gru_d \
         --n_bootstrap 1000 --seed 42 \
         --output results/paper/bootstrap_draws.parquet
-
-Fairness rows require ``predictions_dir/_subgroups.json`` (per-user
-{age_group, sex}). When it is missing only the global (``subgroup_attr="all"``)
-rows are written and fairness columns come out NaN in phase 2.
 """
 
 from __future__ import annotations
@@ -35,7 +31,6 @@ from downstream_evaluation.evaluation.bootstrap_skill_rank import (
     compute_per_draw_errors,
     load_bootstrap_test_users,
     load_method_predictions,
-    load_subgroup_map,
     write_draws_parquet,
 )
 from downstream_evaluation.evaluation.skill_score import TASK_DOMAIN_MAP
@@ -60,12 +55,11 @@ def main() -> None:
     p.add_argument("--methods", nargs="+", required=True)
     p.add_argument("--n_bootstrap", type=int, default=1000)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--baseline", default="linear", help="Skill / fairness baseline method (recorded in the meta sidecar).")
+    p.add_argument("--baseline", default="linear", help="Skill baseline method (recorded in the meta sidecar).")
     p.add_argument("--output", type=Path, required=True, help="bootstrap_draws.parquet path")
     p.add_argument("--split-file", type=Path, help="Explicit train/validation/test split JSON; overrides dataset resolution.")
     p.add_argument("--data-dir", type=Path, help="Dataset root; defaults to MHC_DATA_DIR when --split-file is absent.")
     p.add_argument("--version", choices=["full", "xs"], default="full")
-    p.add_argument("--fairness_attributes", nargs="*", default=["age_group", "sex"])
     args = p.parse_args()
 
     test_uids, split_meta = load_bootstrap_test_users(
@@ -81,15 +75,10 @@ def main() -> None:
         len(args.methods),
     )
 
-    subgroup_map = load_subgroup_map(args.predictions_dir)
-    attributes = args.fairness_attributes if subgroup_map is not None else None
-
     draws = compute_per_draw_errors(
         aligned,
         n_bootstrap=args.n_bootstrap,
         seed=args.seed,
-        subgroup_map=subgroup_map,
-        subgroup_attributes=attributes,
         domain_map=TASK_DOMAIN_MAP,
         test_uids=test_uids,
     )
@@ -99,7 +88,6 @@ def main() -> None:
         "baseline": args.baseline,
         "methods": list(args.methods),
         "n_tasks": int(draws["task"].nunique()),
-        "fairness_attributes": list(attributes) if attributes else [],
         **split_meta,
     }
     write_draws_parquet(draws, args.output, meta)

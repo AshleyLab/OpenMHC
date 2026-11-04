@@ -1,4 +1,4 @@
-"""One definition of each participant's fairness groups, shared by all tracks."""
+"""One definition of each participant's age and sex groups."""
 
 import json
 import logging
@@ -21,6 +21,16 @@ def _sex(*values):
 
 def _coverage_warnings(caplog):
     return [r.getMessage() for r in caplog.records if "unknown age groups" in r.getMessage()]
+
+
+def _paths(reader, folder):
+    """The configured dataset, or the same files named explicitly."""
+    from openmhc._label_paths import LabelPaths
+
+    return LabelPaths.resolve(folder.parent) if reader == "explicit_paths" else None
+
+
+READERS = pytest.mark.parametrize("reader", ["configured", "explicit_paths"])
 
 
 @pytest.mark.parametrize(
@@ -68,7 +78,10 @@ def test_sex_group_uses_latest_label(label_schema_environment, values, expected)
     assert labels.user_demographics(["u"])["u"]["sex"] == expected
 
 
-def test_missing_metadata_keeps_users_and_reports_age_count(label_schema_environment, caplog):
+@READERS
+def test_missing_metadata_keeps_users_and_reports_age_count(
+    reader, label_schema_environment, caplog
+):
     """Missing values become unknown without dropping anyone, and the age gap is reported."""
     caplog.set_level(logging.WARNING)
     _write(
@@ -76,7 +89,8 @@ def test_missing_metadata_keeps_users_and_reports_age_count(label_schema_environ
         {"known": {"birth_year": 1980, "createdOn": "2020-01-01"}, "no_year": {"age": 40}},
         {"known": _sex("Male")},
     )
-    assert labels.user_demographics(["no_year", "known", "absent"]) == {
+    paths = _paths(reader, label_schema_environment)
+    assert labels.user_demographics(["no_year", "known", "absent"], paths=paths) == {
         "absent": {"age_group": "unknown", "sex": "unknown"},
         "known": {"age_group": "40-49", "sex": "male"},
         "no_year": {"age_group": "unknown", "sex": "unknown"},
@@ -84,12 +98,71 @@ def test_missing_metadata_keeps_users_and_reports_age_count(label_schema_environ
     assert "2/3 users have unknown age groups" in _coverage_warnings(caplog)[0]
 
 
-def test_complete_and_empty_cohorts_do_not_warn(label_schema_environment, caplog):
+@READERS
+def test_complete_and_empty_cohorts_do_not_warn(reader, label_schema_environment, caplog):
     caplog.set_level(logging.WARNING)
     _write(label_schema_environment, {"u": {"birth_year": 1980, "createdOn": "2020-01-01"}})
-    assert labels.user_demographics(["u"])["u"]["age_group"] == "40-49"
-    assert labels.user_demographics([]) == {}
+    paths = _paths(reader, label_schema_environment)
+    assert labels.user_demographics(["u"], paths=paths)["u"]["age_group"] == "40-49"
+    assert labels.user_demographics([], paths=paths) == {}
     assert not _coverage_warnings(caplog)
+
+
+@READERS
+def test_partial_age_coverage_warns_once_and_counts_unique_users(
+    reader, label_schema_environment, caplog
+):
+    """Duplicates count once, and sex and unknown ages are retained."""
+    _write(
+        label_schema_environment,
+        {"good": {"birth_year": 1980, "createdOn": "2020-01-01"}, "bad": {"age": 40}},
+        {"good": _sex(True), "bad": _sex(True)},
+    )
+    caplog.set_level(logging.WARNING)
+    groups = labels.user_demographics(
+        ["good", "bad", "good"], paths=_paths(reader, label_schema_environment)
+    )
+    assert groups == {
+        "good": {"age_group": "40-49", "sex": "male"},
+        "bad": {"age_group": "unknown", "sex": "male"},
+    }
+    warnings = _coverage_warnings(caplog)
+    assert len(warnings) == 1
+    assert "1/2 users have unknown age groups" in warnings[0]
+    assert "birth_year" in warnings[0] and "createdOn" in warnings[0]
+    assert "no usable age groups" not in warnings[0]
+
+
+@READERS
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"age": 40, "createdOn": "2020-01-01"},
+        {"birth_year": 1980},
+        {"birth_year": "invalid", "createdOn": "2020-01-01"},
+        {"birth_year": 1980, "createdOn": "invalid"},
+        {"birth_year": 2005, "createdOn": "2020-01-01"},
+        None,
+        [],
+    ],
+)
+def test_all_unknown_ages_are_reported_explicitly(reader, record, label_schema_environment, caplog):
+    """Invalid individual records stay unknown, with an explicit all-unknown warning."""
+    _write(
+        label_schema_environment,
+        {"good": record, "bad": record},
+        {"good": _sex(True), "bad": _sex(True)},
+    )
+    caplog.set_level(logging.WARNING)
+    groups = labels.user_demographics(
+        ["good", "bad"], paths=_paths(reader, label_schema_environment)
+    )
+    assert len(groups) == 2
+    assert all(group == {"age_group": "unknown", "sex": "male"} for group in groups.values())
+    warnings = _coverage_warnings(caplog)
+    assert len(warnings) == 1
+    assert "2/2 users have unknown age groups" in warnings[0]
+    assert "no usable age groups" in warnings[0]
 
 
 @pytest.mark.parametrize("name", ["enrollment_info.json", "last_labels.json"])
@@ -99,6 +172,30 @@ def test_broken_files_raise_instead_of_becoming_unknown(label_schema_environment
     (label_schema_environment / name).write_text("{")
     with pytest.raises(ValueError):
         labels.user_demographics(["u"])
+
+
+@READERS
+@pytest.mark.parametrize("payload", ['{"good":', "[]", "null", '"not an object"'])
+def test_corrupt_enrollment_raises_instead_of_unknown(
+    reader, payload, label_schema_environment, caplog
+):
+    """File-level errors must not be swallowed by per-user missing-age handling."""
+    _write(label_schema_environment, {})
+    (label_schema_environment / "enrollment_info.json").write_text(payload)
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(ValueError, match="[Ee]nrollment"):
+        labels.user_demographics(["good"], paths=_paths(reader, label_schema_environment))
+    assert not _coverage_warnings(caplog)
+
+
+@READERS
+def test_missing_enrollment_file_raises(reader, label_schema_environment, caplog):
+    """A missing file is an installation error, not a cohort of unknown ages."""
+    _write(label_schema_environment, {})
+    (label_schema_environment / "enrollment_info.json").unlink()
+    with pytest.raises(FileNotFoundError):
+        labels.user_demographics(["good"], paths=_paths(reader, label_schema_environment))
+    assert not _coverage_warnings(caplog)
 
 
 def test_follows_the_configured_dataset(label_schema_environment, tmp_path, write_label_schemas):
@@ -127,25 +224,3 @@ def test_explicit_paths_leave_the_configured_dataset_alone(
     assert api._PATHS is active
     assert api.STORE._enrollment is None
     assert api.STORE._labels_index is None
-
-
-def test_all_tracks_return_the_same_groups(label_schema_environment, tmp_path):
-    """Track-specific entry points are thin callers of the one definition."""
-    from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from openmhc._label_paths import LabelPaths
-
-    _write(
-        label_schema_environment,
-        {
-            "a": {"birth_year": 1980, "createdOn": "2020-01-01"},
-            "b": {"birth_year": 1990, "createdOn": "2015-01-01"},
-            "c": {"age": 40},
-        },
-        {"a": _sex("Male"), "b": _sex("Female")},
-    )
-    users = ["a", "b", "c", "absent"]
-    expected = labels.user_demographics(users)
-    write_subgroup_map(tmp_path / "predictions", users)
-    assert json.loads((tmp_path / "predictions/_subgroups.json").read_text()) == expected
-    paths = LabelPaths.resolve(label_schema_environment.parent)
-    assert labels.user_demographics(users, paths=paths) == expected

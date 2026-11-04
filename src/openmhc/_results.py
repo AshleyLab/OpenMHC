@@ -38,7 +38,7 @@ class PredictionResults:
             y_proba]``. Unlike Tracks 2/3 (which ship a precomputed
             ``E_per_user``), Track 1 ships raw pairs because its
             ranking/correlation metrics don't decompose per user; the
-            leaderboard recomputes skill / rank / fairness server-side vs. the
+            leaderboard recomputes skill / rank server-side vs. the
             Linear baseline. Populated by ``evaluate_prediction`` when
             ``output_dir`` is set (also written to ``<output_dir>/<method>.parquet``).
     """
@@ -117,7 +117,7 @@ class PredictionResults:
         Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``; the maintainers compute
-        skill / fair-skill / rank from the substrate during ingestion.
+        skill / rank from the substrate during ingestion.
         ``paper_url`` is optional — leave empty for independent submissions
         without a write-up.
         """

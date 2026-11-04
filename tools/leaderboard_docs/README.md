@@ -10,7 +10,7 @@ tags:
 
 # OpenMHC Leaderboard Data
 
-Per-user **substrate** behind the [OpenMHC](https://myheartcounts.stanford.edu/benchmark) wearable-health benchmark leaderboard. Each file is one method's reduced per-user, per-task values for one track; the leaderboard recompute consumes these to produce paired **skill scores**, cross-method **ranks**, and **fairness skill scores**.
+Per-user **substrate** behind the [OpenMHC](https://myheartcounts.stanford.edu/benchmark) wearable-health benchmark leaderboard. Each file is one method's reduced per-user, per-task values for one track; the leaderboard recompute consumes these to produce paired **skill scores** and cross-method **ranks**.
 
 This repo holds *reduced metrics / predictions keyed by pseudonymous participant id* — **not** raw sensor data.
 

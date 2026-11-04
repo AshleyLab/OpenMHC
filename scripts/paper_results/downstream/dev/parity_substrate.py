@@ -8,15 +8,16 @@ consumes — the downstream analog of ``forecasting/parity/parity_substrate.py``
 Checks
 ------
 * **Gate B (exact)** — for every (method, task), the substrate's ``all`` cells are
-  byte-equal to ``predictions/<method>/<task>/test.parquet`` after the float32 cast,
-  and the ``age_group`` / ``sex`` subgroup rows match the ``_subgroups.json``
-  expansion. The substrate is exactly the predictions, repackaged + subgroup-expanded.
+  byte-equal to ``predictions/<method>/<task>/test.parquet`` after the float32 cast.
+  The substrate is exactly the predictions, repackaged.
 * **Gate C (float32 tolerance)** — a fresh ``bootstrap_draws`` built **from the
   substrate** (align → ``compute_per_draw_errors``, seed 42, 1000 draws) reproduces
   the committed ``results/paper/bootstrap_draws.parquet``. This is a *tolerance* check,
   not byte-equal: the substrate stores float32 pairs (SCHEMA-mandated) while the
   committed draws came from float64 predictions, so a few tie-sensitive metrics differ
-  at ~1e-6. Most draws are byte-identical; none should exceed the tolerance.
+  at ~1e-6. Most draws are byte-identical; none should exceed the tolerance. Only the
+  committed ``all`` rows are compared: draws built before ``S_fair`` was retired may
+  also hold ``age_group`` and ``sex`` rows.
 
 Gate B alone already implies the leaderboard recompute reproduces the paper (identical
 inputs → identical bootstrap); Gate C runs it end-to-end as the headline confirmation.
@@ -108,18 +109,6 @@ def gate_b(rep: Report, subs: dict[str, pd.DataFrame], predictions_dir: Path) ->
     rep.check("GateB.substrate==predictions (float32)", mismatch == 0, f"{mismatch} cells differ")
 
 
-def _subgroup_map_from_substrate(sub: pd.DataFrame) -> dict[str, dict[str, str]]:
-    """Reconstruct {uid: {age_group, sex}} from the substrate's subgroup rows."""
-    sg: dict[str, dict[str, str]] = {}
-    for attr in ("age_group", "sex"):
-        rows = sub[sub.subgroup_attr == attr][["user_id", "subgroup_value"]].drop_duplicates(
-            "user_id"
-        )
-        for uid, val in zip(rows.user_id.astype(str), rows.subgroup_value.astype(str)):
-            sg.setdefault(uid, {})[attr] = val
-    return sg
-
-
 def _method_tasks_from_substrate(sub: pd.DataFrame) -> dict[str, dict]:
     """{task: {uids, y_true, y_pred, y_proba, task_type}} from the substrate's ``all`` cells."""
     allc = sub[sub.subgroup_attr == "all"]
@@ -138,15 +127,13 @@ def _method_tasks_from_substrate(sub: pd.DataFrame) -> dict[str, dict]:
 def gate_c(rep: Report, subs: dict[str, pd.DataFrame], paper_draws: Path, atol: float, test_uids) -> None:
     """Substrate-driven bootstrap reproduces the committed draws (float32 tolerance)."""
     gt = pd.read_parquet(paper_draws)
+    gt = gt[gt["subgroup_attr"] == "all"]
     n_boot = int(gt["draw"].nunique()) - 1  # committed draws = point (-1) + n_boot resamples
     aligned = align_across_methods({m: _method_tasks_from_substrate(s) for m, s in subs.items()})
-    subgroup_map = _subgroup_map_from_substrate(subs["linear"])
     draws = compute_per_draw_errors(
         aligned,
         n_bootstrap=n_boot,
         seed=42,
-        subgroup_map=subgroup_map,
-        subgroup_attributes=["age_group", "sex"],
         domain_map=TASK_DOMAIN_MAP,
         test_uids=test_uids,
     )

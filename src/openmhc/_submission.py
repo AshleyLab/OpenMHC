@@ -8,7 +8,7 @@ track's subdirectory:
 - ``<track>/<method>.meta.json`` — the display sidecar the leaderboard reads
   (``display_name``, ``type``, ``submitter``, ``subtrack``)
 
-The maintainers recompute the paired skill score, fair skill score, and average
+The maintainers recompute the paired skill score and average
 rank from the substrate during ingestion (LOCF baseline for Track 2, Linear for
 Track 1, Seasonal Naive for Track 3). The reducer is the same paired
 user-bootstrap formula implemented in
@@ -103,7 +103,7 @@ def prediction_to_submission_yaml(
     Same shape as :func:`imputation_to_submission_yaml`. The Track-1 substrate is
     the per-user prediction-pair frame (``<method>.parquet`` from
     ``evaluate_prediction(output_dir=...)``); maintainers recompute skill /
-    fair-skill / rank vs. the Linear baseline from it during ingestion.
+    rank vs. the Linear baseline from it during ingestion.
 
     Args, Returns: see :func:`imputation_to_submission_yaml`. ``track`` selects
     the Static vs. Longitudinal sub-track label.

@@ -1,18 +1,14 @@
-"""Persist per-(method, task) test predictions + a per-user subgroup map.
+"""Persist per-(method, task) test predictions.
 
 When the prediction engine runs with a predictions directory configured, it emits,
-per (method, task), a ``test.parquet`` of ``uid, y_true, y_pred, y_proba`` plus a
-single shared ``_subgroups.json`` (``{user_id: {age_group, sex}}``). Together these
-are the input the paper-metrics bootstrap (``bootstrap_skill_rank``) paired-resamples
-for skill / rank / fairness confidence intervals.
+per (method, task), a ``test.parquet`` of ``uid, y_true, y_pred, y_proba``. These are
+the input the paper-metrics bootstrap (``bootstrap_skill_rank``) paired-resamples for
+skill / rank confidence intervals.
 
 Layout::
 
     <predictions_dir>/<method>/<task>/test.parquet   # task = task name, "/"+" " -> "_"
     <predictions_dir>/<method>/fallback.json          # per-task {n_fallback, n_test}
-    <predictions_dir>/_subgroups.json
-
-Groups come from ``labels.user_demographics`` for the configured dataset.
 """
 
 from __future__ import annotations
@@ -113,14 +109,3 @@ def overall_fallback_rate(sidecar: dict[str, dict]) -> float:
     total_fb = sum(int(c["n_fallback"]) for c in sidecar.values())
     total_n = sum(int(c["n_test"]) for c in sidecar.values())
     return total_fb / total_n if total_n else 0.0
-
-
-def write_subgroup_map(predictions_dir: str | Path, users) -> None:
-    """Write ``<predictions_dir>/_subgroups.json`` = ``{uid: {age_group, sex}}``."""
-    from labels.api import user_demographics
-
-    subgroups = user_demographics(users)
-    out_dir = Path(predictions_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with (out_dir / "_subgroups.json").open("w") as f:
-        json.dump(subgroups, f)
