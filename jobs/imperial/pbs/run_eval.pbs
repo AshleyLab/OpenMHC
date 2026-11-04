@@ -39,8 +39,8 @@ export HF_HUB_DISABLE_XET=1
 mkdir -p "$HF_HOME"
 
 # Dataset root (daily_hf + labels live under it). NOTE: do NOT set LABEL_*_PATH to
-# src/labels/* — that is a stale 33-task subset; the engine uses the data/labels
-# defaults via openmhc._ensure_labels_env.
+# src/labels/* — that is a stale 33-task subset; the engine loads the schemas from
+# $MHC_DATA_DIR/labels/ via openmhc._ensure_labels_env.
 export METHOD="${METHOD:-linear}"
 : "${MHC_DATA_DIR:?set MHC_DATA_DIR to the dataset root (e.g. \$HOME/yuze_mhc_ws/data)}"
 export OUT_CSV="${OUT_CSV:-eval_${METHOD}.csv}"

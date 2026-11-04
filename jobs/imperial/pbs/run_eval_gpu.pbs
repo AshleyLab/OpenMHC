@@ -42,7 +42,7 @@ export HF_HOME="${HF_HOME:-$TMPDIR/hf_cache}"
 export HF_HUB_DISABLE_XET=1
 mkdir -p "$HF_HOME"
 
-# Do NOT set LABEL_*_PATH to src/labels/* (stale 33-task subset); use data/labels defaults.
+# Do NOT set LABEL_*_PATH to src/labels/* (stale 33-task subset); schemas load from $MHC_DATA_DIR/labels/.
 export METHOD="${METHOD:-mae}"
 : "${MHC_DATA_DIR:?set MHC_DATA_DIR to the dataset root (e.g. \$HOME/yuze_mhc_ws/data)}"
 export OUT_CSV="${OUT_CSV:-eval_${METHOD}.csv}"
