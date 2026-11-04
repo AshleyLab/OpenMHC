@@ -103,10 +103,17 @@ historical survey documentation, not a current machine-readable label list.
 
 ### Existing dataset roots
 
-To replace an older or inconsistent root, download/extract the complete release
-into a **new or empty directory**, keeping its schemas and payloads together.
-Select it with `data_dir=` or `MHC_DATA_DIR` and call `labels.configure()`.
-`download_dataset()` rejects nonempty destinations.
+To replace an older or inconsistent root, download or extract the complete
+release into a **new or empty directory**, keeping its schemas and payloads
+together. `download_dataset()` rejects nonempty destinations. Then select it:
+
+- Evaluation: pass `data_dir="/path/to/new"` to `evaluate_*`, which configures labels for you.
+- Direct Labels API: call `labels.configure(data_dir="/path/to/new")`.
+- Environment: set `MHC_DATA_DIR=/path/to/new`. If this process has already
+  configured labels, also call `labels.configure()`.
+
+A bare `labels.configure()` only reads `MHC_DATA_DIR`, so it returns to the old
+root if the variable still points there.
 
 ## Splits
 

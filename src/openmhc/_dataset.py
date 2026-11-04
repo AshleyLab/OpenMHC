@@ -62,6 +62,7 @@ DATASET_VERSION_FILENAME = "dataset_version.json"
 
 Version = Literal["xs", "full"]
 
+
 def _missing_dataset_root_error() -> ValueError:
     return ValueError(
         "OpenMHC dataset root is required for large benchmark payloads. "

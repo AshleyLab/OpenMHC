@@ -1,7 +1,8 @@
 """Track-1 leaderboard substrate — per-user prediction pairs (issue #39).
 
-Builds the substrate from synthetic per-(method, task) prediction files, so it
-needs no dataset. Verifies the schema, the constant "all" cell, and parquet round-trip.
+Builds the substrate from synthetic per-(method, task) prediction files and label
+schemas, so it needs no real dataset. Verifies the schema, the constant "all" cell, and
+parquet round-trip.
 """
 
 from __future__ import annotations

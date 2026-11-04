@@ -56,10 +56,17 @@ def label_schema_environment(monkeypatch, tmp_path, write_label_schemas):
     from labels import api
 
     paths, configured = api._PATHS, api._SCHEMAS_CONFIGURED
-    metadata = {name: (getattr(api, name), getattr(api, name).copy()) for name in (
-        "LABEL_TYPES", "_LABEL_META", "LABEL_NAMES", "TARGET_NAMES", "CONTEXT_NAMES",
-        "MULTI_CATEGORICAL_NAMES",
-    )}
+    metadata = {
+        name: (getattr(api, name), getattr(api, name).copy())
+        for name in (
+            "LABEL_TYPES",
+            "_LABEL_META",
+            "LABEL_NAMES",
+            "TARGET_NAMES",
+            "CONTEXT_NAMES",
+            "MULTI_CATEGORICAL_NAMES",
+        )
+    }
     store, device_store = api.STORE, devices.STORE
     store_state, device_state = vars(store).copy(), vars(device_store).copy()
     env_keys = (

@@ -283,9 +283,6 @@ def _apply_metadata(types: dict, meta: dict) -> None:
     ]
 
 
-_apply_metadata(LABEL_TYPES.copy(), _LABEL_META.copy())
-
-
 _VALID_AGGREGATIONS = ("mean", "median", "min", "max", "std", "last", "first")
 
 
