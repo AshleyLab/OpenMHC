@@ -35,13 +35,13 @@ print(result.matched_timestamp, result.value)
 
 ## Data sources
 
-Reads from the selected dataset's `labels/context_labels.json` via the shared
+Reads the selected dataset's `labels/context_labels.json` via the shared
 `LabelsStore` in `labels.api`. Context names and types come from that dataset's
-schema set. Call `labels.configure()` before inspecting `CONTEXT_NAMES` or
+schemas. Call `labels.configure()` before inspecting `CONTEXT_NAMES` or
 switching datasets; a first context query can configure from `MHC_DATA_DIR`.
+See the [Labels API data sources](../labels/README.md#data-sources) for dataset
+paths and overrides. No additional data files.
 
 ## Variable dictionary
 
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md)
-for historical survey definitions and observed distributions. The selected
-dataset's schema and release documentation define its available context labels.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for variable definitions, original survey options, release mappings, observed values and iOS sources. The documented Full/XS release contains 129 context variables.

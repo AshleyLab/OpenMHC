@@ -26,17 +26,15 @@ This module exposes an in-memory lookup for stored label values with automatic t
 - `label_types.json`: maps each label to its semantic type (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
 
 ## Variable dictionary
-See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for a per-variable reference (question text, answer options, observed value distributions, iOS source) covering the historical 169-variable schema. The dataset schema determines the labels available in a selected release.
+See [`data/labels/survey_documentation/INDEX.md`](../../data/labels/survey_documentation/INDEX.md) for variable definitions, original survey options, release mappings, observed values and iOS sources. The dataset schema determines the labels available in a selected release.
 
 All three schemas (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`. Configuration requires the complete schema set; missing files or invalid JSON raise an error, with no repository fallback. The legacy variables `LABEL_TYPES_PATH`, `ORDINAL_DICTIONARY_PATH` and `VALIDITY_CONFIG_PATH` cannot redirect schemas: configuration raises an error if any points elsewhere. Unset those variables and select a dataset root instead.
 
-See [DATASET.md](../../DATASET.md#bundled-vs-dataset-root-files) for schema access requirements and existing-root migration.
+Reading these restricted Dataverse files requires dataset access. See [DATASET.md](../../DATASET.md#bundled-vs-dataset-root-files) for schema access requirements and existing-root migration.
 
-Participant payloads also default to `<dataset_root>/labels/` and support explicit per-file overrides:
+Participant payloads also default to `<dataset_root>/labels/`. Optional payload overrides include `LABELS_DATA_PATH` and `ENROLLMENT_DATA_PATH`; use files from the same dataset.
 ```bash
 export MHC_DATA_DIR=/path/to/openmhc-dataset
-export LABELS_DATA_PATH=/path/to/last_labels.json
-export ENROLLMENT_DATA_PATH=/path/to/enrollment_info.json
 ```
 
 For direct API calls, use `labels.configure(data_dir="/path/to/dataset")` before
@@ -60,6 +58,7 @@ import pandas as pd
 from labels import (
     configure,
     age_at,
+    age_at_enrollment,
     get_labels,
     LABEL_NAMES,
     LABEL_TYPES,
@@ -90,6 +89,9 @@ stored_age = get_labels(
     label="age",
 )
 print(stored_age.matched_timestamp, stored_age.value)
+
+# calculate calendar-year age at enrollment for subgroup reporting
+print(age_at_enrollment("user-123"))
 
 # handle type enforcement errors
 try:
@@ -165,7 +167,7 @@ configure(data_dir="/path/to/dataset")
 
 # Check a label's type
 print(LABEL_TYPES["BiologicalSex"])  # "binary"
-print(LABEL_TYPES["happiness"])       # "ordinal"
+print(LABEL_TYPES["happiness"])       # "continuous"
 print(LABEL_TYPES["field_race"])      # "multi_categorical"
 print(LABEL_TYPES["WeightKilograms"]) # "continuous"
 ```
@@ -208,10 +210,11 @@ work                      bool         0.00         1.00         1.00         2
 ```
 
 ## Behavior
-- For labels in `labels.json`, the closest timestamp is chosen; ties favor the earlier point.
-- `age` is stored as a static value in `last_labels.json` (calendar-year age at the user's last survey timestamp).
+- For labels in `last_labels.json`, the closest timestamp is chosen; ties favor the earlier point.
+- Age lookups return the stored `age` label value from `last_labels.json`.
+- Calculated age is `reference_date.year - birth_year`. Track 1 targets and Linear age covariates use the existing age-label timestamp; age subgroups in all three tracks use enrollment `createdOn`. This counts calendar years, not completed birthdays.
 
-Recent local throughput (from `PYTHONPATH=src pytest tests/test_labels_api.py -k performance`):
+Previously measured local throughput (not remeasured for this change):
 - Label lookups: ~762,936.5 per second
 - Age lookups: ~729,164.1 per second
 

@@ -1,21 +1,21 @@
 # MHC Variable Index
 
-The 170-variable schema contains **41 targets and 129 contexts**.
+The Full/XS release contains **170 variables** (41 targets + 129 contexts), documented here with their source definitions and release encodings. Both derived geographic fields are documented in [zip.md](geography/zip.md).
 
-169 variables used by the MHC-benchmark project (41 targets + 128 contexts), mapped to their source definitions in the iOS codebase. This index describes the historical 169-variable schema; the authoritative label set for a release is its `<dataset_root>/labels/label_types.json`. In this index, the `survey_documentation/` tree has one variable `.md` per label (169 docs), plus a `summary.md` landing page per category and this index.
+Counts and encodings refer to `label_types.json` and `ordinal_dictionary.json` in the release's `labels/` directory. See the [Labels API configuration](../../../src/labels/README.md#variable-dictionary) for selecting matching metadata.
 
 - **Filename convention**: `<category>/<raw_identifier>.md`. The `field_` prefix used in the benchmark dataset is stripped from filenames but recorded inside each file.
 - **Role**: target = model prediction target; context = model input feature
-- **Type**: continuous | binary | ordinal | categorical | multi_categorical
+- **Type**: continuous | binary | ordinal | categorical | multi_categorical; the rounded RUCA mean is described as integer-valued (schema: `continuous`).
 
 ## By category
 
-Variables are grouped into 16 semantic subdirectories. Each subdirectory contains its own `summary.md` landing page. The `Labels` column counts entries in the historical schema documented here.
+Variables are grouped into 16 semantic subdirectories. Each subdirectory contains its own `summary.md` landing page. The `Labels` column counts entries in the release's `labels/label_types.json`.
 
 | Category | Labels | Contents |
 |----------|--------|----------|
 | [demographics](demographics/summary.md) | 7 | age, sex/gender, race/ethnicity, education, Fitzpatrick skin type |
-| [geography](geography/summary.md) | 2 | country, zip |
+| [geography](geography/summary.md) | 3 | country, inferred state, rounded mean primary RUCA |
 | [anthropometrics](anthropometrics/summary.md) | 4 | weight, BMI_values, BMI_categories, height |
 | [cardiometabolic_labs](cardiometabolic_labs/summary.md) | 9 | BP, cholesterol (HDL/LDL/Total), glucose, diabetes, hypertension, framingham_risk |
 | [cardiovascular_disease_history](cardiovascular_disease_history/summary.md) | 10 | family history, medications, and derived subtype flags (CAD, Afib, CHF, PH, etc.) |
@@ -31,13 +31,13 @@ Variables are grouped into 16 semantic subdirectories. Each subdirectory contain
 | [mindset_measures](mindset_measures/summary.md) | 32 | illness mindset (20) + exercise process mindset (7) + adequacy of activity (5) |
 | [study_metadata](study_metadata/summary.md) | 6 | labwork, device ownership flags, phone_on_user |
 
-Each subdir's `summary.md` links every variable in that subdir. The flat tables below document the historical 41-target / 128-context schema, one row each.
+Each subdir's `summary.md` links every variable in that subdir. The flat tables below document all 41 targets and all 129 contexts, one row each; the selected dataset's schemas provide the authoritative types and encodings.
 
 ## Targets (41)
 
 | Variable | Type | Raw identifier | Source file | Line | Notes |
 |----------|------|----------------|-------------|------|-------|
-| age | continuous | heartAgeDataAge | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~62 | Manually entered in Heart Age form |
+| age | continuous | (derived) | enrollment_info.json + last_labels.json | — | Calendar-year age at the recorded age-label timestamp; see [age](demographics/age.md) |
 | Atrial fibrillation (Afib) | binary | heart_disease | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~126 | Derived from enumeration value (option value=8) |
 | BiologicalSex | binary | Gender | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~74 | Male/Female from Heart Age form |
 | BMI_categories | ordinal | (derived) | CardioHealth/Startup/APHAppDelegate.m | ~1337 | Derived from BMI_values (ordinal binning) |
@@ -79,7 +79,7 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | sleep_time_categories | ordinal | (derived) | CardioHealth/Resources/JSONs/cardiosurveys/cardio_activitysleep_survey.json | ~167 | Derived from sleep_time (ordinal binning) |
 | work | binary | work | CardioHealth/Resources/JSONs/cardiosurveys/cardio_activitysleep_survey.json | ~9 | Regular work (boolean) |
 
-## Contexts (128)
+## Contexts (129)
 
 | Variable | Type | Raw identifier | Source file | Line | Notes |
 |----------|------|----------------|-------------|------|-------|
@@ -90,7 +90,7 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | field_atwork | ordinal | atwork | CardioHealth/Resources/JSONs/cardiosurveys/cardio_activitysleep_survey.json | ~28 | Work activity level (5-point scale) |
 | field_country | categorical | country | CardioHealth/Resources/JSONs/cardiosurveys/cardio_wellbeing_survey.json | ~90 | Country of residence (UK/US/HK) |
 | field_education | ordinal | education | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~332 | Education level (7-point scale) |
-| field_ethnicity | ordinal | ethnicity | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~214 | Spanish/Hispanic/Latino (5-point scale) |
+| field_ethnicity | ordinal | ethnicity | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~214 | Hispanic/Latino origin ([3 released categories](demographics/ethnicity.md)) |
 | field_fruit | continuous | fruit | CardioHealth/Resources/JSONs/cardiosurveys/cardio_diet_survey.json | ~7 | Cups of fruit per day |
 | field_grains | continuous | grains | CardioHealth/Resources/JSONs/cardiosurveys/cardio_diet_survey.json | ~50 | Servings of whole grains per day |
 | field_moderate_act | continuous | moderate_act | CardioHealth/Resources/JSONs/cardiosurveys/cardio_activitysleep_survey.json | ~122 | Minutes of moderate activity per week |
@@ -105,7 +105,7 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | field_vegetable | continuous | vegetable | CardioHealth/Resources/JSONs/cardiosurveys/cardio_diet_survey.json | ~22 | Cups of vegetables per day |
 | field_fish | continuous | fish | CardioHealth/Resources/JSONs/cardiosurveys/cardio_diet_survey.json | ~36 | Servings of fish per week |
 | alcohol | ordinal | alcohol | CardioHealth/Resources/JSONs/cardiosurveys/cardio_diet_survey.json | ~113 | Alcohol consumption frequency (5-point) |
-| Ethnicity_heartage | categorical | Ethnicity | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~73 | Ethnicity from Heart Age (African-American/Other) |
+| Ethnicity_heartage | categorical | Ethnicity | CardioHealth/TasksAndSteps/HeartAgeControllers/HeartAgeRiskFactorCalculations/APHHeartAgeAndRiskFactors.m | ~73 | Heart-age ethnicity ([6 released categories](demographics/Ethnicity_heartage.md)) |
 | FitzpatrickSkinType | categorical | (skin type) | HealthKit `HKCharacteristicTypeIdentifierFitzpatrickSkinType` | n/a | Fitzpatrick skin type (raw I-VI categorical; released as bucketed `{light, medium, dark}` ordinal) |
 | healthcare_worker | categorical | healthcare_worker | CardioHealth/Resources/JSONs/cardiosurveys/cardio_covid_19_survey.json | ~454 | Healthcare position type |
 | activity1_intensity | ordinal | activity1_intensity | CardioHealth/Resources/JSONs/cardiosurveys/cardio_daily_check.json | ~139 | Activity intensity (Light/Moderate/Vigorous) |
@@ -143,7 +143,7 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | pastVaping | ordinal | pastVaping | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~78 | Vaped in the past (yes/no) |
 | physicallyCapable | binary | physicallyCapable | CardioHealth/TasksAndSteps/APHDynamicParQQuizTask.m | ~47 | Any other reason not to be active (PAR-Q) |
 | prescriptionDrugs | binary | prescriptionDrugs | CardioHealth/TasksAndSteps/APHDynamicParQQuizTask.m | ~46 | Prescription drugs for BP/heart (PAR-Q) |
-| race | categorical | race | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~255 | Race (White/Black/Asian/etc) |
+| race | multi_categorical | race | CardioHealth/Resources/JSONs/cardiosurveys/cardio_CVhealth_survey.json | ~255 | Race ([4 released categories, multi-select](demographics/race.md)) |
 | readinessQuitSmokeless | continuous | readinessQuitSmokeless | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~581 | Readiness to quit smokeless (1-10) |
 | readinessQuitSmoking | continuous | readinessQuitSmoking | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~289 | Readiness to quit smoking (1-10) |
 | readinessQuitVaping | continuous | readinessQuitVaping | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~57 | Readiness to quit vaping (1-10) |
@@ -152,7 +152,8 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 | tobaccoProducts | categorical | tobaccoProducts | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~699 | Tobacco products used in past week |
 | tobaccoProductsEver | categorical | tobaccoProductsEver | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~755 | Tobacco products ever used |
 | days_admitted | continuous | days_admitted | CardioHealth/Resources/JSONs/cardiosurveys/cardio_covid_19_survey.json | ~319 | Days hospitalized for COVID |
-| zip | categorical | zip | CardioHealth/Resources/JSONs/cardiosurveys/cardio_wellbeing_survey.json | ~177 | Postcode (UK) / zip (US) |
+| field_state | categorical | (derived from field_zip) | US ZIP prefix and 2020 USDA ZIP–RUCA reference | — | Inferred state or territory abbreviation ([transformation](geography/zip.md)) |
+| field_ruca_primary_mean | integer-valued | (derived from field_zip) | US ZIP prefix and 2020 USDA ZIP–RUCA reference | — | Rounded mean primary RUCA code ([transformation](geography/zip.md)) |
 | cannabisSmoking | ordinal | cannabisSmoking | CardioHealth/Resources/JSONs/cardiosurveys/cardio_vaping_and_smoking_survey.json | ~811 | Cannabis smoking history |
 | body_self_healing_in_many_different_circumstances | ordinal | body_self_healing_in_many_different_circumstances | CardioHealth/Resources/JSONs/cardiosurveys/cardio_illness_mindset_measure_inventory_survey.json | ~16 | Body self-healing belief (6-point scale) |
 | chronic_illness_impact | ordinal | chronic_illness_impact | CardioHealth/Resources/JSONs/cardiosurveys/cardio_illness_mindset_measure_inventory_survey.json | ~61 | Chronic illness impact (6-point scale) |
@@ -214,8 +215,9 @@ Each subdir's `summary.md` links every variable in that subdir. The flat tables 
 
 ## Derived / computed variables (documented, no direct survey field)
 
-These have no single survey field — each is documented in its own `.md` file with derivation details:
+These are documented in the variable pages with derivation details:
 
+- `field_state`, `field_ruca_primary_mean` — Derived from US ZIP prefixes; see [zip.md](geography/zip.md).
 - `framingham_risk.md` — Computed in iOS (`APHHeartAgeAndRiskFactors.m` lines ~173-271) using the Framingham ASCVD 10-year risk equation.
 - `BMI_values.md` — HealthKit body mass & height, or `HKQuantityTypeIdentifierBodyMassIndex`.
 - `BMI_categories.md`, `blood_pressure_categories.md`, `WakeUpTime_categories.md`, `GoSleepTime_categories.md`, `happiness_categories.md`, `sleep_time_categories.md` — Post-hoc binning defined in the **MHC-benchmark** repo (bin edges out of scope for this iOS repo).
@@ -225,11 +227,11 @@ These have no single survey field — each is documented in its own `.md` file w
 
 ## Summary
 
-- **Targets**: 41 (in the historical schema documented here).
-- **Contexts**: 128 (in the historical schema documented here).
-- **Total files in `survey_documentation/`**: 169 variable docs + 16 per-category `summary.md` + this `INDEX.md` = 186 `.md` files. The 169 variable docs correspond to that historical schema (one per label). Raw survey fields that are not released as labels — e.g. the `heart_disease` / `vascular` multi-selects that derived targets such as CAD and Afib are computed from — are referenced inline where relevant but are not separately documented.
+- **Targets**: 41 (from the release's `labels/label_types.json`).
+- **Contexts**: 129 (from the release's `labels/label_types.json`).
+- **Documentation files**: 169 variable pages + 16 category summaries + this index = 186 Markdown files. The two derived geographic fields share `geography/zip.md`, which also preserves the original postcode question.
 
-All survey identifiers are exact string matches from JSON survey definitions. Heart Age variables map to Objective-C constants in `APHHeartAgeAndRiskFactors.m` and `APHHeartAgeTaskViewController.m`. HealthKit variables map to `HKQuantityTypeIdentifier`/`HKCharacteristicTypeIdentifier` constants in `APHAppDelegate.m`. PAR-Q variables map to static NSString constants in `APHDynamicParQQuizTask.m`. The `field_` prefix from the benchmark dataset is stripped from all filenames but recorded in each file's frontmatter as the "Benchmark column".
+All survey identifiers are exact string matches from JSON survey definitions. Heart Age variables map to Objective-C constants in `APHHeartAgeAndRiskFactors.m` and `APHHeartAgeTaskViewController.m`. HealthKit variables map to `HKQuantityTypeIdentifier`/`HKCharacteristicTypeIdentifier` constants in `APHAppDelegate.m`. PAR-Q variables map to static NSString constants in `APHDynamicParQQuizTask.m`. The `field_` prefix is omitted from variable-page filenames. Each page identifies its original or released field names.
 
 ## Redundancy / duplicate analysis
 
@@ -256,7 +258,7 @@ Many COVID items appear in both `cardio_covid_19_survey.json` (one-time) and `ca
 
 ### Overlapping but not identical
 
-- **ethnicity / Ethnicity_heartage / race** — three different codings of overlapping info; `Ethnicity_heartage` is a 2-category Framingham simplification.
+- **ethnicity / Ethnicity_heartage / race** — three separate survey questions; their variable pages document the release mappings.
 - **tobaccoProducts / tobaccoProductsEver** — past-week vs ever-used; same structure, different horizons.
 - **symptoms_week_preceding / symptoms_past_week** — same checklist, different reference windows.
 - **feel_worthwhile2 vs happiness** — both positive-affect measures, but different surveys and cadences (retrospective ONS yesterday-item vs daily slider).
