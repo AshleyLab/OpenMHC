@@ -367,7 +367,6 @@ def _phase_bootstrap(
         binary_channel_indices=_spec.BINARY_CHANNELS,
         labels_path=labels_path,
         enrollment_path=enrollment_path,
-        age_bins=tuple(bs.get("age_bins", [18, 30, 40, 50, 60])),
         n_boot=n_boot,
         seed=seed,
         ci_level=ci_level,

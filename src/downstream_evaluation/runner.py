@@ -52,10 +52,11 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     if config.predictions_dir is not None:
         from labels.api import STORE
 
-        # The subgroup export needs enrollment even when age is not an evaluated
-        # task. Fail before loading sensor data or running models, not after scoring.
+        # The subgroup export needs enrollment and labels even when age is not an
+        # evaluated task. Fail before loading sensor data or running models, not after scoring.
         provider.validate_label_dataset()
         _ = STORE.enrollment
+        _ = STORE.labels_index
 
     if spec is not None:
         # DataSpec models: build a loader at the spec's resolution; the evaluator builds a
@@ -112,8 +113,7 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
                 test_users.update(provider.task_data(task, "test").user_ids.tolist())
             except KeyError:
                 continue
-        daily_lookup = f"{config.data_dir}/processed/{lookup_filename('daily', config.temporal.is_full_history)}"
-        write_subgroup_map(config.predictions_dir, daily_lookup, test_users)
+        write_subgroup_map(config.predictions_dir, test_users)
 
         # Persist per-task fallback counts alongside the predictions so the offline
         # substrate producer can compute this method's fallback rate without re-running it.

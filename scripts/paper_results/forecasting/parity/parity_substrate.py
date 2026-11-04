@@ -70,7 +70,6 @@ BINARY_METRICS = ["auroc"]
 BASELINE = "seasonal_naive"
 CLIP_LOWER, CLIP_UPPER, MIN_PAIRS = 0.01, 100.0, 1
 N_BOOT, SEED, CI_LEVEL = 1000, 42, 0.95
-AGE_BINS = (18, 30, 40, 50, 60)
 BINARY_GROUPS = [(name, tuple(idx)) for name, idx in _spec.BINARY_GROUPS]
 
 
@@ -299,7 +298,7 @@ def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap, do_
                 continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
                 binary_channel_indices=_spec.BINARY_CHANNELS,
                 labels_path=str(paths.labels), enrollment_path=str(paths.enrollment),
-                age_bins=AGE_BINS, n_boot=N_BOOT, seed=SEED, ci_level=CI_LEVEL,
+                n_boot=N_BOOT, seed=SEED, ci_level=CI_LEVEL,
                 within_user_aggregation="micro", bca=True, per_user_metrics=substrate,
             )
             exp_fp = pd.read_csv(summary_dir / "forecasting_fairness_skill_score.csv")

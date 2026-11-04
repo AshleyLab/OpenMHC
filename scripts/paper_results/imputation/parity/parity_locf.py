@@ -39,12 +39,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
 from imputation_evaluation.evaluation.per_user_errors import (
     PER_USER_ERRORS_PARQUET_COLUMNS,
     build_per_user_errors,
     write_per_user_errors_parquet,
 )
+from imputation_evaluation.sensitivity import sample_subgroups
+from labels.api import AGE_GROUP_EDGES
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,6 @@ DEFAULT_SCENARIOS = [
     "temporal_slice",
     "workout_gap",
 ]
-DEFAULT_AGE_BINS = [18, 30, 40, 50, 60]
 
 
 JOIN_KEYS = [
@@ -79,38 +79,6 @@ JOIN_KEYS = [
     "subgroup_value",
     "user_id",
 ]
-
-
-def _build_subgroup_mapping(
-    pairs_dir: Path,
-    split: str,
-    age_bins: list[int],
-) -> dict[int, dict[str, str]] | None:
-    """Mirror ``bootstrap_imputation_draws.py::_build_subgroup_mapping``.
-
-    Vendored here so the parity test is self-contained — the original
-    lives in a scripts/ module not on the canonical importable path.
-    """
-    manifest = load_sample_manifest(pairs_dir, split)
-    if manifest is None:
-        return None
-    from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE
-
-    sample_idxs = manifest.column("sample_idx").to_numpy()
-    user_ids = manifest.column("user_id").to_pylist()
-    unique_users = sorted(set(user_ids))
-    logger.info("[split=%s] looking up demographics for %d users", split, len(unique_users))
-    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
-
-    out: dict[int, dict[str, str]] = {}
-    for sidx, uid in zip(sample_idxs, user_ids):
-        demo = user_demographics[uid]
-        age = demo["age_at_enrollment"]
-        age_group = bin_age(age, age_bins) if age is not None else "unknown"
-        out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
-
-    return out
 
 
 def _normalise(df: pd.DataFrame) -> pd.DataFrame:
@@ -208,7 +176,6 @@ def main() -> int:
     p.add_argument("--out-parquet", type=Path, default=DEFAULT_OUT_PARQUET)
     p.add_argument("--splits", nargs="+", default=DEFAULT_SPLITS)
     p.add_argument("--scenarios", nargs="+", default=DEFAULT_SCENARIOS)
-    p.add_argument("--age-bins", type=int, nargs="+", default=DEFAULT_AGE_BINS)
     p.add_argument(
         "--no-write",
         action="store_true",
@@ -239,7 +206,7 @@ def main() -> int:
     # --- 1. Build subgroup_mapping (per split) -------------------------------
     subgroup_mappings: dict[str, dict[int, dict[str, str]]] = {}
     for split in args.splits:
-        sg = _build_subgroup_mapping(args.locf_pairs, split, args.age_bins)
+        sg = sample_subgroups(args.locf_pairs, split)
         if sg is None:
             logger.error("Could not build subgroup mapping for split=%s", split)
             return 2
@@ -267,7 +234,7 @@ def main() -> int:
             "method": "locf",
             "scenarios": args.scenarios,
             "splits": args.splits,
-            "age_bins": args.age_bins,
+            "age_bins": list(AGE_GROUP_EDGES),
             "source_pairs": str(args.locf_pairs),
             "purpose": "§1 LOCF per-user-errors parity verification",
         }

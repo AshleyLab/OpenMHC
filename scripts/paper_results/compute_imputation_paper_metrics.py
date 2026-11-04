@@ -43,7 +43,6 @@ from imputation_evaluation.evaluation.pair_aggregator import (
     aggregate_pairs,
     aggregate_pairs_by_subgroup,
 )
-from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
 from imputation_evaluation.evaluation.paper_metrics_core import (
     BASELINE_CONTINUOUS,
     CLIP_LOWER,
@@ -55,6 +54,7 @@ from imputation_evaluation.evaluation.paper_metrics_core import (
     compute_skill_scores,
     extract_errors,
 )
+from imputation_evaluation.sensitivity import sample_subgroups
 
 logging.basicConfig(
     level=logging.INFO,
@@ -142,13 +142,6 @@ def _parse_args() -> argparse.Namespace:
         help=f"Sensitive attributes for the fair skill score (default: {' '.join(DEFAULT_FAIRNESS_ATTRS)})",
     )
     p.add_argument(
-        "--age-bins",
-        type=int,
-        nargs="+",
-        default=[18, 30, 40, 50, 60],
-        help="Age-bin edges for the age_group attribute (default: 18 30 40 50 60)",
-    )
-    p.add_argument(
         "--exclude-unknown",
         action="store_true",
         help="Skip subgroup_value=='unknown' cells (default: include, matches bootstrap)",
@@ -194,42 +187,6 @@ def _discover_scenarios(method_dirs: dict[str, Path], split: str) -> list[str]:
             if child.is_dir() and (child / split).is_dir():
                 seen.add(child.name)
     return sorted(seen)
-
-
-def _build_subgroup_mapping(
-    pairs_dir: Path,
-    split: str,
-    age_bins: list[int],
-) -> dict[int, dict[str, str]] | None:
-    """Build {sample_idx: {age_group, sex}} mapping from a method's manifest.
-
-    Mirrors ``bootstrap_imputation_draws.py::_build_subgroup_mapping`` so the
-    deterministic and bootstrap pipelines see the same demographic bucketing.
-    """
-    manifest = load_sample_manifest(pairs_dir, split)
-    if manifest is None:
-        return None
-    from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE
-
-    sample_idxs = manifest.column("sample_idx").to_numpy()
-    user_ids = manifest.column("user_id").to_pylist()
-    unique_users = sorted(set(user_ids))
-    logger.info(
-        "[split=%s] looking up demographics for %d users …",
-        split,
-        len(unique_users),
-    )
-    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
-
-    out: dict[int, dict[str, str]] = {}
-    for sidx, uid in zip(sample_idxs, user_ids):
-        demo = user_demographics[uid]
-        age = demo["age_at_enrollment"]
-        age_group = bin_age(age, age_bins) if age is not None else "unknown"
-        out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
-
-    return out
 
 
 def _channel_type(ch_idx: int) -> str:
@@ -318,7 +275,6 @@ def _gather_registry(
     *,
     scenarios: list[str],
     splits: list[str],
-    age_bins: list[int],
     exclude_unknown: bool,
     channel_stds_path: Path | None,
     strict: bool = False,
@@ -349,7 +305,7 @@ def _gather_registry(
     subgroup_mappings: dict[str, dict[int, dict[str, str]]] = {}
     for split in splits:
         ref_root = Path(method_dirs[methods[0]])
-        mapping = _build_subgroup_mapping(ref_root, split, age_bins)
+        mapping = sample_subgroups(ref_root, split)
         if mapping is None:
             if strict:
                 raise RuntimeError(
@@ -716,7 +672,6 @@ def main() -> int:
             method_dirs,
             scenarios=scenarios,
             splits=args.splits,
-            age_bins=args.age_bins,
             exclude_unknown=args.exclude_unknown,
             channel_stds_path=args.channel_stds_path,
             strict=args.strict,

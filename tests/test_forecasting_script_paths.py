@@ -76,7 +76,7 @@ def test_paper_script_demographic_paths(tmp_path, monkeypatch, name, mode):
     namespace = dict(
         bootstrap_fair_skill_score=bootstrap, rep=SimpleNamespace(check=report),
         models={}, _spec=metric_spec, BASELINE="seasonal_naive",
-        CONTINUOUS_METRICS=["mae"], BINARY_METRICS=["auroc"], AGE_BINS=(40,),
+        CONTINUOUS_METRICS=["mae"], BINARY_METRICS=["auroc"],
         N_BOOT=2, SEED=42, CI_LEVEL=.95, substrate=None,
         bs={}, cfg={"baseline": "seasonal_naive"}, n_boot=2, seed=42,
         ci_level=.95, within="micro", bca_fairness=True, per_user_metrics=None,

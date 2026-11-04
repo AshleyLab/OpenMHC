@@ -31,7 +31,6 @@ seed: 42
 splits: [test]
 include_fairness: true
 include_auc: true
-age_bins: [18, 30, 40, 50, 60]
 exclude_unknown: false
 
 # Phase 2

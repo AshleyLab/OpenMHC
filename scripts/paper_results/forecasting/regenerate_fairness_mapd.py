@@ -41,7 +41,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(
 logger = logging.getLogger("regenerate_fairness_mapd")
 
 N_BOOT, SEED, CI_LEVEL = 1000, 42, 0.95
-AGE_BINS = (18, 30, 40, 50, 60)
 
 
 def main() -> int:
@@ -90,7 +89,6 @@ def main() -> int:
         binary_channel_indices=_spec.BINARY_CHANNELS,
         labels_path=str(paths.labels),
         enrollment_path=str(paths.enrollment),
-        age_bins=AGE_BINS,
         n_boot=N_BOOT,
         seed=SEED,
         ci_level=CI_LEVEL,

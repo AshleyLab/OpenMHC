@@ -87,15 +87,13 @@ def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path, monkeypatc
     """Switch A to B and back without leaving imported consumers or caches stale."""
     import context.api as context
     import downstream_evaluation.evaluation.metrics as metrics
-    import imputation_evaluation.sensitivity as sensitivity
     from devices import api as devices
     from labels import api
 
     # Legacy tests reload labels.api. Restore these bindings after this test
     # rather than permanently reloading downstream consumer modules.
     for module, names in ((context, ("LABEL_NAMES", "CONTEXT_NAMES")),
-                          (metrics, ("LABEL_NAMES", "LABEL_TYPES")),
-                          (sensitivity, ("STORE",))):
+                          (metrics, ("LABEL_NAMES", "LABEL_TYPES"))):
         for name in names:
             monkeypatch.setattr(module, name, getattr(api, name))
     store, device_store = api.STORE, devices.STORE
@@ -117,7 +115,7 @@ def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path, monkeypatc
         (a, 20, "context_a"),
     ):
         _ensure_labels_env(paths)
-        assert api.STORE is store is sensitivity.STORE
+        assert api.STORE is store
         assert api.STORE.paths is api._PATHS is paths
         assert devices.STORE is device_store
         assert api.LabelResult is result_class

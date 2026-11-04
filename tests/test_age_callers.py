@@ -207,12 +207,10 @@ def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_pa
     from forecasting_evaluation.metrics.fairness_skill_score_summary import load_user_demographics
     from imputation_evaluation.sensitivity import build_subgroup_mapping
 
-    folder, lookup = caller_dataset
+    folder, _ = caller_dataset
     users = ["known", "no_target", "missing_year", "no_date", "bad_date", "bad_year", "absent"]
-    path = tmp_path / "lookup.parquet"
-    lookup.drop(columns="age").to_parquet(path)
     out = tmp_path / "predictions"
-    write_subgroup_map(out, path, users)
+    write_subgroup_map(out, users)
     prediction = json.loads((out / "_subgroups.json").read_text())
     forecast = load_user_demographics(
         user_ids=set(users),
@@ -220,9 +218,7 @@ def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_pa
         enrollment_path=folder / "enrollment_info.json",
     )
     hf = {"user_id": users + ["known"], "date": ["1900-01-01"] * len(users) + ["2099-01-01"]}
-    impute = build_subgroup_mapping(
-        hf, {"test": list(range(len(users) + 1))}, [18, 30, 40, 50, 60], store=api.STORE
-    )["test"]
+    impute = build_subgroup_mapping(hf, {"test": list(range(len(users) + 1))})["test"]
     expected = {u: "unknown" for u in users}
     expected.update(known="30-39", no_target="40-49")
     assert {u: prediction[u]["age_group"] for u in users} == expected
@@ -258,12 +254,24 @@ def test_invalid_enrollment_date_never_uses_stored_age(created_on):
         "imputation/parity/parity_locf.py",
     ],
 )
-def test_offline_imputation_matches_enrollment(caller_dataset, tmp_path, monkeypatch, script):
-    """Saved-pair analysis shares live age semantics, including repeated samples."""
+def test_offline_imputation_scripts_share_sample_subgroups(script):
+    """Saved-pair analysis uses the one mapping, not its own copy."""
+    from imputation_evaluation.sensitivity import sample_subgroups
+
     path = Path(__file__).resolve().parents[1] / "scripts/paper_results" / script
     spec = importlib.util.spec_from_file_location("age_offline_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    assert module.sample_subgroups is sample_subgroups
+
+
+def test_sample_subgroups_use_enrollment_for_repeated_samples(
+    caller_dataset, tmp_path, monkeypatch
+):
+    """Saved-pair analysis shares live age semantics, including repeated samples."""
+    from imputation_evaluation.evaluation import pair_writer
+    from imputation_evaluation.sensitivity import sample_subgroups
+
     manifest = pa.table(
         {
             "sample_idx": [7, 2, 9, 4],
@@ -271,8 +279,8 @@ def test_offline_imputation_matches_enrollment(caller_dataset, tmp_path, monkeyp
             "date": ["1900-01-01", "2099-01-01", "invalid", "2025-01-01"],
         }
     )
-    monkeypatch.setattr(module, "load_sample_manifest", lambda *args: manifest)
-    groups = module._build_subgroup_mapping(tmp_path, "test", [18, 30, 40, 50, 60])
+    monkeypatch.setattr(pair_writer, "load_sample_manifest", lambda *args: manifest)
+    groups = sample_subgroups(tmp_path, "test")
     assert {i: row["age_group"] for i, row in groups.items()} == {
         7: "30-39",
         2: "30-39",
@@ -281,35 +289,10 @@ def test_offline_imputation_matches_enrollment(caller_dataset, tmp_path, monkeyp
     }
 
 
-@pytest.mark.parametrize(
-    ("age", "expected"),
-    [
-        (14, "unknown"),
-        (17, "unknown"),
-        (18, "18-29"),
-        (29, "18-29"),
-        (30, "30-39"),
-        (39, "30-39"),
-        (40, "40-49"),
-        (49, "40-49"),
-        (50, "50-59"),
-        (59, "50-59"),
-        (60, "60+"),
-        (90, "60+"),
-    ],
-)
-def test_age_band_boundaries_agree_across_tracks(age, expected):
-    """Under-18 ages stay unknown; each decade starts at the same age in all tracks."""
-    from downstream_evaluation.evaluation.predictions_io import _age_group
-    from forecasting_evaluation.metrics.fairness_skill_score_summary import bin_age as forecast_bin
-    from imputation_evaluation.sensitivity import bin_age as imputation_bin
+def test_sample_subgroups_without_manifest(caller_dataset, tmp_path):
+    from imputation_evaluation.sensitivity import sample_subgroups
 
-    assert (
-        _age_group(age)
-        == forecast_bin(age)
-        == imputation_bin(age, [18, 30, 40, 50, 60])
-        == expected
-    )
+    assert sample_subgroups(tmp_path, "test") is None
 
 
 def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
@@ -320,7 +303,6 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
     from downstream_evaluation.data.provider import TaskDataProvider
     from downstream_evaluation.demo_covariates import build_demo_user_lookup_from_labels_df
     from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from imputation_evaluation.sensitivity import get_user_demographics
 
     folder, lookup = caller_dataset
     b = tmp_path / "dataset_b"
@@ -340,10 +322,7 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
         assert td.labels.tolist() == [target_age]
         demo = build_demo_user_lookup_from_labels_df(lookup, ["age"])
         assert demo["known"][0] == target_age
-        assert (
-            get_user_demographics(api.STORE, ["known"])["known"]["age_at_enrollment"]
-            == enrollment_age
-        )
-        write_subgroup_map(tmp_path / "predictions", path, ["known"])
+        assert labels.age_at_enrollment("known") == enrollment_age
+        write_subgroup_map(tmp_path / "predictions", ["known"])
         groups = json.loads((tmp_path / "predictions/_subgroups.json").read_text())
         assert groups["known"]["age_group"] == group

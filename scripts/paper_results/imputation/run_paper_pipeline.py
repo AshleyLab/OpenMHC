@@ -205,8 +205,6 @@ def _phase1_bootstrap(cfg: dict, dry_run: bool, *, strict: bool = False) -> None
         str(cfg["seed"]),
         "--splits",
         *cfg["splits"],
-        "--age-bins",
-        *[str(b) for b in cfg.get("age_bins", [18, 30, 40, 50, 60])],
     ]
     if not cfg.get("include_fairness", True):
         cmd.append("--no-fairness")

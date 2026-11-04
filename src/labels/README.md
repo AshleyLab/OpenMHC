@@ -6,6 +6,7 @@ This module exposes an in-memory lookup for stored label values with automatic t
 - `labels.configure(data_dir=None)`: select a dataset for labels and devices, refreshing metadata and cached payloads in place.
 - `labels.age_at(health_code, date)`: calculate calendar-year age at an explicit `pandas.Timestamp`.
 - `labels.age_at_enrollment(health_code)`: calculate calendar-year age at enrollment `createdOn`.
+- `labels.user_demographics(user_ids, paths=None)`: return `{user_id: {"age_group": ..., "sex": ...}}`. This is the one definition of the fairness groups for all tracks.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).

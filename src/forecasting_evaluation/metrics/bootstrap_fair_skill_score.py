@@ -42,7 +42,6 @@ from forecasting_evaluation.metrics.fair_skill_score import (
     compute_fair_skill_scores_from_errors,
 )
 from forecasting_evaluation.metrics.fairness_skill_score_summary import (
-    DEFAULT_AGE_BINS,
     _build_error_table,
     load_user_demographics,
 )
@@ -109,7 +108,6 @@ def bootstrap_fair_skill_score(
     demographics: dict[str, dict[str, str]] | None = None,
     labels_path: str | None = None,
     enrollment_path: str | None = None,
-    age_bins: tuple[int, ...] = DEFAULT_AGE_BINS,
     n_boot: int = 1000,
     seed: int = 42,
     ci_level: float = 0.95,
@@ -134,7 +132,6 @@ def bootstrap_fair_skill_score(
             loaded from ``labels_path``/``enrollment_path`` when omitted.
         labels_path: labels JSON for demographics (required if ``demographics`` is None).
         enrollment_path: enrollment JSON for demographics (required if None).
-        age_bins: age-group bin edges for demographics.
         n_boot: number of bootstrap draws.
         seed: master RNG seed (a per-run seed is derived deterministically).
         ci_level: percentile-CI level (0.95 -> 2.5/97.5).
@@ -202,7 +199,6 @@ def bootstrap_fair_skill_score(
             user_ids=set(error_df["user_id"].astype(str)),
             labels_path=labels_path,
             enrollment_path=enrollment_path,
-            age_bins=tuple(age_bins),
         )
 
     # Deterministic point estimate (shares error_df with the draws below).

@@ -19,6 +19,7 @@ def bound_datasets(label_schema_environment, tmp_path):
     root = folder.parent
     (folder / "last_labels.json").write_text(json.dumps({
         "age": {"u": {"timestamps": ["2025-06-01"], "values": [99]}},
+        "BiologicalSex": {"u": {"timestamps": ["2025-06-01"], "values": ["Male"]}},
     }))
     (folder / "enrollment_info.json").write_text(json.dumps({
         "u": {"birth_year": 1980, "createdOn": "2015-01-01"},
@@ -94,9 +95,12 @@ def test_provider_detects_payload_reconfiguration(bound_datasets, field):
         provider.task_data("age", "test")
 
 
-@pytest.mark.parametrize("fault", ["missing", "truncated", "non_object", "wrong_dataset"])
+@pytest.mark.parametrize(
+    "fault",
+    ["missing", "truncated", "non_object", "labels_missing", "labels_truncated", "wrong_dataset"],
+)
 def test_export_preflight_fails_before_loading_or_evaluating(bound_datasets, tmp_path, monkeypatch, fault):
-    """Broken enrollment is reported before model work or prediction output starts."""
+    """Broken group inputs are reported before model work or prediction output starts."""
     from downstream_evaluation import runner
 
     root, other, _ = bound_datasets
@@ -109,6 +113,11 @@ def test_export_preflight_fails_before_loading_or_evaluating(bound_datasets, tmp
         enrollment.write_text("{")
     elif fault == "non_object":
         enrollment.write_text("[]")
+    elif fault == "labels_missing":
+        (root / "labels/last_labels.json").unlink()
+        error = FileNotFoundError
+    elif fault == "labels_truncated":
+        (root / "labels/last_labels.json").write_text("{")
     else:
         api.configure(other)
     output = tmp_path / "predictions"
@@ -121,13 +130,14 @@ def test_export_preflight_fails_before_loading_or_evaluating(bound_datasets, tmp
 
 
 @pytest.mark.parametrize("export", [False, True])
-def test_runner_preflight_only_requires_enrollment_for_export(bound_datasets, tmp_path, monkeypatch, export):
-    """Valid export writes the group map; lookup-only evaluation needs no enrollment."""
+def test_runner_preflight_only_requires_group_inputs_for_export(bound_datasets, tmp_path, monkeypatch, export):
+    """Valid export writes the group map; lookup-only evaluation reads neither file."""
     from downstream_evaluation import runner
 
     root, _, _ = bound_datasets
     if not export:
         (root / "labels/enrollment_info.json").unlink()
+        (root / "labels/last_labels.json").unlink()
     output = tmp_path / "predictions"
     config = EvalConfig(
         str(root), {"test": ["u"]}, tasks=["BiologicalSex"],
@@ -139,6 +149,7 @@ def test_runner_preflight_only_requires_enrollment_for_export(bound_datasets, tm
         calls.append(tasks)
         if export:
             assert api.STORE._enrollment is not None
+            assert api.STORE._labels_index is not None
         assert provider.task_data("BiologicalSex", "test").labels.tolist() == [1]
         return {"BiologicalSex": {"n_test": 1}}
 

@@ -7,7 +7,7 @@
     :mod:`forecasting_evaluation.metrics.fair_skill_score` (point) and
     :mod:`forecasting_evaluation.metrics.bootstrap_fair_skill_score` (bootstrap
     CIs). This module is kept callable for back-compat; its demographics helpers
-    (``load_user_demographics``, ``bin_age``, ``normalize_sex``) and
+    (``load_user_demographics``) and
     ``_build_error_table`` are reused by the new metric.
 
 This paper-result helper follows the unified scoring definition used for the
@@ -20,8 +20,6 @@ errors.
 from __future__ import annotations
 
 import argparse
-import json
-import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -45,51 +43,7 @@ from forecasting_evaluation.metrics.skill_score_summary import (  # noqa: E402
     _safe_to_metric_array,
 )
 
-DEFAULT_AGE_BINS = (18, 30, 40, 50, 60)
 DEFAULT_DEMOGRAPHIC_ATTRS = ("age_group", "sex")
-
-logger = logging.getLogger(__name__)
-
-
-def _last_value(entries: dict[str, Any], user_id: str) -> Any | None:
-    item = entries.get(user_id)
-    if not isinstance(item, dict):
-        return None
-    values = item.get("values") or []
-    if not values:
-        return None
-    return values[-1]
-
-
-def bin_age(age: float | int | None, age_bins: tuple[int, ...] = DEFAULT_AGE_BINS) -> str:
-    """Bin an age into the benchmark demographic buckets."""
-    if age is None or not np.isfinite(float(age)):
-        return "unknown"
-    age_value = float(age)
-    for idx in range(len(age_bins) - 1):
-        if age_bins[idx] <= age_value < age_bins[idx + 1]:
-            return f"{age_bins[idx]}-{age_bins[idx + 1] - 1}"
-    if age_value >= age_bins[-1]:
-        return f"{age_bins[-1]}+"
-    return "unknown"
-
-
-def normalize_sex(value: Any) -> str:
-    """Normalize BiologicalSex values to male/female/unknown."""
-    if isinstance(value, bool):
-        return "male" if value else "female"
-    if isinstance(value, (int, float)) and np.isfinite(float(value)):
-        if int(value) == 1:
-            return "male"
-        if int(value) == 0:
-            return "female"
-    if isinstance(value, str):
-        token = value.strip().lower()
-        if token in {"male", "m", "man", "true", "1"}:
-            return "male"
-        if token in {"female", "f", "woman", "false", "0"}:
-            return "female"
-    return "unknown"
 
 
 def load_user_demographics(
@@ -97,45 +51,21 @@ def load_user_demographics(
     user_ids: set[str],
     labels_path: str | Path,
     enrollment_path: str | Path,
-    age_bins: tuple[int, ...] = DEFAULT_AGE_BINS,
 ) -> dict[str, dict[str, str]]:
-    """Load age-group and sex labels for the requested users.
+    """Return ``labels.user_demographics`` read from explicit files."""
+    from labels.api import user_demographics
+    from openmhc._label_paths import LabelPaths
 
-    Age uses each user's enrollment createdOn and birth year. Missing or invalid
-    enrollment metadata gives an unknown age group. Sex is the latest
-    BiologicalSex label value. Unknown counts are logged; unreadable or malformed
-    enrollment files raise.
-    """
-    from labels.api import EnrollmentIndex, _load_enrollment
-
-    labels_file = Path(labels_path)
-    enrollment_file = Path(enrollment_path)
-    with labels_file.open("r", encoding="utf-8") as file:
-        labels_data = json.load(file)
-    enrollment_index = EnrollmentIndex(_load_enrollment(enrollment_file))
-    sex_entries = labels_data.get("BiologicalSex", {})
-
-    demographics: dict[str, dict[str, str]] = {}
-    for user_id in sorted(user_ids):
-        try:
-            age = enrollment_index.age_at_enrollment(user_id)
-        except (KeyError, ValueError):
-            age = None
-        sex_value = _last_value(sex_entries, user_id)
-        demographics[user_id] = {
-            "age_group": bin_age(age, age_bins=age_bins),
-            "sex": normalize_sex(sex_value),
-        }
-    unknown = sum(row["age_group"] == "unknown" for row in demographics.values())
-    if unknown:
-        logger.warning(
-            "%d/%d users have unknown age groups. Check birth_year and createdOn "
-            "in enrollment_info.json and the age-bin range.%s",
-            unknown,
-            len(demographics),
-            " Age-based fairness has no usable age groups." if unknown == len(demographics) else "",
-        )
-    return demographics
+    paths = LabelPaths(
+        labels=Path(labels_path),
+        context=None,
+        enrollment=Path(enrollment_path),
+        validity=None,
+        daily=None,
+        devices=None,
+        schema_dir=None,
+    )
+    return user_demographics(user_ids, paths=paths)
 
 
 def _load_metric_values(

@@ -9,104 +9,37 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from collections.abc import Sequence
-
-import pandas as pd
-
-from labels.api import STORE, LabelsStore
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
-def bin_age(age: int, age_bins: Sequence[int]) -> str:
-    """Bin an age into a decade-style label.
+def sample_subgroups(pairs_dir: Path, split: str) -> dict[int, dict[str, str]] | None:
+    """Map each sample saved in a pairs directory to its user's fairness groups.
 
     Args:
-        age: Age in years.
-        age_bins: Sorted list of bin edges, e.g. [18, 30, 40, 50, 60].
+        pairs_dir: Directory holding the split's sample manifest.
+        split: Split name.
 
     Returns:
-        Bin label, e.g. "30-39" or "60+".
+        ``{sample_idx: {"age_group": ..., "sex": ...}}``, or None without a manifest.
     """
-    for i in range(len(age_bins) - 1):
-        if age_bins[i] <= age < age_bins[i + 1]:
-            return f"{age_bins[i]}-{age_bins[i + 1] - 1}"
-    if age >= age_bins[-1]:
-        return f"{age_bins[-1]}+"
-    return "unknown"
+    from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
+    from labels.api import user_demographics
 
-
-def get_user_demographics(
-    store: LabelsStore,
-    user_ids: list[str],
-    *,
-    age_bins: Sequence[int] = (18, 30, 40, 50, 60),
-) -> dict[str, dict[str, object]]:
-    """Look up enrollment age and sex, warning about unknown age groups.
-
-    Args:
-        store: Labels store for data access.
-        user_ids: Unique user identifiers (health codes).
-        age_bins: Age-group edges used by the caller, for coverage warnings.
-
-    Returns:
-        Dict mapping user_id to age_at_enrollment (or None), and sex.
-        Sex is "male", "female", or "unknown".
-
-    Unreadable or malformed enrollment files raise before per-user processing.
-    """
-    demographics: dict[str, dict[str, object]] = {}
-    if not user_ids:
-        return demographics
-    enrollment = store.enrollment
-
-    for uid in user_ids:
-        age = None
-        sex = "unknown"
-
-        try:
-            age = enrollment.age_at_enrollment(uid)
-        except (KeyError, ValueError):
-            pass
-
-        try:
-            series = store.labels_index.get_series("BiologicalSex", uid)
-            result = series.nearest(pd.Timestamp("2020-01-01"))
-            raw_value = result.value
-            if isinstance(raw_value, bool):
-                sex = "male" if raw_value else "female"
-            elif isinstance(raw_value, str):
-                lower = raw_value.lower().strip()
-                if lower == "male":
-                    sex = "male"
-                elif lower == "female":
-                    sex = "female"
-        except (KeyError, LookupError):
-            pass
-
-        demographics[uid] = {"age_at_enrollment": age, "sex": sex}
-
-    unknown = sum(
-        row["age_at_enrollment"] is None or bin_age(row["age_at_enrollment"], age_bins) == "unknown"
-        for row in demographics.values()
-    )
-    if unknown:
-        logger.warning(
-            "%d/%d users have unknown age groups. Check birth_year and createdOn "
-            "in enrollment_info.json and the age-bin range.%s",
-            unknown,
-            len(demographics),
-            " Age-based fairness has no usable age groups." if unknown == len(demographics) else "",
-        )
-
-    return demographics
+    manifest = load_sample_manifest(pairs_dir, split)
+    if manifest is None:
+        return None
+    sample_idxs = manifest.column("sample_idx").to_numpy()
+    user_ids = manifest.column("user_id").to_pylist()
+    groups = user_demographics(user_ids)
+    logger.info("[split=%s] looked up demographics for %d users", split, len(groups))
+    return {int(sidx): groups[uid] for sidx, uid in zip(sample_idxs, user_ids)}
 
 
 def build_subgroup_mapping(
     hf_dataset,
     split_indices: dict[str, list[int]],
-    age_bins: list[int],
-    store: LabelsStore | None = None,
 ) -> dict[str, dict[int, dict[str, str]]]:
     """Build per-sample subgroup mapping for sensitivity analysis.
 
@@ -116,15 +49,12 @@ def build_subgroup_mapping(
     Args:
         hf_dataset: HuggingFace dataset with a user_id column.
         split_indices: Maps split name -> list of global HF dataset indices.
-        age_bins: Sorted list of age bin edges, e.g. [18, 30, 40, 50, 60].
-        store: Optional LabelsStore instance (uses global STORE if None).
 
     Returns:
         Dict: {split_name: {split_local_idx: {"age_group": "30-39", "sex": "male"}}}.
         Only includes val and test splits.
     """
-    if store is None:
-        store = STORE
+    from labels.api import user_demographics
 
     # Pre-extract lightweight metadata columns once (avoids reading the 107 KB
     # "values" array per row, which under cgroups v1 faults ~46 GB of Arrow
@@ -140,7 +70,7 @@ def build_subgroup_mapping(
 
     unique_users = sorted(eval_user_ids)
     logger.info(f"Looking up demographics for {len(unique_users)} unique users...")
-    user_demographics = get_user_demographics(store, unique_users, age_bins=age_bins)
+    groups = user_demographics(unique_users)
 
     # Build per-split mapping
     mapping: dict[str, dict[int, dict[str, str]]] = {}
@@ -153,16 +83,7 @@ def build_subgroup_mapping(
         split_mapping: dict[int, dict[str, str]] = {}
 
         for local_idx, global_idx in enumerate(indices):
-            user_id = all_user_ids[global_idx]
-
-            demo = user_demographics[user_id]
-            age = demo["age_at_enrollment"]
-            age_group = bin_age(age, age_bins) if age is not None else "unknown"
-
-            split_mapping[local_idx] = {
-                "age_group": age_group,
-                "sex": demo["sex"],
-            }
+            split_mapping[local_idx] = groups[all_user_ids[global_idx]]
 
         mapping[split_name] = split_mapping
 

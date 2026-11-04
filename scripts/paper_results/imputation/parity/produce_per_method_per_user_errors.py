@@ -20,11 +20,12 @@ import logging
 import sys
 from pathlib import Path
 
-from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
 from imputation_evaluation.evaluation.per_user_errors import (
     build_per_user_errors,
     write_per_user_errors_parquet,
 )
+from imputation_evaluation.sensitivity import sample_subgroups
+from labels.api import AGE_GROUP_EDGES
 
 logger = logging.getLogger(__name__)
 
@@ -43,35 +44,6 @@ DEFAULT_SCENARIOS = [
     "temporal_slice",
     "workout_gap",
 ]
-DEFAULT_AGE_BINS = [18, 30, 40, 50, 60]
-
-
-def _build_subgroup_mapping(
-    pairs_dir: Path,
-    split: str,
-    age_bins: list[int],
-) -> dict[int, dict[str, str]] | None:
-    """Mirror ``bootstrap_imputation_draws.py::_build_subgroup_mapping``."""
-    manifest = load_sample_manifest(pairs_dir, split)
-    if manifest is None:
-        return None
-    from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE
-
-    sample_idxs = manifest.column("sample_idx").to_numpy()
-    user_ids = manifest.column("user_id").to_pylist()
-    unique_users = sorted(set(user_ids))
-    logger.info("[split=%s] looking up demographics for %d users", split, len(unique_users))
-    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
-
-    out: dict[int, dict[str, str]] = {}
-    for sidx, uid in zip(sample_idxs, user_ids):
-        demo = user_demographics[uid]
-        age = demo["age_at_enrollment"]
-        age_group = bin_age(age, age_bins) if age is not None else "unknown"
-        out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
-
-    return out
 
 
 def main() -> int:
@@ -82,7 +54,6 @@ def main() -> int:
     p.add_argument("--out-root", type=Path, default=DEFAULT_OUT_ROOT)
     p.add_argument("--splits", nargs="+", default=DEFAULT_SPLITS)
     p.add_argument("--scenarios", nargs="+", default=DEFAULT_SCENARIOS)
-    p.add_argument("--age-bins", type=int, nargs="+", default=DEFAULT_AGE_BINS)
     args = p.parse_args()
 
     logging.basicConfig(
@@ -112,7 +83,7 @@ def main() -> int:
     # identical to using the reference method's manifest.
     subgroup_mappings: dict[str, dict[int, dict[str, str]]] = {}
     for split in args.splits:
-        sg = _build_subgroup_mapping(pairs_dir, split, args.age_bins)
+        sg = sample_subgroups(pairs_dir, split)
         if sg is None:
             logger.error("Could not build subgroup mapping for split=%s", split)
             return 2
@@ -136,7 +107,7 @@ def main() -> int:
         "method": args.method,
         "scenarios": args.scenarios,
         "splits": args.splits,
-        "age_bins": args.age_bins,
+        "age_bins": list(AGE_GROUP_EDGES),
         "source_pairs": str(pairs_dir),
         "purpose": "Phase B per-method per_user_errors fan-out",
     }

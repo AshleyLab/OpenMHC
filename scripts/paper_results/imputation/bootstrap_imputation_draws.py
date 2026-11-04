@@ -51,7 +51,8 @@ from imputation_evaluation.evaluation.bootstrap_skill_rank import (
     write_draws_parquet,
     write_per_user_errors_parquet,
 )
-from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
+from imputation_evaluation.sensitivity import sample_subgroups
+from labels.api import AGE_GROUP_EDGES
 
 logging.basicConfig(
     level=logging.INFO,
@@ -161,13 +162,6 @@ def _parse_args() -> argparse.Namespace:
         help="Skip subgroup demographic mapping (fairness CIs cannot be computed in phase 2)",
     )
     p.add_argument(
-        "--age-bins",
-        type=int,
-        nargs="+",
-        default=[18, 30, 40, 50, 60],
-        help="Age-bin edges for the age_group attribute (default: 18 30 40 50 60)",
-    )
-    p.add_argument(
         "--exclude-unknown",
         action="store_true",
         help="Skip subgroup_value=='unknown' cells",
@@ -201,41 +195,6 @@ def _discover_scenarios(method_dirs: dict[str, Path], split: str) -> list[str]:
             if child.is_dir() and (child / split).is_dir():
                 seen.add(child.name)
     return sorted(seen)
-
-
-def _build_subgroup_mapping(
-    pairs_dir: Path,
-    split: str,
-    age_bins: list[int],
-) -> dict[int, dict[str, str]] | None:
-    """Build {sample_idx: {age_group, sex}} mapping from a method's manifest.
-
-    Age groups use enrollment createdOn, matching the live sensitivity path.
-    """
-    manifest = load_sample_manifest(pairs_dir, split)
-    if manifest is None:
-        return None
-    from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE
-
-    sample_idxs = manifest.column("sample_idx").to_numpy()
-    user_ids = manifest.column("user_id").to_pylist()
-    unique_users = sorted(set(user_ids))
-    logger.info(
-        "[split=%s] looking up demographics for %d users …",
-        split,
-        len(unique_users),
-    )
-    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
-
-    out: dict[int, dict[str, str]] = {}
-    for sidx, uid in zip(sample_idxs, user_ids):
-        demo = user_demographics[uid]
-        age = demo["age_at_enrollment"]
-        age_group = bin_age(age, age_bins) if age is not None else "unknown"
-        out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
-
-    return out
 
 
 def main() -> int:
@@ -290,7 +249,7 @@ def main() -> int:
         ref_method = next(iter(method_dirs))
         ref_dir = method_dirs[ref_method]
         for split in args.splits:
-            sg = _build_subgroup_mapping(ref_dir, split, args.age_bins)
+            sg = sample_subgroups(ref_dir, split)
             if sg is None:
                 if args.strict:
                     logger.error(
@@ -445,7 +404,7 @@ def main() -> int:
         "method_dirs": {m: str(p) for m, p in method_dirs.items()},
         "include_auc": not args.no_auc,
         "include_fairness": not args.no_fairness,
-        "age_bins": args.age_bins,
+        "age_bins": list(AGE_GROUP_EDGES),
         "exclude_unknown": args.exclude_unknown,
         "elapsed_seconds": t_elapsed,
         "n_rows": len(df),

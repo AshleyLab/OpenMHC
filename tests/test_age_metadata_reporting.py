@@ -31,27 +31,21 @@ def demographic_inputs(age_label_environment, tmp_path):
             }
         )
     )
-    lookup = tmp_path / "lookup.parquet"
-    pd.DataFrame({"user_id": ["good", "bad"], "BiologicalSex": [1, 1]}).to_parquet(lookup)
-    return folder, lookup, tmp_path / "predictions"
+    return folder, tmp_path / "predictions"
 
 
-def _groups(track, inputs, users, age_bins=(18, 30, 40, 50, 60)):
-    folder, lookup, output = inputs
+def _groups(track, inputs, users):
+    folder, output = inputs
     if track == "prediction":
         from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
 
-        write_subgroup_map(output, lookup, users)
+        write_subgroup_map(output, users)
         return json.loads((output / "_subgroups.json").read_text())
     if track == "imputation":
         from imputation_evaluation.sensitivity import build_subgroup_mapping
-        from labels import api
-
         groups = build_subgroup_mapping(
             {"user_id": users},
             {"test": list(range(len(users)))},
-            list(age_bins),
-            store=api.STORE,
         )["test"]
         return {uid: groups[i] for i, uid in enumerate(users)}
     from forecasting_evaluation.metrics.fairness_skill_score_summary import load_user_demographics
@@ -60,7 +54,6 @@ def _groups(track, inputs, users, age_bins=(18, 30, 40, 50, 60)):
         user_ids=set(users),
         labels_path=folder / "last_labels.json",
         enrollment_path=folder / "enrollment_info.json",
-        age_bins=age_bins,
     )
 
 
@@ -100,7 +93,7 @@ def test_all_unknown_ages_warn_that_fairness_is_unavailable(
     track, record, demographic_inputs, caplog
 ):
     """Invalid individual records remain unknown, with explicit all-unknown reporting."""
-    folder, _, _ = demographic_inputs
+    folder, _ = demographic_inputs
     (folder / "enrollment_info.json").write_text(json.dumps({"good": record, "bad": record}))
     caplog.set_level(logging.WARNING)
     groups = _groups(track, demographic_inputs, ["good", "bad"])
@@ -125,7 +118,7 @@ def test_absent_enrollment_record_is_reported_and_retained(track, demographic_in
 @pytest.mark.parametrize("payload", ['{"good":', "[]", "null", '"not an object"'])
 def test_corrupt_enrollment_raises_instead_of_unknown(track, payload, demographic_inputs, caplog):
     """File-level errors must not be swallowed by per-user missing-age handling."""
-    folder, _, output = demographic_inputs
+    folder, output = demographic_inputs
     (folder / "enrollment_info.json").write_text(payload)
     caplog.set_level(logging.WARNING)
     with pytest.raises(ValueError, match="[Ee]nrollment"):
@@ -137,7 +130,7 @@ def test_corrupt_enrollment_raises_instead_of_unknown(track, payload, demographi
 @pytest.mark.parametrize("track", ["prediction", "imputation", "forecasting"])
 def test_missing_enrollment_file_raises(track, demographic_inputs, caplog):
     """A missing file is an installation error, not a cohort of unknown ages."""
-    folder, _, _ = demographic_inputs
+    folder, _ = demographic_inputs
     (folder / "enrollment_info.json").unlink()
     with pytest.raises(FileNotFoundError):
         _groups(track, demographic_inputs, ["good"])
@@ -152,15 +145,6 @@ def test_no_unknown_ages_has_no_warning(track, users, demographic_inputs, caplog
     groups = _groups(track, demographic_inputs, users)
     assert set(groups) == set(users)
     assert not _coverage_warnings(caplog)
-
-
-@pytest.mark.parametrize("track", ["imputation", "forecasting"])
-def test_custom_age_bins_are_used_for_warning_counts(track, demographic_inputs, caplog):
-    """Coverage reporting must use the same age range as the caller's grouping."""
-    caplog.set_level(logging.WARNING)
-    groups = _groups(track, demographic_inputs, ["good", "bad"], age_bins=(50, 60))
-    assert all(g["age_group"] == "unknown" for g in groups.values())
-    assert "2/2 users have unknown age groups" in _coverage_warnings(caplog)[0]
 
 
 def _age_error_message(caller):
@@ -180,7 +164,7 @@ def _age_error_message(caller):
 @pytest.mark.parametrize("caller", ["target", "linear_covariates"])
 def test_age_only_enrollment_error_explains_migration(caller, demographic_inputs):
     """Age targets and Linear covariates explain why stored enrollment age is insufficient."""
-    folder, _, _ = demographic_inputs
+    folder, _ = demographic_inputs
     (folder / "enrollment_info.json").write_text(
         json.dumps({"bad": {"age": 40, "createdOn": "2020-01-01"}})
     )

@@ -42,7 +42,6 @@ from forecasting_evaluation.metrics.bootstrap_skill_rank import bootstrap_skill_
 from forecasting_evaluation.metrics.per_user_errors import build_per_user_metrics  # noqa: E402
 
 N_BOOT, SEED, CI_LEVEL = 1000, 42, 0.95
-AGE_BINS = (18, 30, 40, 50, 60)
 BINARY_GROUPS = [(name, tuple(idx)) for name, idx in _spec.BINARY_GROUPS]
 DRAWS_COLUMNS = ["reduction", "model", "scope", "metric", "draw", "value"]
 
@@ -118,6 +117,7 @@ def main() -> int:
     )
     print(f"skill/rank bootstrap done ({time.time() - t0:.0f}s)")
 
+    from labels.api import AGE_GROUP_EDGES
     from openmhc._label_paths import LabelPaths
 
     paths = LabelPaths.resolve()
@@ -132,7 +132,6 @@ def main() -> int:
         binary_channel_indices=_spec.BINARY_CHANNELS,
         labels_path=str(paths.labels),
         enrollment_path=str(paths.enrollment),
-        age_bins=AGE_BINS,
         n_boot=N_BOOT,
         seed=SEED,
         ci_level=CI_LEVEL,
@@ -172,7 +171,7 @@ def main() -> int:
         "methods": sorted(models),
         "continuous_metrics": list(_spec.PAPER_CONTINUOUS_METRICS),
         "binary_metrics": list(_spec.PAPER_BINARY_METRICS),
-        "age_bins": list(AGE_BINS),
+        "age_bins": list(AGE_GROUP_EDGES),
         "reductions": ["skill", "rank", "fairness"],
         "within_user_aggregation": "micro",
         "aggregation_unit": "user",

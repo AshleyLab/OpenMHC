@@ -12,35 +12,18 @@ Layout::
     <predictions_dir>/<method>/fallback.json          # per-task {n_fallback, n_test}
     <predictions_dir>/_subgroups.json
 
-Age groups use enrollment createdOn through the configured Labels API.
-Sex comes from the labels lookup's ``BiologicalSex`` column.
+Groups come from ``labels.user_demographics`` for the configured dataset.
 """
 
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from downstream_evaluation.evaluation.metrics import get_task_type, prepare_predictions
-
-logger = logging.getLogger(__name__)
-
-# Five age bands (plus ``unknown``) — the subgroups the fairness analysis slices on.
-_AGE_GROUP_BINS: tuple[tuple[float, float, str], ...] = (
-    (18.0, 30.0, "18-29"),
-    (30.0, 40.0, "30-39"),
-    (40.0, 50.0, "40-49"),
-    (50.0, 60.0, "50-59"),
-    (60.0, float("inf"), "60+"),
-)
-
-# Sentinels marking a missing label cell in the lookup (mirrors data.provider).
-_MISSING_INT = -1
-_MISSING_FLOAT = -1.0
 
 
 def _safe_task(task: str) -> str:
@@ -83,42 +66,6 @@ def write_task_predictions(
     out_dir = Path(predictions_dir) / method / _safe_task(task)
     out_dir.mkdir(parents=True, exist_ok=True)
     df.to_parquet(out_dir / "test.parquet", index=False)
-
-
-def _age_group(value) -> str:
-    """Bin a numeric age into one of the five bands, else ``unknown``."""
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return "unknown"
-    if not np.isfinite(v):
-        return "unknown"
-    for lo, hi, label in _AGE_GROUP_BINS:
-        if lo <= v < hi:
-            return label
-    return "unknown"
-
-
-def _sex(value) -> str:
-    """Map ``BiologicalSex`` (1=male, 0=female) to a subgroup label, else ``unknown``."""
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return "unknown"
-    if not np.isfinite(v):
-        return "unknown"
-    return "male" if int(v) == 1 else ("female" if int(v) == 0 else "unknown")
-
-
-def _first_valid_by_user(lookup: pd.DataFrame, col: str) -> dict[str, float]:
-    """``{user_id: first non-sentinel value}`` for a constant-per-user label column."""
-    arr = lookup[col].to_numpy()
-    if np.issubdtype(arr.dtype, np.floating):
-        valid = ~(np.isnan(arr) | (arr == _MISSING_FLOAT))
-    else:
-        valid = arr != _MISSING_INT
-    sub = lookup.loc[valid, ["user_id", col]].drop_duplicates("user_id", keep="first")
-    return dict(zip(sub["user_id"].astype(str), sub[col]))
 
 
 def write_fallback_sidecar(
@@ -168,41 +115,11 @@ def overall_fallback_rate(sidecar: dict[str, dict]) -> float:
     return total_fb / total_n if total_n else 0.0
 
 
-def write_subgroup_map(
-    predictions_dir: str | Path,
-    lookup_path: str | Path,
-    users,
-) -> None:
-    """Write ``<predictions_dir>/_subgroups.json`` = ``{uid: {age_group, sex}}``.
+def write_subgroup_map(predictions_dir: str | Path, users) -> None:
+    """Write ``<predictions_dir>/_subgroups.json`` = ``{uid: {age_group, sex}}``."""
+    from labels.api import user_demographics
 
-    Age uses enrollment createdOn; sex is the first non-sentinel lookup value.
-    Missing or invalid enrollment metadata gives an ``unknown`` age group.
-    Users remain present even when their age target is missing from the lookup.
-    Unknown counts are logged; unreadable or malformed enrollment files raise.
-    """
-    from labels.api import STORE, _ensure_configured
-
-    _ensure_configured()
-    # Load outside the per-user try: file corruption is not a missing age.
-    enrollment = STORE.enrollment
-    lookup = pd.read_parquet(lookup_path, columns=["user_id", "BiologicalSex"])
-    sex_by = _first_valid_by_user(lookup, "BiologicalSex")
-    subgroups = {}
-    for u in sorted({str(x) for x in users}):
-        try:
-            age = enrollment.age_at_enrollment(u)
-        except (KeyError, ValueError):
-            age = None
-        subgroups[u] = {"age_group": _age_group(age), "sex": _sex(sex_by.get(u))}
-    unknown = sum(row["age_group"] == "unknown" for row in subgroups.values())
-    if unknown:
-        logger.warning(
-            "%d/%d users have unknown age groups. Check birth_year and createdOn "
-            "in enrollment_info.json and the age-bin range.%s",
-            unknown,
-            len(subgroups),
-            " Age-based fairness has no usable age groups." if unknown == len(subgroups) else "",
-        )
+    subgroups = user_demographics(users)
     out_dir = Path(predictions_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     with (out_dir / "_subgroups.json").open("w") as f:
