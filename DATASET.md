@@ -55,7 +55,10 @@ $MHC_DATA_DIR/
 ├── dataset_version.json          # marker — version + n_users (required)
 ├── labels/                       # Track 1
 │   ├── last_labels.json          # participant-level outcome labels
-│   └── context_labels.json       # participant-level covariates
+│   ├── context_labels.json       # participant-level covariates
+│   ├── label_types.json          # required schema: names, types and target/context roles
+│   ├── ordinal_dictionary.json   # required schema: category encodings
+│   └── validity_config.json      # required schema: validity-window thresholds
 ├── splits/                       # one file, named per version:
 │   ├── sharable_users_seed42_2026.json       # full (11,894 users)
 │   └── sharable_users_seed42_2026_xs.json    # xs   (   593 users)
@@ -91,7 +94,18 @@ The marker pins the version and expected user count so the resolver can fail lou
 
 ### Bundled vs. dataset-root files
 
-The schema-only registry files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) ship with this code repo at `data/labels/` and remain the default for bundled metadata. Large JSON label payloads such as `last_labels.json`, `context_labels.json`, `enrollment_info.json`, `label_validity.json`, and `healthkit_daily.json` must come from your explicit dataset root unless you override them with per-file env vars.
+The label schema files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, alongside the participant payloads. Label configuration requires all three schemas and raises an error if any is missing or invalid JSON; there is no repository fallback. Legacy schema environment variables that point outside the selected schema set raise an error; unset them and select the root with `data_dir=` or `MHC_DATA_DIR`. Per-file payload overrides remain supported. `task_feature_exclusions.json` stays in the repository because it defines benchmark behavior.
+
+Schemas are restricted files on Dataverse, so reading the authoritative label
+names, types and encodings requires dataset access. The public repository keeps
+historical survey documentation, not a current machine-readable label list.
+
+### Existing dataset roots
+
+To replace an older or inconsistent root, download/extract the complete release
+into a **new or empty directory**, keeping its schemas and payloads together.
+Select it with `data_dir=` or `MHC_DATA_DIR` and call `labels.configure()`.
+`download_dataset()` rejects nonempty destinations.
 
 ## Splits
 

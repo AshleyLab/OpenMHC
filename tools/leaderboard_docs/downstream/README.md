@@ -82,7 +82,10 @@ caution.
 ## Refreshing
 
 The substrate is produced and uploaded from the OpenMHC code repo. It is pooled from
-saved eval predictions (no model re-run); the bootstrap reference is kept on the same
+saved eval predictions and schemas from the matching dataset root (no model re-run);
+set `MHC_DATA_DIR` for substrate production and the parity gate. The leaderboard
+reducers consume the completed substrate without requiring dataset access.
+The bootstrap reference is kept on the same
 predictions. Because the Space reduces the substrate live, **uploading it (step 5) is all
 it takes** — no precomputed rows file to regenerate and no offline reduce; the board picks it
 up on the Space's next restart. (You only touch the Space *code* when the reducer itself
@@ -101,12 +104,12 @@ PYTHONPATH=src python scripts/paper_results/downstream/bootstrap_downstream_draw
   --output results/paper/bootstrap_draws.parquet
 
 # (3) Build the per-method substrate parquets (+ provenance sidecars).
-python scripts/paper_results/downstream/parity/produce_per_method_per_user_pairs.py \
+MHC_DATA_DIR=<data> PYTHONPATH=src python scripts/paper_results/downstream/leaderboard/produce_per_method_per_user_pairs.py \
   --predictions-dir results/eval/final/predictions --out-dir results/leaderboard_downstream
 
 # (4) Parity gate — the substrate must equal the predictions, and a substrate-driven
 #     bootstrap must reproduce results/paper/bootstrap_draws.parquet.
-python scripts/paper_results/downstream/parity/parity_substrate.py
+MHC_DATA_DIR=<data> PYTHONPATH=src python scripts/paper_results/downstream/dev/parity_substrate.py
 
 # (5) Upload the per-method substrates (HF auth required).
 for m in multirocket xgboost lsm2 gru_d wbm toto chronos2; do

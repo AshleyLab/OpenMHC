@@ -679,7 +679,7 @@ class ImputationEvaluator:
                     window_descriptors,
                     window_day_offsets,
                     self._fallback_fill,
-                    labels_api._PATHS,
+                    labels_api._PATHS if labels_api._SCHEMAS_CONFIGURED else None,
                 ),
             ) as executor:
                 for batch_idx, batch_data in enumerate(dataloader):

@@ -3,7 +3,6 @@
 import importlib
 import json
 import os
-from dataclasses import replace
 
 import pandas as pd
 import pytest
@@ -13,7 +12,7 @@ from openmhc._label_paths import LabelPaths
 
 
 @pytest.fixture(autouse=True)
-def clean_configuration(monkeypatch):
+def clean_configuration(monkeypatch, tmp_path, write_label_schemas):
     """Keep configuration changes independent of test execution order."""
     from devices import api as devices
     from labels import api
@@ -21,6 +20,7 @@ def clean_configuration(monkeypatch):
     # Restore the actual pre-test state, including loaded caches. Re-resolving
     # from a cleared environment does not restore a caller's explicit selection.
     paths = api._PATHS
+    configured = api._SCHEMAS_CONFIGURED
     metadata = [(getattr(api, name), getattr(api, name).copy()) for name in (
         "LABEL_TYPES", "_LABEL_META", "LABEL_NAMES", "TARGET_NAMES", "CONTEXT_NAMES",
         "MULTI_CATEGORICAL_NAMES",
@@ -39,12 +39,14 @@ def clean_configuration(monkeypatch):
         "USER_DEVICE_INFO_PATH",
     ):
         monkeypatch.delenv(key, raising=False)
-    api.configure()
+    write_label_schemas(tmp_path / "initial")
+    api.configure(tmp_path / "initial")
     try:
         yield
     finally:
         monkeypatch.undo()  # Restore environment before restoring API state.
         api._PATHS = paths
+        api._SCHEMAS_CONFIGURED = configured
         for container, value in metadata:
             if isinstance(container, dict):
                 container.clear()
@@ -78,14 +80,7 @@ def write_dataset(root, value, context_name):
     }
     for name, content in files.items():
         (folder / name).write_text(json.dumps(content))
-    # Resolver PR intentionally retains repo schema defaults. Select synthetic
-    # schemas explicitly so this also tests updates to imported metadata lists.
-    return replace(
-        LabelPaths.resolve(root),
-        label_types=folder / "label_types.json",
-        ordinal_dictionary=folder / "ordinal_dictionary.json",
-        validity_config=folder / "validity_config.json",
-    )
+    return LabelPaths.resolve(root)
 
 
 def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path, monkeypatch):
@@ -148,10 +143,58 @@ def test_failed_schema_configuration_leaves_previous_store_usable(tmp_path):
     b = write_dataset(tmp_path / "b", 40, "context_b")
     api.configure(paths=a)
     b.label_types.write_text("{broken")
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ValueError, match="label_types.json"):
         api.configure(paths=b)
     assert api._PATHS.label_types == a.label_types
     assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+
+
+def test_switch_uses_selected_dataset_category_codes(tmp_path):
+    """Decode categories and build one-hot keys from the selected dataset."""
+    from context import get_context
+    from labels import api
+
+    roots = [tmp_path / "a", tmp_path / "b"]
+    for root, asian_code, race_codes in zip(roots, (2, 0), ((1, 2, 3, 4, 5), (1, 2, 3, 4))):
+        paths = write_dataset(root, 20, "field_Ethnicity_heartage")
+        types = json.loads(paths.label_types.read_text())
+        types.update(
+            {
+                "field_Ethnicity_heartage": {"type": "categorical", "target": False},
+                "field_race": {"type": "multi_categorical", "target": False},
+            }
+        )
+        paths.label_types.write_text(json.dumps(types))
+        paths.ordinal_dictionary.write_text(
+            json.dumps(
+                {
+                    "field_Ethnicity_heartage": {"Asian": asian_code},
+                    "field_race": {str(code): f"category_{code}" for code in race_codes},
+                }
+            )
+        )
+        paths.context.write_text(
+            json.dumps(
+                {
+                    "field_Ethnicity_heartage": {
+                        "u": {"timestamps": ["2020-01-01"], "values": ["Asian"]}
+                    },
+                    "field_race": {"u": {"timestamps": ["2020-01-01"], "values": [[1, 3]]}},
+                }
+            )
+        )
+
+    for root, asian_code, race_codes in (
+        (roots[0], 2, (1, 2, 3, 4, 5)),
+        (roots[1], 0, (1, 2, 3, 4)),
+        (roots[0], 2, (1, 2, 3, 4, 5)),
+    ):
+        api.configure(root)
+        timestamp = pd.Timestamp("2020-01-01")
+        assert get_context("u", timestamp, "field_Ethnicity_heartage").value == asian_code
+        assert api.get_labels_one_hot("u", timestamp, "field_race") == {
+            code: code in (1, 3) for code in race_codes
+        }
 
 
 def test_explicit_root_beats_mhc_env_and_resolves_devices(monkeypatch, tmp_path):
@@ -164,10 +207,11 @@ def test_explicit_root_beats_mhc_env_and_resolves_devices(monkeypatch, tmp_path)
     assert LabelPaths.resolve(tmp_path / "new").devices == tmp_path / "device_override.json"
 
 
-def test_device_file_stays_optional(tmp_path):
+def test_device_file_stays_optional(tmp_path, write_label_schemas):
     """Permit configuration without the device file but fail on actual lookup."""
     from devices import api
 
+    write_label_schemas(tmp_path)
     _ensure_labels_env(LabelPaths.resolve(tmp_path))
     with pytest.raises(FileNotFoundError, match="user_device_info.json"):
         api.get_device_timeline("u")
@@ -224,7 +268,18 @@ def test_public_evaluation_switches_dataset_before_runner(monkeypatch, tmp_path,
     store = api.STORE
     environment = dict(os.environ)
     kwargs = {"tasks": ["age"]} if track == "prediction" else {"max_samples": 1}
-    for root in roots:
+    for index, root in enumerate(roots):
+        if index:
+            with monkeypatch.context() as env_patch:
+                env_patch.setenv(
+                    "ORDINAL_DICTIONARY_PATH", str(roots[0] / "labels/ordinal_dictionary.json")
+                )
+                with pytest.raises(ValueError, match="Unset ORDINAL_DICTIONARY_PATH"):
+                    getattr(openmhc, f"evaluate_{track}")(
+                        model, version="xs", data_dir=root, **kwargs
+                    )
+                assert len(observed) == 1
+                assert api.STORE.paths.labels == roots[0] / "labels/last_labels.json"
         with pytest.raises(ReachedRunner):
             getattr(openmhc, f"evaluate_{track}")(model, version="xs", data_dir=root, **kwargs)
         assert api.STORE is store
@@ -302,6 +357,181 @@ def test_fairness_command_uses_resolver(monkeypatch, tmp_path, explicit_files_on
     assert seen["enrollment_path"] == expected_enrollment
 
 
+@pytest.mark.parametrize(
+    "filename", ["label_types.json", "ordinal_dictionary.json", "validity_config.json"]
+)
+@pytest.mark.parametrize("defect", ["missing", "invalid_json", "not_object"])
+def test_schema_set_rejected_atomically(tmp_path, filename, defect):
+    """Every schema is required and parsed before the current dataset is changed."""
+    from labels import api
+
+    a = write_dataset(tmp_path / "a", 20, "context_a")
+    b = write_dataset(tmp_path / "b", 40, "context_b")
+    api.configure(paths=a)
+    # Populate the live cache before attempting a failing switch.
+    assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+    path = tmp_path / "b/labels" / filename
+    if defect == "missing":
+        path.unlink()
+        error = FileNotFoundError
+    else:
+        path.write_text("{broken" if defect == "invalid_json" else "[]")
+        error = ValueError
+    with pytest.raises(error, match=filename):
+        api.configure(paths=b)
+    assert api._PATHS.label_types == a.label_types
+    assert api.CONTEXT_NAMES == ["context_a"]
+    assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+
+
+@pytest.mark.parametrize(
+    "env,filename",
+    [
+        ("LABEL_TYPES_PATH", "label_types.json"),
+        ("ORDINAL_DICTIONARY_PATH", "ordinal_dictionary.json"),
+        ("VALIDITY_CONFIG_PATH", "validity_config.json"),
+    ],
+)
+def test_conflicting_schema_environment_preserves_configuration(
+    monkeypatch, tmp_path, env, filename
+):
+    """Reject each conflicting schema path without changing active data or caches."""
+    from labels import api
+
+    a = write_dataset(tmp_path / "a", 20, "context_a")
+    b = write_dataset(tmp_path / "b", 40, "context_b")
+    api.configure(paths=a)
+    assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+    before = (api._PATHS.label_types, api._PATHS.ordinal_dictionary, api._PATHS.validity_config)
+    with monkeypatch.context() as env_patch:
+        env_patch.setenv(env, str(a.schema_dir / filename))
+        with pytest.raises(ValueError, match=f"Unset {env}"):
+            api.configure(tmp_path / "b")
+        assert before == (
+            api._PATHS.label_types,
+            api._PATHS.ordinal_dictionary,
+            api._PATHS.validity_config,
+        )
+        assert api.CONTEXT_NAMES == ["context_a"]
+        assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+    api.configure(paths=b)
+    assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 41
+
+
+def test_complete_external_schema_set_cannot_replace_dataset_schemas(monkeypatch, tmp_path):
+    """Reject external schemas even when all three files are supplied."""
+    from labels import api
+
+    a = write_dataset(tmp_path / "a", 20, "context_a")
+    write_dataset(tmp_path / "b", 40, "context_b")
+    with monkeypatch.context() as env_patch:
+        for env, path in (
+            ("LABEL_TYPES_PATH", a.label_types),
+            ("ORDINAL_DICTIONARY_PATH", a.ordinal_dictionary),
+            ("VALIDITY_CONFIG_PATH", a.validity_config),
+        ):
+            env_patch.setenv(env, str(path))
+        with pytest.raises(ValueError, match="conflicts with the selected dataset"):
+            api.configure(tmp_path / "b")
+        with pytest.raises(ValueError, match="data_dir=|MHC_DATA_DIR"):
+            api.configure()
+
+
+def test_matching_schema_environment_does_not_redirect_files(monkeypatch, tmp_path):
+    """Accept legacy paths that resolve to the selected dataset's schemas."""
+    from labels import api
+
+    paths = write_dataset(tmp_path / "dataset", 20, "context_a")
+    alias = tmp_path / "dataset_alias"
+    alias.symlink_to(tmp_path / "dataset", target_is_directory=True)
+    with monkeypatch.context() as env_patch:
+        env_patch.setenv("MHC_DATA_DIR", str(tmp_path / "other"))
+        for env, filename in (
+            ("LABEL_TYPES_PATH", "label_types.json"),
+            ("ORDINAL_DICTIONARY_PATH", "ordinal_dictionary.json"),
+            ("VALIDITY_CONFIG_PATH", "validity_config.json"),
+        ):
+            env_patch.setenv(env, str(alias / "labels" / filename))
+        api.configure(tmp_path / "dataset")
+        assert (api._PATHS.label_types, api._PATHS.ordinal_dictionary, api._PATHS.validity_config) == (
+            paths.label_types,
+            paths.ordinal_dictionary,
+            paths.validity_config,
+        )
+        paths.validity_config.unlink()
+        with pytest.raises(FileNotFoundError, match="validity_config.json"):
+            api.configure(tmp_path / "dataset")
+
+
+@pytest.mark.parametrize("mode", ["explicit", "lazy"])
+def test_import_with_stale_schema_environment(monkeypatch, tmp_path, mode):
+    """Allow imports before selecting a dataset, then reject stale schema paths."""
+    import subprocess
+    import sys
+
+    paths = write_dataset(tmp_path / "dataset", 20, "context_a")
+    monkeypatch.setenv("MHC_DATA_DIR", str(tmp_path / "dataset"))
+    with monkeypatch.context() as env_patch:
+        env_patch.setenv("LABEL_TYPES_PATH", str(tmp_path / "old/labels/label_types.json"))
+        code = """
+import os
+import sys
+from pathlib import Path
+import pandas as pd
+import labels
+assert labels.LABEL_NAMES == []
+try:
+    if sys.argv[1] == "explicit":
+        labels.configure()
+    else:
+        labels.get_labels("u", pd.Timestamp("2020-01-01"), "age")
+except ValueError as exc:
+    assert "Unset LABEL_TYPES_PATH" in str(exc)
+else:
+    raise AssertionError("Conflicting schema path was accepted")
+del os.environ["LABEL_TYPES_PATH"]
+labels.configure()
+assert labels.LABEL_TYPES_PATH == Path(sys.argv[2])
+assert labels.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+"""
+        subprocess.run([sys.executable, "-c", code, mode, str(paths.label_types)], check=True)
+
+
+@pytest.mark.parametrize("mode", ["explicit", "lazy", "missing"])
+def test_import_before_dataset_selection(monkeypatch, tmp_path, mode):
+    """A fresh process can import first, then configure or query a selected dataset."""
+    import subprocess
+    import sys
+
+    paths = write_dataset(tmp_path / "dataset", 20, "context_a")
+    monkeypatch.setenv("MHC_DATA_DIR", str(tmp_path / "incomplete"))
+    code = """
+import os
+import sys
+import pandas as pd
+import openmhc
+from labels import api
+from labels import LABEL_NAMES
+assert LABEL_NAMES == []
+root, mode = sys.argv[1:]
+if mode == "explicit":
+    api.configure(root)
+elif mode == "lazy":
+    os.environ["MHC_DATA_DIR"] = root
+else:
+    try:
+        api.get_labels("u", pd.Timestamp("2020-01-01"), "age")
+    except FileNotFoundError as exc:
+        assert "label_types.json" in str(exc)
+    else:
+        raise AssertionError("Missing schema set was accepted")
+    sys.exit(0)
+assert api.get_labels("u", pd.Timestamp("2020-01-01"), "age").value == 21
+assert LABEL_NAMES == ["age", "context_a"]
+"""
+    subprocess.run([sys.executable, "-c", code, str(paths.labels.parent.parent), mode], check=True)
+
+
 def test_xgboost_feature_builder_configures_labels_before_cutoffs(monkeypatch, tmp_path):
     """The feature-building entry point passes resolved paths to label configuration."""
     import sys
@@ -339,3 +569,25 @@ def test_xgboost_feature_builder_configures_labels_before_cutoffs(monkeypatch, t
         model.extract_xgboost_features(
             str(tmp_path / "features"), data_dir=str(root), max_future_days=1
         )
+
+
+def test_first_evaluation_initializes_matching_import_paths(tmp_path, monkeypatch):
+    """An initial path match must populate lazy schemas before evaluation."""
+    import subprocess
+    import sys
+
+    paths = write_dataset(tmp_path / "dataset", 20, "context_a")
+    monkeypatch.setenv("MHC_DATA_DIR", str(paths.schema_dir.parent))
+    code = """from labels import api
+from openmhc._evaluate import _ensure_labels_env
+from openmhc._label_paths import LabelPaths
+paths = LabelPaths.resolve()
+assert api._PATHS == paths
+assert not api._SCHEMAS_CONFIGURED
+assert api.LABEL_NAMES == []
+_ensure_labels_env(paths)
+assert api._SCHEMAS_CONFIGURED
+assert api.LABEL_NAMES == ['age', 'context_a']
+assert api.STORE.paths is api._PATHS
+"""
+    subprocess.run([sys.executable, "-c", code], check=True)

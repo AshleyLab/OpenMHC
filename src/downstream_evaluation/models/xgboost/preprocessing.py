@@ -194,8 +194,9 @@ def build_cutoff_dates(max_future_days: int = 365) -> dict[str, str]:
 
     import pandas as pd
 
-    from labels.api import STORE, TARGET_NAMES
+    from labels.api import STORE, TARGET_NAMES, _ensure_configured
 
+    _ensure_configured()
     _log = logging.getLogger(__name__)
 
     raw_index = STORE.labels_index._index  # noqa: SLF001

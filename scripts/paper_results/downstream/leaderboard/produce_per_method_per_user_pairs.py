@@ -15,14 +15,16 @@ Mirrors the other tracks' substrate producers
 sidecar carrying ``overall_fallback_rate`` (the field
 ``tools/upload_leaderboard_substrate.py`` reads for issue #39).
 
-Reads saved predictions only — it does not re-run any model. The pooled rows are
+Reads saved predictions and the selected dataset's schemas; it does not re-run
+any model. Set ``MHC_DATA_DIR`` to the matching dataset root (all three schema
+files are required) so task types use the correct release. The pooled rows are
 the exact predictions the paper bootstrap (``bootstrap_downstream_draws.py``)
 consumes, so the server-side recompute reproduces the committed ``results/paper``
 leaderboard numbers (proven by ``parity_substrate.py``).
 
 Usage::
 
-    PYTHONPATH=src python scripts/paper_results/downstream/parity/\
+    MHC_DATA_DIR=/path/to/dataset PYTHONPATH=src python scripts/paper_results/downstream/leaderboard/\
 produce_per_method_per_user_pairs.py \
         --predictions-dir results/eval/final/predictions \
         --out-dir results/leaderboard_downstream

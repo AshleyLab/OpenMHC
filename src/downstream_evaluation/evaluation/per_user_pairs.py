@@ -50,6 +50,10 @@ def build_per_user_pairs(
 ) -> pd.DataFrame:
     """Pool one method's per-(task) test predictions into the long pairs substrate.
 
+    Requires label schema configuration to recover task types. Call
+    ``labels.configure(data_dir=...)`` first, or set ``MHC_DATA_DIR`` for lazy
+    configuration. Saved predictions alone do not provide the schema.
+
     Args:
         predictions_dir: directory holding ``<method_dir>/<task>/test.parquet`` (as
             written by :func:`predictions_io.write_task_predictions`) and the shared

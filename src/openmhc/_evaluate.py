@@ -250,7 +250,7 @@ def _ensure_labels_env(paths: LabelPaths) -> None:
     from devices import api as devices_api
     from labels import api as labels_api
 
-    if paths != labels_api._PATHS:
+    if paths != labels_api._PATHS or not labels_api._SCHEMAS_CONFIGURED:
         labels_api.configure(paths=paths)
     else:
         # Import-time paths may already match on the first evaluation. Validate
