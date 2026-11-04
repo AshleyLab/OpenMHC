@@ -163,9 +163,7 @@ def test_custom_age_bins_are_used_for_warning_counts(track, demographic_inputs, 
     assert "2/2 users have unknown age groups" in _coverage_warnings(caplog)[0]
 
 
-@pytest.mark.parametrize("caller", ["target", "linear_covariates"])
-def test_age_only_enrollment_error_explains_migration(caller, demographic_inputs):
-    """Age targets and Linear covariates explain why stored enrollment age is insufficient."""
+def _age_error_message(caller):
     from downstream_evaluation.data.provider import age_target
     from downstream_evaluation.demo_covariates import build_demo_user_lookup_from_labels_df
 
@@ -176,7 +174,26 @@ def test_age_only_enrollment_error_explains_migration(caller, demographic_inputs
             build_demo_user_lookup_from_labels_df(
                 pd.DataFrame({"user_id": ["bad"], "age": [40.0]}), ["age"]
             )
-    message = str(error.value)
+    return str(error.value)
+
+
+@pytest.mark.parametrize("caller", ["target", "linear_covariates"])
+def test_age_only_enrollment_error_explains_migration(caller, demographic_inputs):
+    """Age targets and Linear covariates explain why stored enrollment age is insufficient."""
+    folder, _, _ = demographic_inputs
+    (folder / "enrollment_info.json").write_text(
+        json.dumps({"bad": {"age": 40, "createdOn": "2020-01-01"}})
+    )
+    message = _age_error_message(caller)
     assert "birth_year" in message
     assert "new directory" in message
     assert "labels.configure" in message
+
+
+@pytest.mark.parametrize("caller", ["target", "linear_covariates"])
+def test_single_missing_birth_year_does_not_advise_download(caller, demographic_inputs):
+    """A gap in one record is not an outdated release, so a new download is not suggested."""
+    message = _age_error_message(caller)
+    assert "birth_year" in message
+    assert "new directory" not in message
+    assert "labels.configure" not in message
