@@ -536,7 +536,14 @@ Notable fields a dev would tune:
   inspector at `src/openmhc/_evaluate.py:843`), so daily models are
   unaffected.
 - `masking.mask_seed` — controls the RNG used by every scenario.
-- `masking.masks_file` — load pre-computed masks from `.npz` instead of regenerating, for like-for-like comparison across methods.
+- `masking.masks_file` — directory containing precomputed `val/<scenario>.npz`
+  and `test/<scenario>.npz` files. For released Full evaluations, set it to
+  `<dataset_root>/imputation/masks/sharable_users_seed42_2026_max91d/`; for XS,
+  use `sharable_users_seed42_2026_xs/` under the same `imputation/masks/` parent.
+  Use masks from the matching dataset release and date variant. The runner
+  checks participant/date alignment before fitting. The public API selects
+  these paths automatically for canonical runs; direct Hydra CLI runs must
+  supply `+masking.masks_file=...` to reuse the released masks.
 
 Per-scenario knobs are on the matching sub-config in `MaskingConfig` (`random_noise.patch_size`, `temporal_slice.min_block_size`, `intensity_failure.hr_threshold`, etc.) — see the defaults table in Part 1.
 

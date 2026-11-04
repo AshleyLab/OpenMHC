@@ -53,3 +53,6 @@ __MACOSX/
 
 # Scratch / throwaway experiment + benchmark scaffolding
 scratch/
+
+# Participant-specific masks are distributed with the dataset.
+data/imputation/masks/

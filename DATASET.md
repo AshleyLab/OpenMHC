@@ -71,6 +71,7 @@ $MHC_DATA_DIR/
 │   ├── daily_labels_lookup.parquet           # daily labels lookup (windowed; forward-window cap baked in) — Track 1
 │   ├── daily_labels_lookup_full_history.parquet  # daily labels lookup (full history; no forward cap; from-raw/xgboost/lsm2) — Track 1
 │   └── normalization_stats_hourly.json       # global z-score statistics
+├── imputation/masks/             # Track 2 — precomputed masks matching this dataset
 ├── hourly_trajectory/            # Track 3 — hourly-resolution per-user trajectories
 └── forecasting_sample_index/     # Track 3 (P = forecast horizon in hours: 24 or 48)
     ├── sample_index_P_24_M_H_7_3_S_100.json   # used by evaluate_forecasting(forecasting_length=24)
@@ -94,6 +95,34 @@ openmhc.write_dataset_marker("~/.cache/openmhc/data-xs", version="xs")     # or 
 The marker pins the version and expected user count so the resolver can fail loudly if a directory ever ends up holding mismatched contents (e.g. an xs split file renamed to the canonical full name). `evaluate_*` reads this marker and cross-checks it against the `version=` you pass, so a wrong root is rejected immediately rather than producing a silently-wrong result.
 
 ### Bundled vs. dataset-root files
+
+Precomputed imputation masks belong to the selected dataset root:
+
+| Version | Path relative to the dataset root |
+|---|---|
+| Full | `imputation/masks/sharable_users_seed42_2026_max91d/` |
+| XS | `imputation/masks/sharable_users_seed42_2026_xs/` |
+
+Each directory contains `val/` and `test/`, with one `.npz` file per masking
+scenario (six per split). Obtain masks from the same release and date variant
+as the dataset. The download helper installs the bundle's `data/imputation/`
+directory as `<dataset_root>/imputation/`; manual setup follows the same layout.
+The repository does not contain mask files.
+
+`evaluate_imputation()` requires these files for Full and for canonical XS runs
+(`seed=42`, `n_days=1`, no `max_samples` limit). Missing files raise an error;
+participant IDs and dates are checked against the selected data before fitting.
+Other XS configurations generate masks for their selected samples.
+
+For release preparation, extract XS masks from matching Full masks with:
+
+```bash
+python scripts/precompute_xs_masks.py --full-data-dir /path/to/full --data-dir /path/to/xs
+```
+
+This preserves the selected mask patterns and remaps their sample indices; it refuses to
+overwrite an existing output directory. Both roots must use the same date
+variant, and the Full masks must already be installed at the path above.
 
 The label schema files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, alongside the participant payloads. Label configuration requires all three schemas and raises an error if any is missing or invalid JSON; there is no repository fallback. Legacy schema environment variables that point outside the selected schema set raise an error; unset them and select the root with `data_dir=` or `MHC_DATA_DIR`. Per-file payload overrides remain supported. `task_feature_exclusions.json` stays in the repository because it defines benchmark behavior.
 

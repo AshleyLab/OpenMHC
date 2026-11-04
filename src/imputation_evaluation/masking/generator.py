@@ -68,14 +68,18 @@ class ScenarioMasks:
     Provides efficient lookup by global sample index.
 
     Attributes:
-        indices: Sorted global indices of applicable samples.
+        indices: Split-local indices of applicable samples.
         masks_packed: Bit-packed masks (uint8).
         shape: Original shape (N_applicable, C, T).
+        user_ids: Participant IDs aligned with the applicable mask rows.
+        dates: Sample dates aligned with the applicable mask rows.
     """
 
     indices: np.ndarray
     masks_packed: np.ndarray
     shape: tuple[int, ...]
+    user_ids: np.ndarray | None = None
+    dates: np.ndarray | None = None
 
     # Lazy-initialized lookup structures
     _index_set: set[int] = field(default_factory=set, repr=False)
@@ -159,11 +163,15 @@ class ScenarioMasks:
         Args:
             filepath: Path to save the npz file.
         """
+        metadata = {}
+        if self.user_ids is not None and self.dates is not None:
+            metadata = {"user_ids": self.user_ids, "dates": self.dates}
         np.savez_compressed(
             filepath,
             indices=self.indices,
             masks_packed=self.masks_packed,
             shape=np.array(self.shape),
+            **metadata,
         )
 
     @classmethod
@@ -176,12 +184,14 @@ class ScenarioMasks:
         Returns:
             Loaded ScenarioMasks instance.
         """
-        data = np.load(filepath)
-        return cls(
-            indices=data["indices"],
-            masks_packed=data["masks_packed"],
-            shape=tuple(data["shape"].tolist()),
-        )
+        with np.load(filepath, allow_pickle=False) as data:
+            return cls(
+                indices=data["indices"],
+                masks_packed=data["masks_packed"],
+                shape=tuple(data["shape"].tolist()),
+                user_ids=data["user_ids"] if "user_ids" in data else None,
+                dates=data["dates"] if "dates" in data else None,
+            )
 
 
 class MaskCache:
@@ -308,6 +318,39 @@ class MaskCache:
             return None
         return scenario_masks.get_mask(global_idx)
 
+    def check_sample_keys(self, hf_dataset, split_indices: dict[str, list[int]]) -> None:
+        """Reject cached masks belonging to different sample ordering or dates."""
+        users = np.asarray(hf_dataset["user_id"], dtype=str)
+        dates = np.asarray(hf_dataset["date"], dtype=str)
+        for split, scenarios in self._masks.items():
+            rows = np.asarray(split_indices[split], dtype=np.int64)
+            for scenario, masks in scenarios.items():
+                prefix = f"Mask cache {split}/{scenario}"
+                if masks.user_ids is None or masks.dates is None:
+                    raise ValueError(
+                        f"{prefix} lacks participant/date metadata. Download the masks "
+                        "accompanying the selected dataset release."
+                    )
+                indices = masks.indices
+                if (
+                    indices.ndim != 1
+                    or indices.dtype.kind not in "iu"
+                    or len(indices) != masks.n_applicable
+                    or len(np.unique(indices)) != len(indices)
+                    or np.any(indices < 0)
+                    or np.any(indices >= len(rows))
+                ):
+                    raise ValueError(f"{prefix} has invalid sample indices for this dataset.")
+                selected = rows[indices]
+                if not (
+                    np.array_equal(masks.user_ids, users[selected])
+                    and np.array_equal(masks.dates, dates[selected])
+                ):
+                    raise ValueError(
+                        f"{prefix} participant/date keys do not match the selected dataset. "
+                        "Use masks from the same dataset release and date variant."
+                    )
+
     def save(self, masks_dir: Path) -> None:
         """Save all masks to directory.
 
@@ -373,8 +416,8 @@ class MaskCache:
                 f"MaskCache.load: missing pre-computed mask files under "
                 f"{masks_dir}:\n{lines}\n\n"
                 "Every requested split/scenario must have its `.npz` file. "
-                "Either regenerate the missing masks or pass a different "
-                "`masks_file` directory."
+                "Download the complete masks accompanying the selected dataset "
+                "release and point `masks_file` at that directory."
             )
 
         return cache

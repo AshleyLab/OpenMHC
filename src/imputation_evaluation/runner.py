@@ -102,6 +102,7 @@ def run_eval(
             scenarios=scenario_names,
             splits=eval_splits,
         )
+        mask_cache.check_sample_keys(loaded_data.hf_dataset, loaded_data.split_indices)
     else:
         logger.info("Generating masks...")
         mask_generator = MaskCacheGenerator(

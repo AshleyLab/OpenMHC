@@ -62,10 +62,14 @@ After Phase 1 + 2 of the paper bootstrap, `${PAPER_OUT}/` contains:
    against `/share/software/user/open/python/3.12.1`). Has openmhc, pypots,
    pytorch_lightning, hydra-submitit-launcher. `scripts/dev/activate-openmhc.sh`
    activates it.
-2. **dataset cache** under `${MHC_CACHE}` (defaults to
-   `${SCRATCH_RUN_ROOT}/.myheartcounts-dataset-cache/data-full/`, populated by
-   `python -c "import openmhc; openmhc.download_dataset(version='full')"` — 292
-   GB, 11894 users).
+2. **Full dataset** under `${MHC_CACHE}` (defaults to
+   `${SCRATCH_RUN_ROOT}/.myheartcounts-dataset-cache/data-full/`, 11894 users),
+   installed using the [dataset setup instructions](../../../docs/manual-dataset-setup.md).
+   Include the matching release masks under
+   `${MHC_CACHE}/imputation/masks/sharable_users_seed42_2026_max91d/{val,test}/`.
+   Each split needs all six scenario files. `_common.sh` sets `MASKS` to this
+   directory; jobs and sweep configs use the same dataset root for masks,
+   daily data, and splits.
 3. **W&B credentials** at `~/.netrc` (`machine api.wandb.ai`) — needed for
    downloading paper checkpoints.
 
@@ -80,11 +84,16 @@ bash jobs/sherlock/imputation_eval/00_setup.sh
 # (optional) interactive smoke test before submitting
 sh_dev -t 1:00:00
 source jobs/sherlock/imputation_eval/_common.sh
+XS_ROOT="${SCRATCH_RUN_ROOT}/.myheartcounts-dataset-cache/data-xs"
+export MHC_DATA_DIR="$XS_ROOT"
 mhc-impute-eval method=mean data=xs masking=sleep_gap_only \
   hydra.run.dir=$OUT_BASE/_smoke \
-  data.daily_hf_dir=${SCRATCH_RUN_ROOT}/.myheartcounts-dataset-cache/data-xs/processed/daily_hf \
-  data.split_file=${SCRATCH_RUN_ROOT}/.myheartcounts-dataset-cache/data-xs/splits/sharable_users_seed42_2026.json
+  data.max_samples_per_split=null \
+  data.daily_hf_dir="$XS_ROOT/processed/daily_hf" \
+  +data.split_file="$XS_ROOT/splits/sharable_users_seed42_2026_xs.json" \
+  +masking.masks_file="$XS_ROOT/imputation/masks/sharable_users_seed42_2026_xs"
 ls $OUT_BASE/_smoke/{results.json,per_user_errors.parquet,pairs}
+export MHC_DATA_DIR="$MHC_CACHE"  # restore the Full root before submitting jobs
 
 # submit everything (7 imputer jobs + 1 paper-bootstrap with afterok dep)
 bash jobs/sherlock/imputation_eval/submit_all.sh
@@ -95,6 +104,9 @@ bash jobs/sherlock/imputation_eval/submit_all.sh
 # once jobs complete, check parity vs MHC-benchmark max91d
 python jobs/sherlock/imputation_eval/verify_parity.py
 ```
+
+The XS example disables the preset's 64-sample limit so the released masks
+align with the complete XS splits.
 
 ## Resource summary
 
@@ -182,7 +194,8 @@ the imputer jobs complete; mismatches → inspect:
 2. `${RUNS_ROOT}/<method>/openmhc_manifest.json::provenance.wandb_artifact`
    — confirm the same checkpoint version was used;
 3. masks: both should read from
-   `data/imputation/masks/sharable_users_seed42_2026_max91d`;
+   `<dataset_root>/imputation/masks/sharable_users_seed42_2026_max91d`
+   from the matching dataset release;
 4. normalization stats: the release bundle's
    `normalization_stats.json` must match the one MHC-benchmark trained
    against (`data/processed/pypotsdaily_h5/4bb0aa42/normalization_stats.json`).
