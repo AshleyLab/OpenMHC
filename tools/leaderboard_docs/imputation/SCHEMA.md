@@ -4,7 +4,7 @@ The Track-2 (imputation) leaderboard substrate is a set of per-method parquet
 files plus per-method JSON sidecars at the top level of the `imputation/` dir:
 
 ```
-imputation/<method>.parquet         # ~3 MB per method, zstd
+imputation/<method>.parquet         # ~0.3 MB per method, zstd
 imputation/<method>.meta.json       # display + diagnostic sidecar
 ```
 

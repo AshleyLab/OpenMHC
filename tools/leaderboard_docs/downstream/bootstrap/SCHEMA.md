@@ -9,7 +9,7 @@ downstream/bootstrap/draws.meta.json    # provenance sidecar
 
 This is the companion to the per-method `downstream/<method>.parquet` substrate
 (see `../SCHEMA.md`). The substrate is the raw per-user pairs; this is the
-**Phase-1 per-draw error frame** the skill / rank CIs reduce from, so a
+**Phase-1 per-draw error frame** the main skill / rank CIs reduce from, so a
 consumer can recompute the leaderboard intervals without re-running the (paired,
 1000-draw) bootstrap over the pairs.
 
@@ -39,10 +39,11 @@ precomputed here; Phase-2 derives all three from `E` (every metric is paired vs 
   (domain-balanced, clipped) and the cross-method rank are well-defined per draw.
 - **`draw = -1`** is the point estimate (the metric on the full test cohort); draws
   `0 … n_boot−1` are the paired bootstrap resamples.
-- **Paired resamples** — for each task the same `seed=42` resample indices are reused
-  across all methods, so per-draw cross-method comparisons (skill ratios, ranks) are
-  valid.
-- No NaN-filling: a `(task, draw)` cell with an undefined metric simply has no rows.
+- **Paired resamples** — each draw samples the entire declared test population
+  once; participant multiplicities are shared across all tasks and methods.
+  Task eligibility is fixed, while resampled task sizes vary. Seed: 42.
+- No NaN-filling: undefined metric cells are omitted. Single-class binary
+  task draws are omitted jointly across all methods; see metadata omissions.
 - Phase 2 filters on `subgroup_attr == "all"`, so draws holding `age_group` and `sex`
   rows from before `S_fair` was retired still work.
 
@@ -55,7 +56,11 @@ precomputed here; Phase-2 derives all three from `E` (every metric is paired vs 
   "baseline": "linear",                                 // skill baseline
   "methods": ["linear", "multirocket", "lsm2", "toto",
               "chronos2", "xgboost", "wbm", "gru_d"],   // 8 entries (incl. the baseline)
-  "n_tasks": 32
+  "n_tasks": 32,
+  "sampling_unit": "participant",
+  "sampling_population_n": 3569,
+  "shared_across": "all tasks and methods",
+  "fallback_policy": "direct_substitution"
 }
 ```
 
@@ -63,7 +68,9 @@ precomputed here; Phase-2 derives all three from `E` (every metric is paired vs 
 
 - Evaluated against the canonical split `sharable_users_seed42_2026` (`test`).
 - Track-1 baseline for skill: `linear`.
-- Skill is **domain-balanced macro** (mean over the 5 domains' geomean ratios).
+- Skill is **domain-balanced macro**: compute one minus the geometric mean
+  of clipped error ratios within each domain, then average the five domain skills.
+  The current reference contains no subgroup or worst-subgroup CIs.
 - Format: single Parquet, dictionary-encoded string columns, `float32` `E`, `zstd`
   compression.
 

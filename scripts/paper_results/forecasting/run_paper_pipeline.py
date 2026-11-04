@@ -41,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 # scripts/paper_results/forecasting/run_paper_pipeline.py -> parents[3] = repo root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Retired with S_fair. A file that still sets them fails rather than being half-honored.
+RETIRED_BOOTSTRAP_KEYS = frozenset(
+    {"fairness", "age_bins", "bca", "labels_path", "enrollment_path"}
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -288,8 +292,7 @@ def _phase_bootstrap(
     bca_skill_rank = bool(bs.get("bca_skill_rank", False))
     within = cfg.get("within_user_aggregation", "micro")
     logger.info(
-        "Phase 3 bootstrap: B=%d seed=%d ci=%.2f over %d models (baseline=%s) "
-        "[skill/rank BCa=%s]",
+        "Phase 3 bootstrap: B=%d seed=%d ci=%.2f over %d models (baseline=%s) [skill/rank BCa=%s]",
         n_boot,
         seed,
         ci_level,
@@ -332,6 +335,11 @@ def main() -> int:
     """CLI entry point — see module docstring for usage."""
     args = _parse_args()
     cfg = yaml.safe_load(args.sweep_config.read_text())
+    retired = sorted(RETIRED_BOOTSTRAP_KEYS & set(cfg.get("bootstrap") or {}))
+    if retired:
+        raise SystemExit(
+            f"{args.sweep_config} has bootstrap keys retired with S_fair, remove them: {retired}"
+        )
 
     if args.run_label:
         cfg["run_label"] = args.run_label

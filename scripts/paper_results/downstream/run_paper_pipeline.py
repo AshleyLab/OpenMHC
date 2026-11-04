@@ -44,6 +44,8 @@ log = logging.getLogger(__name__)
 HERE = Path(__file__).resolve().parent
 # scripts/paper_results/downstream/run_paper_pipeline.py -> parents[3] = repo root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Retired with S_fair. A file that still sets them fails rather than being half-honored.
+RETIRED_KEYS = frozenset({"fairness_attributes"})
 
 
 def _run(cmd: list[str], dry_run: bool, env: dict | None = None) -> None:
@@ -153,6 +155,9 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = yaml.safe_load(args.config.read_text())
+    retired = sorted(RETIRED_KEYS & set(cfg))
+    if retired:
+        raise SystemExit(f"{args.config} has keys retired with S_fair, remove them: {retired}")
     methods = args.methods or cfg["methods"]
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)

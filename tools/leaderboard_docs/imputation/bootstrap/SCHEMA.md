@@ -3,16 +3,16 @@
 The Track-2 bootstrap reference is two files:
 
 ```
-imputation/bootstrap/draws.parquet      # ~107 MB zstd
+imputation/bootstrap/draws.parquet      # ~16 MB zstd
 imputation/bootstrap/draws.meta.json    # provenance sidecar
 ```
 
 ## `draws.parquet`
 
 One row per `(method, scenario, split, channel, channel_type,
-subgroup_attr, subgroup_value, draw)`. Approximate size: **11,374,208
+subgroup_attr, subgroup_value, draw)`. Approximate size: **1,184,000
 rows** for the canonical 1000-draw / 16-method / 6-scenario / test-split
-run; `~107 MB` compressed (`zstd`).
+run; `~16 MB` compressed (`zstd`).
 
 | column | type | description |
 |---|---|---|

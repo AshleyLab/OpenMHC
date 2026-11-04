@@ -7,15 +7,15 @@ the only difference is the method pool. This variant adds
 The 17-method bootstrap reference is two files:
 
 ```
-imputation/bootstrap_with_dense_weekly/draws.parquet      # ~116 MB zstd
+imputation/bootstrap_with_dense_weekly/draws.parquet      # ~17 MB zstd
 imputation/bootstrap_with_dense_weekly/draws.meta.json    # provenance sidecar
 ```
 
 ## `draws.parquet`
 
 One row per `(method, scenario, split, channel, channel_type,
-subgroup_attr, subgroup_value, draw)`. Approximate size: **~12.1M rows**
-for the 1000-draw / 17-method / 6-scenario / test-split run; `~116 MB`
+subgroup_attr, subgroup_value, draw)`. Approximate size: **1,258,000 rows**
+for the 1000-draw / 17-method / 6-scenario / test-split run; `~17 MB`
 compressed (`zstd`).
 
 | column | type | description |

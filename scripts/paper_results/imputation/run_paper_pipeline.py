@@ -51,6 +51,18 @@ logger = logging.getLogger(__name__)
 # Resolve repo root from this script's location
 # (scripts/paper_results/imputation/run_paper_pipeline.py -> parents[3]).
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Retired with S_fair. A file that still sets them fails rather than being half-honored.
+RETIRED_KEYS = frozenset(
+    {
+        "include_fairness",
+        "age_bins",
+        "exclude_unknown",
+        "lambda_fairness",
+        "fairness_combine",
+        "disparity_fns",
+        "bca",
+    }
+)
 
 
 def _expand_env_vars(obj: Any) -> Any:
@@ -280,6 +292,11 @@ def main() -> int:
     """CLI entry point — see module docstring for usage."""
     args = _parse_args()
     cfg = _expand_env_vars(yaml.safe_load(args.sweep_config.read_text()))
+    retired = sorted(RETIRED_KEYS & set(cfg))
+    if retired:
+        raise SystemExit(
+            f"{args.sweep_config} has keys retired with S_fair, remove them: {retired}"
+        )
 
     methods = cfg["methods"]
     if args.methods:

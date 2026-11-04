@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 _SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts" / "paper_results" / "imputation"
 if str(_SCRIPT_DIR) not in sys.path:
@@ -154,3 +155,38 @@ def test_phase2_raises_if_baseline_not_in_filter(captured_cmds):
         run_paper_pipeline._phase2_aggregate(cfg, dry_run=True)
     # Nothing was dispatched — the guardrail fires before _run is called.
     assert captured_cmds == []
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "include_fairness",
+        "age_bins",
+        "exclude_unknown",
+        "lambda_fairness",
+        "fairness_combine",
+        "disparity_fns",
+        "bca",
+    ],
+)
+def test_retired_fairness_keys_fail(key, tmp_path, monkeypatch, captured_cmds):
+    """A sweep that still asks for fairness must not run without it."""
+    config = tmp_path / "sweep.yaml"
+    config.write_text(yaml.safe_dump({key: False, "methods": []}))
+    monkeypatch.setattr(sys, "argv", ["run", "--sweep-config", str(config)])
+    with pytest.raises(SystemExit, match=key):
+        run_paper_pipeline.main()
+    assert not captured_cmds
+
+
+@pytest.mark.parametrize(
+    "sweep",
+    [
+        "configs/paper/sweep_methods.yaml",
+        "jobs/sherlock/imputation_eval/sweep_methods.yaml",
+        "jobs/sherlock/imputation_eval/sweep_methods_no_dense.yaml",
+    ],
+)
+def test_shipped_sweeps_have_no_retired_keys(sweep):
+    cfg = yaml.safe_load((Path(__file__).resolve().parent.parent / sweep).read_text())
+    assert not run_paper_pipeline.RETIRED_KEYS & set(cfg)

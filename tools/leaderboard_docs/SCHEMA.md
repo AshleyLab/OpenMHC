@@ -18,7 +18,7 @@ One row per `(method, task, task_type, subgroup_attr, subgroup_value, user_id)`.
 | `user_id` | string (dict) | pseudonymous participant id — the bootstrap cluster unit |
 | `y_true` | float32 | ground-truth label for the `(task, user)` cell |
 | `y_pred` | float32 | the model's prediction, by task type: a thresholded class for binary, and the continuous score for ordinal and regression (ordinal is scored with rank-based Spearman, so the raw score is kept rather than rounded to a class) |
-| `y_proba` | float32 | the model's continuous score — class-1 probability for binary, point prediction otherwise (the column the ranking/correlation metrics read) |
+| `y_proba` | float32 | continuous binary score used by average precision; ordinal/regression primary metrics read `y_pred` |
 
 ### Why pairs, not an error
 

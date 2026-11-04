@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import average_precision_score
 
@@ -350,6 +351,34 @@ def module(name, relative):
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
     return loaded
+
+
+def test_pipeline_rejects_retired_fairness_keys(tmp_path, monkeypatch):
+    """A config that still asks for fairness must not run without it."""
+    pipeline = module(
+        "downstream_pipeline_test",
+        "scripts/paper_results/downstream/run_paper_pipeline.py",
+    )
+    config = tmp_path / "paper.yaml"
+    out = tmp_path / "out"
+    config.write_text(
+        yaml.safe_dump(
+            {"fairness_attributes": ["sex"], "methods": ["model"], "output_dir": str(out)}
+        )
+    )
+    monkeypatch.setattr(sys, "argv", ["run", "--config", str(config)])
+    with pytest.raises(SystemExit, match="fairness_attributes"):
+        pipeline.main()
+    assert not out.exists()
+
+
+def test_shipped_paper_config_has_no_retired_keys():
+    pipeline = module(
+        "downstream_pipeline_test",
+        "scripts/paper_results/downstream/run_paper_pipeline.py",
+    )
+    cfg = yaml.safe_load((pipeline.REPO_ROOT / "configs/paper/downstream_paper.yaml").read_text())
+    assert not pipeline.RETIRED_KEYS & set(cfg)
 
 
 def test_pipeline_forwards_split_and_bootstrap_options():

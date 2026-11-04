@@ -91,6 +91,16 @@ def test_bootstrap_cli_writes_only_all_rows(method_dirs, tmp_path, monkeypatch):
     assert not {"include_fairness", "age_bins", "exclude_unknown"} & set(meta)
 
 
+def test_hydra_config_with_retired_sensitivity_fails():
+    """The CLI drops unknown keys, so this one has to be rejected by name."""
+    from omegaconf import OmegaConf
+
+    from imputation_evaluation.hydra.cli import main
+
+    with pytest.raises(ValueError, match="sensitivity"):
+        main(OmegaConf.create({"sensitivity": {"enabled": True}}))
+
+
 @pytest.mark.parametrize("flag", ["--no-fairness", "--exclude-unknown"])
 def test_bootstrap_cli_rejects_retired_flags(flag, tmp_path, monkeypatch):
     """Retired flags fail instead of being ignored."""

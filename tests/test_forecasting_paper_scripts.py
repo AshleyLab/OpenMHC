@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import pytest
+import yaml
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts/paper_results/forecasting"
 
@@ -39,6 +41,21 @@ def test_draws_hold_only_skill_and_rank(tmp_path, monkeypatch):
     assert set(draws["reduction"].astype(str)) == {"skill", "rank"}
     assert meta["reductions"] == ["skill", "rank"]
     assert "age_bins" not in meta
+
+
+@pytest.mark.parametrize("key", ["fairness", "age_bins", "bca", "labels_path", "enrollment_path"])
+def test_retired_bootstrap_keys_fail(key, tmp_path, monkeypatch):
+    """A sweep that still asks for fairness must not run without it."""
+    config = tmp_path / "sweep.yaml"
+    config.write_text(yaml.safe_dump({"bootstrap": {key: False}}))
+    monkeypatch.setattr(sys, "argv", ["run", "--sweep-config", str(config)])
+    with pytest.raises(SystemExit, match=key):
+        _load("run_paper_pipeline").main()
+
+
+def test_shipped_sweep_has_no_retired_bootstrap_keys():
+    cfg = yaml.safe_load((SCRIPTS.parents[2] / "configs/paper/sweep_forecasting.yaml").read_text())
+    assert not _load("run_paper_pipeline").RETIRED_BOOTSTRAP_KEYS & set(cfg["bootstrap"])
 
 
 def test_pipeline_bootstrap_writes_only_skill_and_rank(tmp_path, monkeypatch):

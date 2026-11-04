@@ -50,13 +50,13 @@ compression.
 | `user_id` | string (dict) | participant id from the canonical split |
 | `y_true` | float32 | ground-truth label for this `(task, user)` |
 | `y_pred` | float32 | the model's prediction, by task type: a thresholded class for binary, a rounded class for multiclass, and the continuous score for ordinal and regression (ordinal is scored with rank-based Spearman, so the raw score is kept rather than rounded to a class) |
-| `y_proba` | float32 | the model's continuous score — class-1 probability for binary, point prediction otherwise (the column the ranking/correlation metrics read) |
+| `y_proba` | float32 | continuous binary score used by average precision; ordinal/regression primary metrics read `y_pred` |
 
 ### Value semantics
 
-- **Missing-prediction fallback is already applied.** A participant the model
-  could not produce a finite prediction for has been scored against the `linear`
-  baseline before this file is written (the fraction substituted is reported in
+- **Missing-prediction fallback is already applied.** Non-finite model predictions
+  are replaced with the corresponding `linear` baseline predictions before
+  this file is written (the fraction substituted is reported in
   `fallback_rate` — see the sidecar). There are no NaN pairs.
 - **Structurally-absent tasks are omitted, not NaN-filled.** A task with no
   eligible test cohort simply has no rows.
