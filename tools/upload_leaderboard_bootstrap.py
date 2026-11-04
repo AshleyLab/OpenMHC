@@ -4,7 +4,7 @@ Companion to ``upload_leaderboard_substrate.py``. Where that tool uploads
 per-method substrate parquets (one file per method, under
 ``<track>/<method>.parquet``), this one uploads the **bootstrap reference**
 for a track — the Phase-1 long-format per-(method, scenario, channel, draw)
-E / R / rank frame that drives skill / rank / fairness CIs:
+E / R / rank frame that drives skill / rank CIs:
 
   * ``bootstrap_draws.parquet`` + ``.meta.json``
 

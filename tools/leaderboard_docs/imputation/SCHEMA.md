@@ -16,9 +16,14 @@ substrates via `scripts/paper_results/imputation/bootstrap_imputation_draws.py`.
 ## `<method>.parquet`
 
 One row per `(method, scenario, split, channel, channel_type,
-subgroup_attr, subgroup_value, user_id)`. Roughly **148,510 rows per method**
-for the canonical config (test split, 17 methods, 6 scenarios, 19 sensor
-channels + 2 collapsed-binary tasks, 3 subgroup attributes).
+subgroup_attr, subgroup_value, user_id)`. Roughly **47,900 rows per method**
+for the canonical config (test split, 6 scenarios, 19 sensor channels + 2
+collapsed-binary tasks).
+
+> **Older snapshots.** Files built before `S_fair` was retired also hold
+> `age_group` and `sex` rows (roughly 148,510 rows per method). No reducer in the
+> code repo reads them; filter on `subgroup_attr == "all"`. A cohort view is a
+> membership filter of the `all` rows.
 
 | column | type | description |
 |---|---|---|
@@ -27,13 +32,13 @@ channels + 2 collapsed-binary tasks, 3 subgroup attributes).
 | `split` | string | data split — `test` (val is for development only and is not part of the leaderboard substrate) |
 | `channel` | string | `ch_0`–`ch_18` (19 sensor channels) or `cat_collapsed:sleep` / `cat_collapsed:workouts` (collapsed-binary tasks) |
 | `channel_type` | string | `continuous` (`ch_0`–`ch_6`), `binary` (`ch_7`–`ch_18`), or `binary_collapsed` (the `cat_collapsed:*` tasks) |
-| `subgroup_attr` | string | `all` (global cell), `age_group`, or `sex` |
-| `subgroup_value` | string | `all` for the global cell; otherwise the subgroup level (age bucket `18-29`/`30-39`/`40-49`/`50-59`/`60+`/`unknown`, or `male`/`female`/`unknown` for sex) |
+| `subgroup_attr` | string | `all` |
+| `subgroup_value` | string | `all` |
 | `user_id` | string | per-user identifier from the OpenMHC canonical split |
 | `E_per_user` | float32 | per-user error — `continuous` = per-user MAE; `binary` = `1 − AUC` (un-floored); `binary_collapsed` = `nanmean` over the category's channels of `1 − AUC[user, ch]`. NaN rows are dropped before the parquet is written. |
 
 Values match the bootstrap's `_per_user_errors_for_cell` semantics, so
-re-aggregating across methods (rank, skill, fairness) produces identical
+re-aggregating across methods (rank, skill) produces identical
 numbers to the bootstrap reference's E column collapsed over draws.
 
 ## `<method>.meta.json`

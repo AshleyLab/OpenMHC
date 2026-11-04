@@ -56,8 +56,8 @@ jobs → chain `run_paper_pipeline.sbatch --skip-eval` via `afterok`).
 - **Phase 0 (eval)** — per method: `mhc-impute-eval` with `evaluation.save_pairs=true`.
 - **Phase 1 (bootstrap)** — `bootstrap_imputation_draws.py`: paired participant-level
   bootstrap → `bootstrap_draws.parquet`.
-- **Phase 2 (aggregate)** — `aggregate_imputation_paper_metrics.py`: skill / rankings /
-  fairness with bootstrap CIs → sidecar CSVs.
+- **Phase 2 (aggregate)** — `aggregate_imputation_paper_metrics.py`: skill / rankings
+  with bootstrap CIs → sidecar CSVs.
 
 SLURM: `jobs/sherlock/imputation_eval/submit_all.sh` (fan out → `run_paper_bootstrap.sbatch`
 via `afterok`) + `babysit.sh` watchdog.

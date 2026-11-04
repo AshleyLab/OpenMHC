@@ -3,7 +3,8 @@
 Single-method runner. Feeds a SLURM array (one task per method) that
 populates ``paper-verification/per_user/<method>.parquet`` for every
 method enumerated in ``paper/bootstrap_method_dirs.json``. The output
-set then drives §2 (point parity) and §3 (bootstrap parity).
+set then drives §2 (point parity) and §3 (bootstrap parity). It holds only
+``"all"`` rows, the same rows the runner writes to its own per_user_errors.parquet.
 
 Parity against today's pooled ``paper/per_user_errors.parquet`` was
 already established for ``locf`` in §1; that test pins the producer's
@@ -24,8 +25,6 @@ from imputation_evaluation.evaluation.per_user_errors import (
     build_per_user_errors,
     write_per_user_errors_parquet,
 )
-from imputation_evaluation.sensitivity import sample_subgroups
-from labels.api import AGE_GROUP_EDGES
 
 logger = logging.getLogger(__name__)
 
@@ -77,26 +76,12 @@ def main() -> int:
         logger.error("REFUSING to write under paper/: %s", out_path)
         return 2
 
-    # Subgroup mappings — use this method's own manifest. Manifests across
-    # methods agree on (sample_idx → user_id, date) per the bootstrap's
-    # _assert_manifests_agree check, so per-method demographic bucketing is
-    # identical to using the reference method's manifest.
-    subgroup_mappings: dict[str, dict[int, dict[str, str]]] = {}
-    for split in args.splits:
-        sg = sample_subgroups(pairs_dir, split)
-        if sg is None:
-            logger.error("Could not build subgroup mapping for split=%s", split)
-            return 2
-        subgroup_mappings[split] = sg
-
     per_user_df, _display = build_per_user_errors(
         method_pairs_dir=pairs_dir,
         method_name=args.method,
         scenarios=args.scenarios,
         splits=args.splits,
-        subgroup_mappings=subgroup_mappings,
         include_auc=True,
-        exclude_unknown=False,
     )
     logger.info("method=%s rows=%d", args.method, len(per_user_df))
     if per_user_df.empty:
@@ -107,7 +92,6 @@ def main() -> int:
         "method": args.method,
         "scenarios": args.scenarios,
         "splits": args.splits,
-        "age_bins": list(AGE_GROUP_EDGES),
         "source_pairs": str(pairs_dir),
         "purpose": "Phase B per-method per_user_errors fan-out",
     }

@@ -1,12 +1,9 @@
 """Keep target dates and eligibility while using enrollment ages for subgroups."""
 
-import importlib.util
 import json
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pytest
 
 from labels import api
@@ -204,7 +201,6 @@ def test_linear_age_covariate_keeps_reference_missingness_and_exclusions(caller_
 def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_path):
     """Survey/sample/fixed dates cannot change enrollment subgroups in any track."""
     from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from imputation_evaluation.sensitivity import build_subgroup_mapping
     from openmhc._label_paths import LabelPaths
 
     folder, _ = caller_dataset
@@ -213,20 +209,11 @@ def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_pa
     write_subgroup_map(out, users)
     prediction = json.loads((out / "_subgroups.json").read_text())
     explicit = api.user_demographics(users, paths=LabelPaths.resolve(folder.parent))
-    hf = {"user_id": users + ["known"], "date": ["1900-01-01"] * len(users) + ["2099-01-01"]}
-    impute = build_subgroup_mapping(hf, {"test": list(range(len(users) + 1))})["test"]
     expected = {u: "unknown" for u in users}
     expected.update(known="30-39", no_target="40-49")
     assert {u: prediction[u]["age_group"] for u in users} == expected
     assert {u: explicit[u]["age_group"] for u in users} == expected
-    assert {u: impute[i]["age_group"] for i, u in enumerate(users)} == expected
-    assert impute[len(users)]["age_group"] == "30-39"
-    assert (
-        prediction["known"]["sex"]
-        == explicit["known"]["sex"]
-        == impute[users.index("known")]["sex"]
-        == "male"
-    )
+    assert prediction["known"]["sex"] == explicit["known"]["sex"] == "male"
     assert api.age_at_enrollment("known") == 39
     assert api.age_at("known", pd.Timestamp("2025-06-01")) == 45
 
@@ -239,56 +226,6 @@ def test_invalid_enrollment_date_never_uses_stored_age(created_on):
     )
     with pytest.raises((KeyError, ValueError)):
         enrollment.age_at_enrollment("u")
-
-
-@pytest.mark.parametrize(
-    "script",
-    [
-        "compute_imputation_paper_metrics.py",
-        "imputation/bootstrap_imputation_draws.py",
-        "imputation/parity/produce_per_method_per_user_errors.py",
-        "imputation/parity/parity_locf.py",
-    ],
-)
-def test_offline_imputation_scripts_share_sample_subgroups(script):
-    """Saved-pair analysis uses the one mapping, not its own copy."""
-    from imputation_evaluation.sensitivity import sample_subgroups
-
-    path = Path(__file__).resolve().parents[1] / "scripts/paper_results" / script
-    spec = importlib.util.spec_from_file_location("age_offline_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    assert module.sample_subgroups is sample_subgroups
-
-
-def test_sample_subgroups_use_enrollment_for_repeated_samples(
-    caller_dataset, tmp_path, monkeypatch
-):
-    """Saved-pair analysis shares live age semantics, including repeated samples."""
-    from imputation_evaluation.evaluation import pair_writer
-    from imputation_evaluation.sensitivity import sample_subgroups
-
-    manifest = pa.table(
-        {
-            "sample_idx": [7, 2, 9, 4],
-            "user_id": ["known", "known", "no_target", "missing_year"],
-            "date": ["1900-01-01", "2099-01-01", "invalid", "2025-01-01"],
-        }
-    )
-    monkeypatch.setattr(pair_writer, "load_sample_manifest", lambda *args: manifest)
-    groups = sample_subgroups(tmp_path, "test")
-    assert {i: row["age_group"] for i, row in groups.items()} == {
-        7: "30-39",
-        2: "30-39",
-        9: "40-49",
-        4: "unknown",
-    }
-
-
-def test_sample_subgroups_without_manifest(caller_dataset, tmp_path):
-    from imputation_evaluation.sensitivity import sample_subgroups
-
-    assert sample_subgroups(tmp_path, "test") is None
 
 
 def test_callers_follow_dataset_switches(caller_dataset, tmp_path):

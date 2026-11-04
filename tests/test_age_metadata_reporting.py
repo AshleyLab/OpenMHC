@@ -41,13 +41,6 @@ def _groups(track, inputs, users):
 
         write_subgroup_map(output, users)
         return json.loads((output / "_subgroups.json").read_text())
-    if track == "imputation":
-        from imputation_evaluation.sensitivity import build_subgroup_mapping
-        groups = build_subgroup_mapping(
-            {"user_id": users},
-            {"test": list(range(len(users)))},
-        )["test"]
-        return {uid: groups[i] for i, uid in enumerate(users)}
     from labels import user_demographics
     from openmhc._label_paths import LabelPaths
 
@@ -58,7 +51,7 @@ def _coverage_warnings(caplog):
     return [r.getMessage() for r in caplog.records if "unknown age groups" in r.getMessage()]
 
 
-@pytest.mark.parametrize("track", ["prediction", "imputation", "explicit_paths"])
+@pytest.mark.parametrize("track", ["prediction", "explicit_paths"])
 def test_partial_age_coverage_warns_and_keeps_users(track, demographic_inputs, caplog):
     """Count unique users, retain sex and unknown ages, and warn once per cohort."""
     caplog.set_level(logging.WARNING)
@@ -73,7 +66,7 @@ def test_partial_age_coverage_warns_and_keeps_users(track, demographic_inputs, c
     assert "no usable age groups" not in warnings[0]
 
 
-@pytest.mark.parametrize("track", ["prediction", "imputation", "explicit_paths"])
+@pytest.mark.parametrize("track", ["prediction", "explicit_paths"])
 @pytest.mark.parametrize(
     "record",
     [
@@ -102,7 +95,7 @@ def test_all_unknown_ages_warn_that_fairness_is_unavailable(
     assert "Age-based fairness has no usable age groups" in warnings[0]
 
 
-@pytest.mark.parametrize("track", ["prediction", "imputation", "explicit_paths"])
+@pytest.mark.parametrize("track", ["prediction", "explicit_paths"])
 def test_absent_enrollment_record_is_reported_and_retained(track, demographic_inputs, caplog):
     """Missing participants are counted without removing them from the output."""
     caplog.set_level(logging.WARNING)
@@ -111,7 +104,7 @@ def test_absent_enrollment_record_is_reported_and_retained(track, demographic_in
     assert "1/2 users have unknown age groups" in _coverage_warnings(caplog)[0]
 
 
-@pytest.mark.parametrize("track", ["prediction", "imputation", "explicit_paths"])
+@pytest.mark.parametrize("track", ["prediction", "explicit_paths"])
 @pytest.mark.parametrize("payload", ['{"good":', "[]", "null", '"not an object"'])
 def test_corrupt_enrollment_raises_instead_of_unknown(track, payload, demographic_inputs, caplog):
     """File-level errors must not be swallowed by per-user missing-age handling."""
@@ -124,7 +117,7 @@ def test_corrupt_enrollment_raises_instead_of_unknown(track, payload, demographi
     assert not (output / "_subgroups.json").exists()
 
 
-@pytest.mark.parametrize("track", ["prediction", "imputation", "explicit_paths"])
+@pytest.mark.parametrize("track", ["prediction", "explicit_paths"])
 def test_missing_enrollment_file_raises(track, demographic_inputs, caplog):
     """A missing file is an installation error, not a cohort of unknown ages."""
     folder, _ = demographic_inputs
@@ -134,7 +127,7 @@ def test_missing_enrollment_file_raises(track, demographic_inputs, caplog):
     assert not _coverage_warnings(caplog)
 
 
-@pytest.mark.parametrize("track", ["prediction", "imputation", "explicit_paths"])
+@pytest.mark.parametrize("track", ["prediction", "explicit_paths"])
 @pytest.mark.parametrize("users", [[], ["good"]])
 def test_no_unknown_ages_has_no_warning(track, users, demographic_inputs, caplog):
     """Valid and empty cohorts must not generate missing-age warnings."""

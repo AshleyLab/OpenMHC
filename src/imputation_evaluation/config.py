@@ -278,15 +278,6 @@ class VisualizationConfig:
 
 
 @dataclass
-class SensitivityConfig:
-    """Sensitivity analysis configuration for demographic subgroup evaluation."""
-
-    enabled: bool = False
-    age_bins: list[int] = field(default_factory=lambda: [18, 30, 40, 50, 60])
-    # Derived bin labels: "18-29", "30-39", "40-49", "50-59", "60+"
-
-
-@dataclass
 class WandbConfig:
     """Weights & Biases logging configuration."""
 
@@ -308,5 +299,4 @@ class ImputationEvalConfig:
     output: OutputConfig = field(default_factory=OutputConfig)
     evaluation: EvalConfig = field(default_factory=EvalConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
-    sensitivity: SensitivityConfig = field(default_factory=SensitivityConfig)
     wandb: WandbConfig = field(default_factory=WandbConfig)

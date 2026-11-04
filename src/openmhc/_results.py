@@ -163,9 +163,8 @@ class ImputationResults:
             (:func:`imputation_evaluation.evaluation.per_user_errors.build_per_user_errors`).
             Schema: ``[method, scenario, split, channel, channel_type,
             subgroup_attr, subgroup_value, user_id, E_per_user]`` — the
-            same long format consumed by the paper Phase 2 aggregators
-            and the BCa LOO jackknife. Populated by
-            ``evaluate_imputation``; when ``output_dir`` is set this frame
+            same long format consumed by the paper Phase 2 aggregators.
+            Populated by ``evaluate_imputation``; when ``output_dir`` is set this frame
             is also written to
             ``<output_dir>/per_user_errors.parquet``.
         skill_scores: Optional ``DataFrame`` of paired-R skill scores
@@ -299,7 +298,7 @@ class ImputationResults:
         ``MyHeartCounts/OpenMHC-leaderboard-data``. The per-user substrate
         parquet (``per_user_errors.parquet``, written when you pass
         ``output_dir=`` to ``evaluate_imputation``) is the second PR file; the
-        maintainers compute skill / fair-skill / rank from it vs. LOCF.
+        maintainers compute skill / rank from it vs. LOCF.
         ``paper_url`` is optional.
         """
         from openmhc._submission import imputation_to_submission_yaml

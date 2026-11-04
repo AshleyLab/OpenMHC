@@ -25,8 +25,8 @@ compressed (`zstd`).
 | `split` | string (dict) | data split — `test` |
 | `channel` | string (dict) | `ch_0`..`ch_18` (19 sensor channels) or `cat_collapsed:sleep` / `cat_collapsed:workouts` (collapsed-binary tasks) |
 | `channel_type` | string (dict) | `continuous` (`ch_0`–`ch_6`), `binary` (`ch_7`–`ch_18`), or `binary_collapsed` (the `cat_collapsed:*` tasks) |
-| `subgroup_attr` | string (dict) | `all` (global cell), `age_group`, or `sex` |
-| `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (age bucket, sex value, or `unknown`) |
+| `subgroup_attr` | string (dict) | `all` |
+| `subgroup_value` | string (dict) | `all` |
 | `draw` | int32 | bootstrap-draw index in `[0, n_boot)` |
 | `E` | float32 | absolute error for this draw, user-macro reduced |
 | `R` | float32 | paired ratio vs baseline (`locf`) for this draw, geomean over users; `1.0` exactly for the baseline-vs-self row, `NaN` if undefined |
@@ -43,6 +43,11 @@ size is 17 here vs 16 there. `E` and `R` for each `(method, scenario,
 split, channel, subgroup, draw)` row that exists in both files are
 byte-identical.
 
+> **Older snapshots.** Files built before `S_fair` was retired also hold
+> `age_group` and `sex` rows, and their `draws.meta.json` has `include_fairness`,
+> `age_bins` and `exclude_unknown` keys. No reducer in the code repo reads either;
+> filter on `subgroup_attr == "all"`.
+
 ## `draws.meta.json`
 
 Same shape as the canonical variant. `methods` is the 17-element list
@@ -52,7 +57,7 @@ including `lsm2_weekly`. See
 ## Conventions
 
 - Evaluated against the canonical split `sharable_users_seed42_2026` (`test`).
-- Track-2 baseline for skill / fairness: `locf`.
+- Track-2 baseline for skill: `locf`.
 - Format: single Parquet, dictionary-encoded categoricals, `float32` errors,
   `int32` draw index, `zstd` compression.
 - Resamples are paired across methods — same `boot_idx` matrix per split,

@@ -524,7 +524,7 @@ class ImputationEvaluator:
         np.save(stds_path, channel_stds)
         logger.info(f"Saved channel_stds to {stds_path}")
 
-        # Save sample manifests for post-hoc sensitivity analysis
+        # Save sample manifests for the per-user reduction of the saved pairs
         if split_indices is not None and hf_dataset is not None:
             from imputation_evaluation.evaluation.pair_writer import write_sample_manifest
 

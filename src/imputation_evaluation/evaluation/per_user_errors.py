@@ -13,19 +13,14 @@ The producer takes **one method's** pairs directory and emits:
     semantics: continuous = per-user MAE (``sae / n``); binary =
     ``1 − AUC`` (un-floored); collapsed binary = ``nanmean`` over the
     category's channels of ``1 − AUC[user, ch]``. NaN per-user values
-    are dropped (one row per (user × cell × channel) that has data).
+    are dropped (one row per (user × channel) that has data).
+    ``subgroup_attr`` and ``subgroup_value`` hold the constant ``"all"``.
 
-  * ``display_metrics`` — ``{(scenario, split): metrics_dict}`` for the
-    **global** ("all", "all") cell only. Carries user-macro per-channel
-    display metrics (``mae``, ``rmse``, ``normalized_*``,
+  * ``display_metrics`` — ``{(scenario, split): metrics_dict}``. Carries
+    user-macro per-channel display metrics (``mae``, ``rmse``, ``normalized_*``,
     ``balanced_accuracy``, ``roc_auc``, ``n_masked``) plus the
     ``continuous`` / ``binary`` headline aggregates. Used by
     :class:`openmhc._results.ImputationResults` to populate ``scenarios``.
-
-Subgroup cells (``subgroup_attr`` / ``subgroup_value`` ≠ ``"all"``) are
-emitted **only** into ``per_user_df``; the display table covers the
-global cell because that is what ``ImputationResults.scenarios``
-exposes today.
 
 Scenario-level binary filtering — binary and ``cat_collapsed:*`` rows
 for scenarios in :data:`EXCLUDE_BINARY_SCENARIOS` are dropped, matching
@@ -49,10 +44,7 @@ from imputation_evaluation.evaluation.bootstrap_skill_rank import (
     read_per_user_errors_parquet,
     write_per_user_errors_parquet,
 )
-from imputation_evaluation.evaluation.pair_aggregator import (
-    aggregate_pairs,
-    aggregate_pairs_by_subgroup,
-)
+from imputation_evaluation.evaluation.pair_aggregator import aggregate_pairs
 from imputation_evaluation.evaluation.paper_metrics_core import EXCLUDE_BINARY_SCENARIOS
 
 logger = logging.getLogger(__name__)
@@ -91,8 +83,6 @@ def per_user_map_to_rows(
     method: str,
     scenario: str,
     split: str,
-    subgroup_attr: str,
-    subgroup_value: str,
     include_auc: bool = True,
 ) -> list[tuple]:
     """Flatten a ``{channel_label: {user_id: E}}`` map into 9-column tuples.
@@ -128,8 +118,8 @@ def per_user_map_to_rows(
                     split,
                     ch_key,
                     ch_type,
-                    subgroup_attr,
-                    subgroup_value,
+                    "all",
+                    "all",
                     user_id,
                     float(e),
                 )
@@ -170,21 +160,14 @@ def build_per_user_errors(
     *,
     scenarios: list[str],
     splits: list[str],
-    subgroup_mappings: dict[str, dict[int, dict[str, str]]] | None = None,
     channel_stds: np.ndarray | None = None,
     include_auc: bool = True,
-    exclude_unknown: bool = False,
 ) -> tuple[pd.DataFrame, dict[tuple[str, str], dict]]:
     """Produce one method's per-user errors + display metrics in one pass.
 
     For each ``(scenario, split)`` under ``method_pairs_dir`` this calls
-
-      * :func:`aggregate_pairs` with ``return_per_user=True`` for the
-        global ``("all", "all")`` cell — yielding both the per-channel
-        display dict and the ``per_user`` map; and
-      * :func:`aggregate_pairs_by_subgroup` with ``return_per_user=True``
-        when a ``subgroup_mapping`` for that split is provided — yielding
-        the per-cell ``per_user`` maps only (display metrics are global).
+    :func:`aggregate_pairs` with ``return_per_user=True``, yielding both the
+    per-channel display dict and the ``per_user`` map.
 
     The producer is the **single** importable entry point for
     ``per_user_errors`` generation. The public API, ``mhc-impute-eval``
@@ -203,10 +186,6 @@ def build_per_user_errors(
         scenarios: Scenario names to process. Scenarios with no
             ``<scenario>/<split>/`` dir are skipped with a warning.
         splits: Split names to process (e.g. ``["test"]``).
-        subgroup_mappings: Optional
-            ``{split: {sample_idx: {attr: value}}}`` built externally
-            (mirrors ``bootstrap_imputation_draws.py::_build_subgroup_mapping``).
-            When ``None``, only the global cell is emitted.
         channel_stds: Per-channel stds; falls back to
             ``method_pairs_dir / "channel_stds.npy"``. Per-user
             ``E`` is std-independent (``sae/n`` and ``1 − AUC``); stds
@@ -215,8 +194,6 @@ def build_per_user_errors(
             ``binary_collapsed`` row. Mirrors the bootstrap's
             ``include_auc`` semantics so the producer's per-user row set
             matches the bootstrap's per-user emission for both branches.
-        exclude_unknown: Skip subgroup cells with
-            ``subgroup_value == "unknown"`` (matches the paper-script flag).
 
     Returns:
         ``(per_user_df, display_metrics)``:
@@ -228,8 +205,8 @@ def build_per_user_errors(
             ``E_per_user``. The ``method`` column is constant
             (``method_name``); concatenate with other methods' frames
             before consuming.
-          * ``display_metrics`` — ``{(scenario, split): metrics_dict}``
-            covering the **global cell** only. Keys: ``per_channel``,
+          * ``display_metrics`` — ``{(scenario, split): metrics_dict}``.
+            Keys: ``per_channel``,
             ``continuous``, ``binary``, ``n_samples`` — the exact subset
             of :func:`aggregate_pairs`'s return that
             :class:`ImputationResults.scenarios` exposes.
@@ -247,7 +224,6 @@ def build_per_user_errors(
     display: dict[tuple[str, str], dict] = {}
 
     for split in splits:
-        mapping = (subgroup_mappings or {}).get(split)
         for scenario in scenarios:
             ssd = method_pairs_dir / scenario / split
             if not ssd.exists():
@@ -260,7 +236,7 @@ def build_per_user_errors(
                 )
                 continue
 
-            # ---- Global cell: display metrics + per_user map ----
+            # ---- Display metrics + per_user map ----
             metrics_all = aggregate_pairs(ssd, channel_stds, return_per_user=True)
             display[(scenario, split)] = {
                 "per_channel": metrics_all.get("per_channel", {}),
@@ -275,38 +251,9 @@ def build_per_user_errors(
                         method=method_name,
                         scenario=scenario,
                         split=split,
-                        subgroup_attr="all",
-                        subgroup_value="all",
                         include_auc=include_auc,
                     )
                 )
-
-            # ---- Subgroup cells: per_user map only ----
-            if mapping:
-                per_sg = aggregate_pairs_by_subgroup(
-                    ssd,
-                    channel_stds,
-                    mapping,
-                    return_per_user=True,
-                )
-                for attr, groups in per_sg.items():
-                    for group_name, metrics_g in groups.items():
-                        if exclude_unknown and group_name == "unknown":
-                            continue
-                        per_user_g = metrics_g.get("per_user")
-                        if not per_user_g:
-                            continue
-                        all_rows.extend(
-                            per_user_map_to_rows(
-                                per_user_g,
-                                method=method_name,
-                                scenario=scenario,
-                                split=split,
-                                subgroup_attr=attr,
-                                subgroup_value=group_name,
-                                include_auc=include_auc,
-                            )
-                        )
 
     if all_rows:
         per_user_df = pd.DataFrame(all_rows, columns=PER_USER_ERRORS_PARQUET_COLUMNS)

@@ -49,7 +49,7 @@ def imputation_to_submission_yaml(
     checklist for ``MyHeartCounts/OpenMHC-leaderboard-data``. The per-user
     substrate parquet itself comes from the evaluation run — pass ``output_dir=``
     to ``evaluate_imputation`` to write ``per_user_errors.parquet`` — and the
-    maintainers compute the paired skill / fair-skill / rank from it vs. LOCF.
+    maintainers compute the paired skill / rank from it vs. LOCF.
 
     Args:
         method_name: Short, citation-ready name (e.g. "MeanImputer"). Used as

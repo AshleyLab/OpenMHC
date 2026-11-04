@@ -48,13 +48,6 @@ CSV_PAIRS = [
         "avg_rank",  # column in rank csv
         "avg_rank_per_user",
     ),
-    (
-        "fairness_skill_scores.csv",
-        "fairness_skill_score_bootstrap.csv",
-        ["method", "scope", "split"],
-        "fair_skill_score",
-        "S_fair",
-    ),
 ]
 
 
@@ -245,8 +238,6 @@ def main() -> int:
                 "S_per_user",
                 "avg_rank",
                 "avg_rank_per_user",
-                "fair_skill_score",
-                "S_fair",
                 "mean",
             ]
             ok, note = _diff_within_se(

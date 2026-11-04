@@ -35,8 +35,8 @@ One row per `(method, scenario, split, channel, channel_type, subgroup_attr, sub
 | `split` | string (dict) | data split — `test` |
 | `channel` | string (dict) | `ch_0`..`ch_18` (19 sensor channels), or `cat_collapsed:sleep` / `cat_collapsed:workouts` (collapsed-binary tasks) |
 | `channel_type` | string (dict) | `continuous` (`ch_0`–`ch_6`), `binary` (`ch_7`–`ch_18`), or `binary_collapsed` (the `cat_collapsed:*` tasks) |
-| `subgroup_attr` | string (dict) | `all` (global), `age_group`, or `sex` |
-| `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (an age bucket, or a sex value) |
+| `subgroup_attr` | string (dict) | `all` |
+| `subgroup_value` | string (dict) | `all` |
 | `user_id` | string (dict) | pseudonymous participant id — the bootstrap cluster unit; required for paired skill + per-user rank |
 | `E_per_user` | float32 | per-user error for the cell (see below) |
 
@@ -47,6 +47,8 @@ One row per `(method, scenario, split, channel, channel_type, subgroup_attr, sub
 - **Collapsed-binary** (`cat_collapsed:sleep` = channels 7–8; `cat_collapsed:workouts` = channels 9–18): `nanmean` over the category's channels of `1 − AUC`.
 
 NaN values are dropped — a user with no data for a cell simply has no row.
+
+A cohort view is a membership filter of these rows. Files built before `S_fair` was retired also hold `age_group` and `sex` rows; filter on `subgroup_attr == "all"`.
 
 ## Track 3 — Forecasting
 

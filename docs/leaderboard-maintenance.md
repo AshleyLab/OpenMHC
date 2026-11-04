@@ -34,28 +34,8 @@ reducers:
 - **Skill** — `compute_per_task_paired_R(baseline_method="locf")` →
   `compute_skill_scores(mode="paired")`.
 - **Rank** — `compute_average_rankings` → `aggregate_task_ranks_to_scopes`.
-- **Fair skill** — `compute_fair_skill_scores` (disparity-ratio MAPD) at
-  `scope="overall"`.
 
-`HEADLINE_SCOPE="overall"`. Skill and rank filter to `subgroup_attr == "all"`;
-fairness uses the full frame (it needs the `age_group` / `sex` subgroup rows).
-
-### Fairness gotcha (load-bearing)
-
-`compute_fair_skill_scores` consumes **per-cell MEAN** errors, not raw per-user
-rows. Collapse first:
-
-```python
-per_cell = df.groupby(
-    ["method", "scenario", "channel", "channel_type",
-     "subgroup_attr", "subgroup_value"],
-    observed=True,
-)["E"].mean().reset_index()
-```
-
-Feeding raw per-user rows makes the inner merge blow up cartesian-style and
-OOM-kill the Space. Pass the full frame (including the `age_group` / `sex` rows);
-the reducer ignores `subgroup_attr == "all"` on its own.
+`HEADLINE_SCOPE="overall"`. Skill and rank filter to `subgroup_attr == "all"`.
 
 ## Adding / updating a method (no Space rebuild)
 

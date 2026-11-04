@@ -609,7 +609,6 @@ def evaluate_imputation(
         ImputationEvalConfig,
         MaskingConfig,
         OutputConfig,
-        SensitivityConfig,
         VisualizationConfig,
         WandbConfig,
     )
@@ -684,7 +683,6 @@ def evaluate_imputation(
             output=OutputConfig(results_dir=output_dir),
             evaluation=eval_cfg,
             visualization=VisualizationConfig(),
-            sensitivity=SensitivityConfig(),
             wandb=WandbConfig(),
         )
 

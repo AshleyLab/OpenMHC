@@ -11,12 +11,7 @@ Reproduces the cross-imputer paper numbers in three stages:
 3. **Phase 1** — invoke ``bootstrap_imputation_draws.py`` to produce
    ``bootstrap_draws.parquet``.
 4. **Phase 2** — invoke ``aggregate_imputation_paper_metrics.py`` to produce
-   ``skill_scores_bootstrap.csv`` and ``avg_rankings_bootstrap.csv``,
-   followed by ``aggregate_fairness_skill_score.py`` to produce
-   ``fairness_skill_score_bootstrap.csv`` (per-attribute and
-   macro-averaged disparity-ratio fairness skill scores; the leaderboard's
-   ``fair_skill_score``). The legacy ``S − λ·D`` fairness CSVs are
-   deprecated and no longer emitted by this driver.
+   ``skill_scores_bootstrap.csv`` and ``avg_rankings_bootstrap.csv``.
 
 The driver is intentionally minimal: each phase is a subprocess. If a method
 or phase fails, the failing command is printed and the driver exits
@@ -206,13 +201,9 @@ def _phase1_bootstrap(cfg: dict, dry_run: bool, *, strict: bool = False) -> None
         "--splits",
         *cfg["splits"],
     ]
-    if not cfg.get("include_fairness", True):
-        cmd.append("--no-fairness")
     if not cfg.get("include_auc", True):
         cmd.append("--no-auc")
-    if cfg.get("exclude_unknown", False):
-        cmd.append("--exclude-unknown")
-    # Per-user errors emission (BCa LOO substrate). Empty / null disables.
+    # Per-user errors emission. Empty / null disables.
     per_user_path = cfg.get("per_user_errors_path")
     if per_user_path:
         cmd.extend(["--per-user-errors", str(per_user_path)])
@@ -229,8 +220,8 @@ def _method_filter_args(cfg: dict) -> list[str]:
     Empty list / None / missing → no flag emitted (Phase 2 uses every
     method in the parquet).
 
-    When set, both Phase 2 aggregators restrict to the listed methods.
-    The skill / fairness scores stay numerically the same as the full-pool
+    When set, the Phase 2 aggregator restricts to the listed methods.
+    The skill scores stay numerically the same as the full-pool
     run because each is computed pairwise vs. the baseline; the
     ``avg_rank`` values shift because the rank comparison pool changes.
     The baseline method (``cfg["baseline_method"]``) MUST appear in the
@@ -243,7 +234,7 @@ def _method_filter_args(cfg: dict) -> list[str]:
     if baseline not in names:
         raise ValueError(
             f"sweep config: method_filter={names!r} excludes the baseline "
-            f"method {baseline!r}. Skill / fairness require the baseline "
+            f"method {baseline!r}. Skill requires the baseline "
             "to be in the comparison pool — add it to method_filter or "
             "drop the filter entirely."
         )
@@ -271,63 +262,15 @@ def _phase2_aggregate(cfg: dict, dry_run: bool, *, strict: bool = False) -> None
         str(cfg["clip_lower"]),
         "--clip-upper",
         str(cfg["clip_upper"]),
-        "--lambda-fairness",
-        str(cfg["lambda_fairness"]),
-        "--fairness-combine",
-        cfg["fairness_combine"],
         "--ci-level",
         str(cfg["ci_level"]),
     ]
-    for d in cfg.get("disparity_fns", []) or []:
-        cmd.extend(["--disparity-fn", d])
     cmd.extend(_method_filter_args(cfg))
     if cfg.get("bca_skill_rank", False):
         cmd.append("--bca-skill-rank")
         per_user_path = cfg.get("per_user_errors_path")
         if per_user_path:
             cmd.extend(["--per-user-errors", str(per_user_path)])
-    if strict:
-        cmd.append("--strict")
-    _run(cmd, dry_run)
-
-
-def _phase2_fairness_skill_score(cfg: dict, dry_run: bool, *, strict: bool = False) -> None:
-    """Sidecar reducer: fairness skill score (per-attribute and macro-averaged).
-
-    Independent of the four CSVs produced by ``_phase2_aggregate`` — reads
-    the same Phase 1 draws and writes a single
-    ``fairness_skill_score_bootstrap.csv`` under ``output_root``. Reuses the
-    same clip bounds, baseline method, and CI level as the regular skill
-    score for cross-table consistency. Honors the same ``method_filter`` as
-    ``_phase2_aggregate`` so the two CSVs stay in lockstep.
-    """
-    script = REPO_ROOT / "scripts" / "paper_results" / "aggregate_fairness_skill_score.py"
-    output_path = Path(cfg["output_root"]) / "fairness_skill_score_bootstrap.csv"
-    cmd = [
-        sys.executable,
-        str(script),
-        "--draws",
-        cfg["draws_path"],
-        "--output",
-        str(output_path),
-        "--baseline-method",
-        cfg["baseline_method"],
-        "--clip-lower",
-        str(cfg["clip_lower"]),
-        "--clip-upper",
-        str(cfg["clip_upper"]),
-        "--ci-level",
-        str(cfg["ci_level"]),
-    ]
-    cmd.extend(_method_filter_args(cfg))
-    # BCa augmentation (default ON — see METRICS.md §S7).
-    if cfg.get("bca", True):
-        cmd.append("--bca")
-        per_user_path = cfg.get("per_user_errors_path")
-        if per_user_path:
-            cmd.extend(["--per-user-errors", str(per_user_path)])
-    else:
-        cmd.append("--no-bca")
     if strict:
         cmd.append("--strict")
     _run(cmd, dry_run)
@@ -367,7 +310,6 @@ def main() -> int:
     # Phase 2
     if not args.skip_phase2:
         _phase2_aggregate(cfg, args.dry_run, strict=args.strict)
-        _phase2_fairness_skill_score(cfg, args.dry_run, strict=args.strict)
 
     logger.info("Done. Sidecar CSVs in %s", cfg["output_root"])
     return 0

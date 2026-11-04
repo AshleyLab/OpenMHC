@@ -20,7 +20,6 @@ from imputation_evaluation.config import (
     MaskingConfig,
     MethodConfig,
     OutputConfig,
-    SensitivityConfig,
     VisualizationConfig,
     WandbConfig,
 )
@@ -48,7 +47,6 @@ def register_configs() -> None:
             "output": OutputConfig,
             "evaluation": EvalConfig,
             "visualization": VisualizationConfig,
-            "sensitivity": SensitivityConfig,
             "wandb": WandbConfig,
         },
     )
