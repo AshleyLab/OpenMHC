@@ -233,7 +233,7 @@ Outputs:
 - 17-method → `${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper/`
 - 16-method → `${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper_no_dense/`
 
-Each dir gets `bootstrap_draws.parquet` (~110 MB), `bootstrap_method_dirs.json`,
+Each dir gets `bootstrap_draws.parquet` (~16 MB), `bootstrap_method_dirs.json`,
 and the Phase-2 CSVs (`skill_scores_bootstrap.csv`,
 `avg_rankings_bootstrap.csv`). Wallclock:
 ~1–2h, parallel.

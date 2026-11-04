@@ -18,11 +18,10 @@ sibling ``<track>/<method>.parquet`` substrate files. The ``bootstrap_``
 prefix is dropped from the destination names since the subdir already
 implies it.)
 
-Note: the pooled ``per_user_errors.parquet`` (the BCa LOO substrate) is
-deliberately **not** uploaded — it is the concatenation of the per-method
-``<track>/<method>.parquet`` files already on HF (``2,376,160 rows =
-148,510 rows/method × 16 methods``), so any consumer that needs it can
-reconstitute it with one ``pd.concat`` over the per-method files. The
+Note: the pooled ``per_user_errors.parquet`` is deliberately **not** uploaded
+— it is the concatenation of the per-method ``<track>/<method>.parquet`` files
+already on HF, so any consumer that needs it can reconstitute it with one
+``pd.concat`` over the per-method files. The
 same provenance (seed, n_boot, method list, git commit) lives in
 ``draws.meta.json`` already.
 

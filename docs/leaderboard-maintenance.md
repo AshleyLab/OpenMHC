@@ -74,10 +74,13 @@ views keep those rows for the participants in the cohort, using `demographics.pa
 membership. `tools/build_leaderboard_demographics.py` builds it with
 `labels.user_demographics`, for the users already in published substrates, and stops
 if any of them has an unknown age group. Rebuild it when a substrate adds users or the
-age or sex rule changes, then upload both files in one commit:
+age or sex rule changes, then upload both files in one commit. For a substrate with new
+users, do this first and pass the file with `--add-substrate`, since the substrate
+upload stops until the file covers them:
 
 ```bash
-python tools/build_leaderboard_demographics.py --data-dir <dataset> --out-dir <dir>
+python tools/build_leaderboard_demographics.py --data-dir <dataset> --out-dir <dir> \
+    [--add-substrate <m>.parquet]
 ```
 
 ```python
@@ -91,6 +94,10 @@ HfApi().upload_folder(
 ```
 
 Restart the Space afterwards, as for a new method.
+
+A submission merged as a Hub pull request skips the upload check. The Space logs a
+warning at startup for users absent from the file. If it does, rebuild the file, which
+now picks up the merged substrate, and restart.
 
 Dataset visibility, if needed:
 `HfApi().update_repo_settings(repo_id, private=False, repo_type="dataset")`

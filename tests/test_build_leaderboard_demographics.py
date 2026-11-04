@@ -16,7 +16,8 @@ if str(_TOOLS) not in sys.path:
 
 import build_leaderboard_demographics as builder  # noqa: E402
 import upload_leaderboard_substrate as uploader  # noqa: E402
-from huggingface_hub.errors import EntryNotFoundError  # noqa: E402
+from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError  # noqa: E402
+from huggingface_hub.utils import filter_repo_objects  # noqa: E402
 
 
 def _substrate(path, users):
@@ -90,6 +91,62 @@ def test_writes_evaluated_users_with_provenance(published, dataset, tmp_path):
     assert published["revision"] == "abc123"
 
 
+def test_downloads_only_the_method_substrates(published, dataset, tmp_path):
+    builder.build(dataset, tmp_path / "out")
+    tree = [
+        "demographics.parquet",
+        "downstream/linear.parquet",
+        "downstream/bootstrap/draws.parquet",
+        "imputation/locf.parquet",
+        "imputation/bootstrap/draws.parquet",
+        "imputation/bootstrap_with_dense_weekly/draws.parquet",
+        "forecasting/seasonal_naive.parquet",
+        "forecasting/seasonal_naive.meta.json",
+        "forecasting/bootstrap/draws.parquet",
+    ]
+    kept = filter_repo_objects(
+        tree,
+        allow_patterns=published["allow_patterns"],
+        ignore_patterns=published["ignore_patterns"],
+    )
+    assert sorted(kept) == [
+        "downstream/linear.parquet",
+        "forecasting/seasonal_naive.parquet",
+        "imputation/locf.parquet",
+    ]
+
+
+def test_new_users_can_be_added_before_their_substrate_is_uploaded(
+    published, dataset, tmp_path, monkeypatch
+):
+    """The upload check names this route, so it must work when the users are not published."""
+    new = tmp_path / "new.parquet"
+    _substrate(new, ["a", "not_evaluated"])
+    out = tmp_path / "out"
+    builder.build(dataset, out, add_substrates=[new])
+
+    frame = pd.read_parquet(out / "demographics.parquet")
+    assert "not_evaluated" in set(frame["user_id"])
+    meta = json.loads((out / "demographics.meta.json").read_text())
+    assert meta["added_substrates"] == ["new.parquet"]
+    monkeypatch.setattr(
+        uploader, "hf_hub_download", lambda *a, **k: str(out / "demographics.parquet")
+    )
+    uploader.validate_users_have_demographics(new, "repo")
+
+
+@pytest.mark.parametrize("env", ["LABELS_DATA_PATH", "ENROLLMENT_DATA_PATH"])
+def test_label_overrides_are_rejected(env, published, dataset, tmp_path, monkeypatch):
+    """The sidecar names one dataset, so the file must not read another one's labels."""
+    other = tmp_path / "other.json"
+    other.write_text("{}")
+    monkeypatch.setenv(env, str(other))
+    out = tmp_path / "out"
+    with pytest.raises(SystemExit, match=env):
+        builder.build(dataset, out)
+    assert not out.exists()
+
+
 def test_unknown_age_is_rejected_and_nothing_is_written(published, dataset, tmp_path):
     """The release must cover every evaluated user; a gap must not reach the public file."""
     enrollment = dataset / "labels/enrollment_info.json"
@@ -156,6 +213,17 @@ def test_upload_checks_users_before_writing_to_the_hub(track, tmp_path, monkeypa
     )
     with pytest.raises(SystemExit, match="1 user"):
         uploader.main()
+
+
+def test_upload_to_a_new_repo_has_nothing_to_check(tmp_path, monkeypatch):
+    def missing(*args, **kwargs):
+        # Its constructor needs an HTTP response, which varies across huggingface_hub versions.
+        raise RepositoryNotFoundError.__new__(RepositoryNotFoundError)
+
+    monkeypatch.setattr(uploader, "hf_hub_download", missing)
+    parquet = tmp_path / "method.parquet"
+    _substrate(parquet, ["a"])
+    uploader.validate_users_have_demographics(parquet, "repo")
 
 
 def test_upload_fails_when_the_demographics_file_is_not_published(tmp_path, monkeypatch):
