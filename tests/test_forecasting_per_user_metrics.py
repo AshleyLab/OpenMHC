@@ -4,7 +4,7 @@ Validates ``forecasting_evaluation.metrics.per_user_errors``:
 
   * ``write`` -> ``read`` round-trips the float64 ``metric_value`` + sidecar meta;
   * ``to_error_df`` reproduces the skill builder (``skill._build_error_table``,
-    ``unit_id``) and the fairness builder (``fair._build_error_table``, ``user_id``);
+    ``unit_id``);
   * ``to_rank_user_df`` reproduces ``rank._build_continuous_user_rows`` +
     ``rank._build_binary_user_rows`` (channel rows + sleep/activity group folds).
 
@@ -21,7 +21,6 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from forecasting_evaluation.metrics import fairness_skill_score_summary as fair
 from forecasting_evaluation.metrics import grouped_metric_rank_summary as rank
 from forecasting_evaluation.metrics import skill_score_summary as skill
 from forecasting_evaluation.metrics.per_user_errors import (
@@ -143,21 +142,6 @@ def test_to_error_df_matches_skill_builder(tmp_path):
     )
     got = to_error_df(per_user, user_col="unit_id")
     _assert_equiv(got, legacy, keys=["model", "group", "metric", "channel_idx", "unit_id"])
-
-
-def test_to_error_df_matches_fairness_builder(tmp_path):
-    """to_error_df(user_id) reproduces fair._build_error_table row-for-row."""
-    models, per_user = _setup(tmp_path)
-    legacy = fair._build_error_table(
-        models=models,
-        continuous_metrics=CONT_METRICS,
-        binary_metrics=BIN_METRICS,
-        continuous_channel_indices=CONT_CH,
-        binary_channel_indices=BIN_CH,
-        within_user_aggregation="micro",
-    )
-    got = to_error_df(per_user, user_col="user_id")
-    _assert_equiv(got, legacy, keys=["model", "group", "metric", "channel_idx", "user_id"])
 
 
 def test_to_rank_user_df_matches_legacy_builders(tmp_path):

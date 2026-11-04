@@ -87,15 +87,13 @@ def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path, monkeypatc
     """Switch A to B and back without leaving imported consumers or caches stale."""
     import context.api as context
     import downstream_evaluation.evaluation.metrics as metrics
-    import imputation_evaluation.sensitivity as sensitivity
     from devices import api as devices
     from labels import api
 
     # Legacy tests reload labels.api. Restore these bindings after this test
     # rather than permanently reloading downstream consumer modules.
     for module, names in ((context, ("LABEL_NAMES", "CONTEXT_NAMES")),
-                          (metrics, ("LABEL_NAMES", "LABEL_TYPES")),
-                          (sensitivity, ("STORE",))):
+                          (metrics, ("LABEL_NAMES", "LABEL_TYPES"))):
         for name in names:
             monkeypatch.setattr(module, name, getattr(api, name))
     store, device_store = api.STORE, devices.STORE
@@ -117,7 +115,7 @@ def test_switch_refreshes_imported_consumers_and_all_caches(tmp_path, monkeypatc
         (a, 20, "context_a"),
     ):
         _ensure_labels_env(paths)
-        assert api.STORE is store is sensitivity.STORE
+        assert api.STORE is store
         assert api.STORE.paths is api._PATHS is paths
         assert devices.STORE is device_store
         assert api.LabelResult is result_class
@@ -299,62 +297,6 @@ def test_package_schema_paths_follow_configuration(tmp_path):
     api.configure(paths=paths)
     assert labels.LABEL_TYPES_PATH == paths.label_types
     assert labels.ORDINAL_DICTIONARY_PATH == paths.ordinal_dictionary
-
-
-@pytest.mark.parametrize("explicit_files_only", [False, True])
-def test_fairness_command_uses_resolver(monkeypatch, tmp_path, explicit_files_only):
-    """Preserve root selection and the CLI explicit-file compatibility path."""
-    from forecasting_evaluation.metrics import fairness_skill_score_summary as summary
-
-    monkeypatch.setenv("MHC_DATA_DIR", str(tmp_path / "environment"))
-    monkeypatch.setenv("LABELS_DATA_PATH", str(tmp_path / "env_labels.json"))
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "fairness",
-            "--baseline",
-            "base",
-            "--data-dir",
-            str(tmp_path / "explicit"),
-            "--labels-path",
-            str(tmp_path / "cli_labels.json"),
-        ],
-    )
-    if explicit_files_only:
-        monkeypatch.delenv("MHC_DATA_DIR")
-        monkeypatch.delenv("LABELS_DATA_PATH")
-        monkeypatch.setattr(
-            "sys.argv",
-            [
-                "fairness",
-                "--baseline",
-                "base",
-                "--labels-path",
-                str(tmp_path / "cli_labels.json"),
-                "--enrollment-path",
-                str(tmp_path / "cli_enrollment.json"),
-            ],
-        )
-    monkeypatch.setattr(summary, "_load_models_dict", lambda args: {})
-    seen = {}
-
-    class ReachedEvaluation(Exception):
-        pass
-
-    def capture(**kwargs):
-        seen.update(kwargs)
-        raise ReachedEvaluation
-
-    monkeypatch.setattr(summary, "compute_fairness_skill_score_tables", capture)
-    with pytest.raises(ReachedEvaluation):
-        summary.main()
-    assert seen["labels_path"] == tmp_path / "cli_labels.json"
-    expected_enrollment = (
-        tmp_path / "cli_enrollment.json"
-        if explicit_files_only
-        else tmp_path / "explicit/labels/enrollment_info.json"
-    )
-    assert seen["enrollment_path"] == expected_enrollment
 
 
 @pytest.mark.parametrize(

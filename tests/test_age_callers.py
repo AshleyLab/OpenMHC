@@ -1,12 +1,9 @@
-"""Keep target dates and eligibility while using enrollment ages for subgroups."""
+"""Keep target dates and eligibility while using enrollment ages for age groups."""
 
-import importlib.util
 import json
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow as pa
 import pytest
 
 from labels import api
@@ -201,40 +198,19 @@ def test_linear_age_covariate_keeps_reference_missingness_and_exclusions(caller_
     )
 
 
-def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_path):
-    """Survey/sample/fixed dates cannot change enrollment subgroups in any track."""
-    from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from forecasting_evaluation.metrics.fairness_skill_score_summary import load_user_demographics
-    from imputation_evaluation.sensitivity import build_subgroup_mapping
+def test_demographics_use_enrollment_and_keep_unknown_users(caller_dataset):
+    """Survey/sample/fixed dates cannot change enrollment age groups."""
+    from openmhc._label_paths import LabelPaths
 
-    folder, lookup = caller_dataset
+    folder, _ = caller_dataset
     users = ["known", "no_target", "missing_year", "no_date", "bad_date", "bad_year", "absent"]
-    path = tmp_path / "lookup.parquet"
-    lookup.drop(columns="age").to_parquet(path)
-    out = tmp_path / "predictions"
-    write_subgroup_map(out, path, users)
-    prediction = json.loads((out / "_subgroups.json").read_text())
-    forecast = load_user_demographics(
-        user_ids=set(users),
-        labels_path=folder / "last_labels.json",
-        enrollment_path=folder / "enrollment_info.json",
-    )
-    hf = {"user_id": users + ["known"], "date": ["1900-01-01"] * len(users) + ["2099-01-01"]}
-    impute = build_subgroup_mapping(
-        hf, {"test": list(range(len(users) + 1))}, [18, 30, 40, 50, 60], store=api.STORE
-    )["test"]
+    configured = api.user_demographics(users)
+    explicit = api.user_demographics(users, paths=LabelPaths.resolve(folder.parent))
     expected = {u: "unknown" for u in users}
     expected.update(known="30-39", no_target="40-49")
-    assert {u: prediction[u]["age_group"] for u in users} == expected
-    assert {u: forecast[u]["age_group"] for u in users} == expected
-    assert {u: impute[i]["age_group"] for i, u in enumerate(users)} == expected
-    assert impute[len(users)]["age_group"] == "30-39"
-    assert (
-        prediction["known"]["sex"]
-        == forecast["known"]["sex"]
-        == impute[users.index("known")]["sex"]
-        == "male"
-    )
+    assert {u: configured[u]["age_group"] for u in users} == expected
+    assert {u: explicit[u]["age_group"] for u in users} == expected
+    assert configured["known"]["sex"] == explicit["known"]["sex"] == "male"
     assert api.age_at_enrollment("known") == 39
     assert api.age_at("known", pd.Timestamp("2025-06-01")) == 45
 
@@ -249,69 +225,6 @@ def test_invalid_enrollment_date_never_uses_stored_age(created_on):
         enrollment.age_at_enrollment("u")
 
 
-@pytest.mark.parametrize(
-    "script",
-    [
-        "compute_imputation_paper_metrics.py",
-        "imputation/bootstrap_imputation_draws.py",
-        "imputation/parity/produce_per_method_per_user_errors.py",
-        "imputation/parity/parity_locf.py",
-    ],
-)
-def test_offline_imputation_matches_enrollment(caller_dataset, tmp_path, monkeypatch, script):
-    """Saved-pair analysis shares live age semantics, including repeated samples."""
-    path = Path(__file__).resolve().parents[1] / "scripts/paper_results" / script
-    spec = importlib.util.spec_from_file_location("age_offline_test", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    manifest = pa.table(
-        {
-            "sample_idx": [7, 2, 9, 4],
-            "user_id": ["known", "known", "no_target", "missing_year"],
-            "date": ["1900-01-01", "2099-01-01", "invalid", "2025-01-01"],
-        }
-    )
-    monkeypatch.setattr(module, "load_sample_manifest", lambda *args: manifest)
-    groups = module._build_subgroup_mapping(tmp_path, "test", [18, 30, 40, 50, 60])
-    assert {i: row["age_group"] for i, row in groups.items()} == {
-        7: "30-39",
-        2: "30-39",
-        9: "40-49",
-        4: "unknown",
-    }
-
-
-@pytest.mark.parametrize(
-    ("age", "expected"),
-    [
-        (14, "unknown"),
-        (17, "unknown"),
-        (18, "18-29"),
-        (29, "18-29"),
-        (30, "30-39"),
-        (39, "30-39"),
-        (40, "40-49"),
-        (49, "40-49"),
-        (50, "50-59"),
-        (59, "50-59"),
-        (60, "60+"),
-        (90, "60+"),
-    ],
-)
-def test_age_band_boundaries_agree_across_tracks(age, expected):
-    """Under-18 ages stay unknown; each decade starts at the same age in all tracks."""
-    from downstream_evaluation.evaluation.predictions_io import _age_group
-    from forecasting_evaluation.metrics.fairness_skill_score_summary import bin_age as forecast_bin
-    from imputation_evaluation.sensitivity import bin_age as imputation_bin
-
-    assert (
-        _age_group(age)
-        == forecast_bin(age)
-        == imputation_bin(age, [18, 30, 40, 50, 60])
-        == expected
-    )
-
-
 def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
     """Imported callers use the newly configured birth years and enrollment dates."""
     import shutil
@@ -319,8 +232,6 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
     import labels
     from downstream_evaluation.data.provider import TaskDataProvider
     from downstream_evaluation.demo_covariates import build_demo_user_lookup_from_labels_df
-    from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from imputation_evaluation.sensitivity import get_user_demographics
 
     folder, lookup = caller_dataset
     b = tmp_path / "dataset_b"
@@ -340,10 +251,5 @@ def test_callers_follow_dataset_switches(caller_dataset, tmp_path):
         assert td.labels.tolist() == [target_age]
         demo = build_demo_user_lookup_from_labels_df(lookup, ["age"])
         assert demo["known"][0] == target_age
-        assert (
-            get_user_demographics(api.STORE, ["known"])["known"]["age_at_enrollment"]
-            == enrollment_age
-        )
-        write_subgroup_map(tmp_path / "predictions", path, ["known"])
-        groups = json.loads((tmp_path / "predictions/_subgroups.json").read_text())
-        assert groups["known"]["age_group"] == group
+        assert labels.age_at_enrollment("known") == enrollment_age
+        assert labels.user_demographics(["known"])["known"]["age_group"] == group

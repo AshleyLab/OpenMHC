@@ -1,10 +1,8 @@
 """Tests for the cross-method bootstrap skill / rank aggregator.
 
 Most tests target the pure-pandas phase-2 aggregator and the Parquet
-round-trip. The phase-1 manifest-equality checks at the bottom of this
-file synthesize the minimal pairs tree (just per-method manifests; no
-``pairs_chXX.parquet`` is needed because the check fires before any
-scenario directory is read).
+round-trip. The phase-1 tests at the bottom of this file synthesize a minimal
+pairs tree.
 """
 
 from __future__ import annotations
@@ -18,8 +16,7 @@ import pytest
 from data.processing.hf_config import N_CHANNELS
 from imputation_evaluation.evaluation.bootstrap_skill_rank import (
     DRAWS_PARQUET_COLUMNS,
-    _assert_manifests_agree,
-    aggregate_skill_rank_fairness,
+    aggregate_skill_rank,
     compute_per_draw_errors,
     compute_per_draw_errors_from_per_user_errors,
     read_draws_parquet,
@@ -97,7 +94,7 @@ def test_skill_score_for_baseline_is_zero():
     so ratio=1 → skill=0.
     """
     draws = _synthetic_draws()
-    tables = aggregate_skill_rank_fairness(draws, baseline_method="locf")
+    tables = aggregate_skill_rank(draws, baseline_method="locf")
 
     skill = tables["skill_scores"]
     locf_overall = skill[(skill["method"] == "locf") & (skill["scope"] == "overall")]
@@ -109,7 +106,7 @@ def test_skill_score_for_baseline_is_zero():
 def test_skill_score_columns_match_documented_schema():
     """``skill_scores_bootstrap.csv`` schema is part of the public contract."""
     draws = _synthetic_draws()
-    tables = aggregate_skill_rank_fairness(draws, baseline_method="locf")
+    tables = aggregate_skill_rank(draws, baseline_method="locf")
     cols = set(tables["skill_scores"].columns)
     expected = {"method", "scope", "split", "n_tasks", "mean", "se", "ci_lo", "ci_hi", "n_boot"}
     assert expected.issubset(cols), f"missing columns: {expected - cols}"
@@ -118,7 +115,7 @@ def test_skill_score_columns_match_documented_schema():
 def test_avg_rank_order_matches_synthetic_means():
     """Lowest-E method ranks 1, highest-E method ranks 3 (3 methods total)."""
     draws = _synthetic_draws()
-    tables = aggregate_skill_rank_fairness(draws, baseline_method="locf")
+    tables = aggregate_skill_rank(draws, baseline_method="locf")
     rank = tables["avg_rankings"]
     overall = rank[rank["scope"] == "overall"].set_index("method")["mean"].to_dict()
     assert overall["linear"] < overall["locf"] < overall["mean"]
@@ -140,16 +137,23 @@ def test_write_then_read_parquet_round_trip(tmp_path):
     assert meta_read == meta
 
 
-def test_aggregate_returns_four_tables_even_when_empty():
+def test_aggregate_returns_two_tables_even_when_empty():
     """Phase-2 must be defensive against an empty draws DataFrame."""
     df = pd.DataFrame(columns=DRAWS_PARQUET_COLUMNS)
-    tables = aggregate_skill_rank_fairness(df)
-    assert set(tables.keys()) == {
-        "skill_scores",
-        "avg_rankings",
-        "fairness_subgroups",
-        "fairness_summary",
-    }
+    tables = aggregate_skill_rank(df)
+    assert set(tables.keys()) == {"skill_scores", "avg_rankings"}
+
+
+def test_aggregate_ignores_age_and_sex_rows():
+    """Published draws may hold age and sex rows; only the "all" rows are read."""
+    draws = _synthetic_draws(n_boot=3)
+    baked = draws[draws["method"] == "mean"].assign(
+        subgroup_attr="sex", subgroup_value="female", E=9.0, R=9.0, rank=9.0
+    )
+    with_baked = aggregate_skill_rank(pd.concat([draws, baked], ignore_index=True))
+    plain = aggregate_skill_rank(draws)
+    for key in ("skill_scores", "avg_rankings"):
+        pd.testing.assert_frame_equal(with_baked[key], plain[key])
 
 
 # --------------------------------------------------------------------------
@@ -341,7 +345,7 @@ def test_task_scopes_flow_through_bootstrap_phase2():
     -task value.
     """
     draws = _synthetic_draws()
-    tables = aggregate_skill_rank_fairness(draws, baseline_method="locf")
+    tables = aggregate_skill_rank(draws, baseline_method="locf")
 
     skill = tables["skill_scores"]
     rank = tables["avg_rankings"]
@@ -378,204 +382,66 @@ def test_task_scopes_flow_through_bootstrap_phase2():
 
 
 # --------------------------------------------------------------------------
-# Phase-1 manifest-equality checks
+# Phase 1 from saved pairs
 # --------------------------------------------------------------------------
 
-# These tests verify ``_assert_manifests_agree`` directly and end-to-end via
-# ``compute_per_draw_errors``. The validation fires before any pairs file is
-# read, so the test fixtures only need to write ``manifest_<split>.parquet``
-# per method dir — no ``pairs_chXX.parquet`` needed.
 
-_REF_SAMPLES = [
-    (0, "u0", "2024-01-01"),
-    (1, "u1", "2024-01-02"),
-    (2, "u2", "2024-01-03"),
-    (3, "u3", "2024-01-04"),
-]
-
-
-def _write_manifest(
-    pairs_dir,
-    *,
-    split: str,
-    rows: list[tuple[int, str, str]],
-    drop_column: str | None = None,
-) -> None:
-    """Write ``manifest_<split>.parquet`` under ``pairs_dir`` from raw rows."""
-    pairs_dir.mkdir(parents=True, exist_ok=True)
-    cols = {
-        "sample_idx": pa.array([r[0] for r in rows], type=pa.int32()),
-        "user_id": pa.array([r[1] for r in rows], type=pa.utf8()),
-        "date": pa.array([r[2] for r in rows], type=pa.utf8()),
-    }
-    if drop_column is not None:
-        cols.pop(drop_column)
-    pq.write_table(pa.table(cols), pairs_dir / f"manifest_{split}.parquet")
-
-
-def _build_two_method_dirs(
-    tmp_path,
-    *,
-    mismatch_kind: str,
-    split: str = "test",
-):
-    """Materialize two method dirs and return ``(method_manifests, method_dirs)``.
-
-    ``mismatch_kind`` controls what goes wrong in method B's manifest:
-
-    - ``"none"``       : identical manifests (happy path)
-    - ``"swap"``       : same sample_idx set but (user_id, date) for sidx=2
-                        and sidx=3 swapped
-    - ``"missing"``    : method B drops sample_idx=3
-    - ``"extra"``      : method B has an extra sample_idx=99
-    - ``"dup"``        : method B duplicates sample_idx=2
-    - ``"missing_col"``: method B's manifest lacks the ``user_id`` column
-    """
-    ref_rows = list(_REF_SAMPLES)
-
-    if mismatch_kind == "none":
-        b_rows = list(_REF_SAMPLES)
-    elif mismatch_kind == "swap":
-        b_rows = [
-            (0, "u0", "2024-01-01"),
-            (1, "u1", "2024-01-02"),
-            (2, "u3", "2024-01-04"),  # was u2/2024-01-03
-            (3, "u2", "2024-01-03"),  # was u3/2024-01-04
-        ]
-    elif mismatch_kind == "missing":
-        b_rows = ref_rows[:-1]  # drops sample_idx=3
-    elif mismatch_kind == "extra":
-        b_rows = ref_rows + [(99, "u99", "2024-12-31")]
-    elif mismatch_kind == "dup":
-        b_rows = ref_rows + [(2, "u2", "2024-01-03")]  # duplicate sidx=2
-    elif mismatch_kind == "missing_col":
-        b_rows = list(_REF_SAMPLES)
-    else:
-        raise ValueError(f"unknown mismatch_kind: {mismatch_kind}")
-
-    dir_a = tmp_path / "A"
-    dir_b = tmp_path / "B"
-    _write_manifest(dir_a, split=split, rows=ref_rows)
-    _write_manifest(
-        dir_b,
-        split=split,
-        rows=b_rows,
-        drop_column="user_id" if mismatch_kind == "missing_col" else None,
+def _write_pairs_tree(root, *, method_offset: float) -> None:
+    """Two users with continuous pairs on ch_5, for one method."""
+    pairs = root / "scenarioA" / "test"
+    pairs.mkdir(parents=True)
+    pq.write_table(
+        pa.table(
+            {
+                "sample_idx": pa.array([0, 1], type=pa.int32()),
+                "user_id": pa.array(["u0", "u1"], type=pa.utf8()),
+                "date": pa.array(["2024-01-01", "2024-01-02"], type=pa.utf8()),
+            }
+        ),
+        root / "manifest_test.parquet",
+    )
+    pq.write_table(
+        pa.table(
+            {
+                "sample_idx": pa.array([0, 0, 1], type=pa.int32()),
+                "gt": pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+                "pred": pa.array([1.5, 2.5, 3.0 + method_offset], type=pa.float32()),
+            }
+        ),
+        pairs / "pairs_ch05.parquet",
     )
 
-    method_manifests = {
-        "A": pq.read_table(dir_a / f"manifest_{split}.parquet"),
-        "B": pq.read_table(dir_b / f"manifest_{split}.parquet"),
-    }
-    method_dirs = {"A": dir_a, "B": dir_b}
-    return method_manifests, method_dirs
 
-
-def _phase1_kwargs(method_dirs, *, with_subgroups: bool):
+def _phase1_kwargs(tmp_path):
     """Common kwargs for ``compute_per_draw_errors`` integration tests."""
-    sg = None
-    if with_subgroups:
-        sg = {
-            "test": {
-                0: {"age_group": "a", "sex": "M"},
-                1: {"age_group": "b", "sex": "F"},
-                2: {"age_group": "a", "sex": "F"},
-                3: {"age_group": "b", "sex": "M"},
-            }
-        }
+    method_dirs = {"locf": tmp_path / "locf", "mean": tmp_path / "mean"}
+    _write_pairs_tree(method_dirs["locf"], method_offset=1.0)
+    _write_pairs_tree(method_dirs["mean"], method_offset=2.0)
     return dict(
         method_dirs=method_dirs,
         scenarios=["scenarioA"],
         splits=["test"],
         n_boot=2,
         seed=0,
-        subgroup_mappings=sg,
         channel_stds=np.ones(N_CHANNELS, dtype=np.float64),
         include_auc=False,
     )
 
 
-def test_assert_manifests_agree_accepts_identical_manifests(tmp_path):
-    """Happy path: identical manifests should not raise."""
-    manifests, _ = _build_two_method_dirs(tmp_path, mismatch_kind="none")
-    # Returns None on success — just shouldn't raise.
-    _assert_manifests_agree(manifests, split="test")
-
-
-def test_phase1_raises_on_swapped_user_date(tmp_path):
-    """sample_idx set matches but (user_id, date) is swapped → mismatch."""
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="swap")
-    with pytest.raises(ValueError, match="Manifest mismatch"):
-        compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=True))
-
-
-def test_phase1_raises_on_missing_sample_idx(tmp_path):
-    """Method B drops one sample_idx → error mentions 'missing'."""
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="missing")
-    with pytest.raises(ValueError, match="missing sample_idx"):
-        compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=True))
-
-
-def test_phase1_raises_on_extra_sample_idx(tmp_path):
-    """Method B has an extra sample_idx → error mentions 'extra'."""
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="extra")
-    with pytest.raises(ValueError, match="extra sample_idx"):
-        compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=True))
-
-
-def test_phase1_raises_on_missing_column(tmp_path):
-    """Method B's manifest lacks user_id → error mentions the column."""
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="missing_col")
-    with pytest.raises(ValueError, match="missing required columns.*user_id"):
-        compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=True))
-
-
-def test_phase1_raises_on_duplicate_sample_idx(tmp_path):
-    """Method B duplicates sample_idx=2 → error mentions duplicates."""
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="dup")
-    with pytest.raises(ValueError, match="duplicate sample_idx"):
-        compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=True))
-
-
-def test_phase1_skips_check_without_subgroup_mappings(tmp_path):
-    """No fairness → mismatched manifests should NOT raise.
-
-    Guards the documented contract that non-fairness bootstrap behavior
-    is unchanged. The function may still produce zero rows here because
-    the synthetic tree has no pairs_chXX.parquet, but it must not raise
-    a ValueError from the manifest check.
-    """
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="swap")
-    # subgroup_mappings=None → check should be skipped entirely.
-    df = compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=False))
-    # Empty is fine — the point is "did not raise". Schema must still match.
-    assert list(df.columns) == DRAWS_PARQUET_COLUMNS
-
-
-# --------------------------------------------------------------------------
-# Per-user errors emission contract (BCa LOO substrate; METRICS.md §S7)
-# --------------------------------------------------------------------------
-
-
 def test_compute_per_draw_errors_returns_tuple_with_emit_per_user(tmp_path):
-    """``emit_per_user_errors=True`` returns a 2-tuple with the per-user schema.
-
-    With no pairs files in the synthetic tree the frames are empty, but the
-    schema contract must still hold.
-    """
+    """``emit_per_user_errors=True`` returns a 2-tuple with the per-user schema."""
     from imputation_evaluation.evaluation.bootstrap_skill_rank import (
         PER_USER_ERRORS_PARQUET_COLUMNS,
     )
 
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="none")
-    result = compute_per_draw_errors(
-        **_phase1_kwargs(method_dirs, with_subgroups=False),
-        emit_per_user_errors=True,
-    )
+    result = compute_per_draw_errors(**_phase1_kwargs(tmp_path), emit_per_user_errors=True)
     assert isinstance(result, tuple) and len(result) == 2
     draws_df, per_user_df = result
     assert list(draws_df.columns) == DRAWS_PARQUET_COLUMNS
     assert list(per_user_df.columns) == PER_USER_ERRORS_PARQUET_COLUMNS
+    assert not draws_df.empty
+    for frame in (draws_df, per_user_df):
+        assert set(frame["subgroup_attr"]) == set(frame["subgroup_value"]) == {"all"}
 
 
 def test_compute_per_draw_errors_default_returns_dataframe(tmp_path):
@@ -583,8 +449,7 @@ def test_compute_per_draw_errors_default_returns_dataframe(tmp_path):
 
     Backward-compat anchor.
     """
-    _, method_dirs = _build_two_method_dirs(tmp_path, mismatch_kind="none")
-    out = compute_per_draw_errors(**_phase1_kwargs(method_dirs, with_subgroups=False))
+    out = compute_per_draw_errors(**_phase1_kwargs(tmp_path))
     # Single DataFrame, not a tuple.
     assert isinstance(out, pd.DataFrame)
     assert list(out.columns) == DRAWS_PARQUET_COLUMNS
@@ -646,3 +511,32 @@ def test_per_user_fast_path_uses_split_specific_manifests():
     by_split = draws.set_index("split")["E"].to_dict()
     assert by_split["test"] == pytest.approx(1.0)
     assert by_split["val"] == pytest.approx(2.0)
+
+
+def test_per_user_fast_path_reads_only_all_rows():
+    """Age and sex rows in a published substrate change nothing and are not re-emitted."""
+    manifest = pa.table({"sample_idx": [0, 1], "user_id": ["u0", "u1"], "date": ["d", "d"]})
+    row = {
+        "scenario": "scenarioA",
+        "split": "test",
+        "channel": "ch_0",
+        "channel_type": "continuous",
+        "subgroup_attr": "all",
+        "subgroup_value": "all",
+    }
+    plain = pd.DataFrame(
+        [
+            {**row, "method": m, "user_id": u, "E_per_user": e}
+            for m, u, e in [("locf", "u0", 1.0), ("locf", "u1", 2.0), ("mean", "u0", 3.0)]
+        ]
+    )
+    baked = plain.assign(subgroup_attr="sex", subgroup_value="female", E_per_user=99.0)
+    manifests = {"test": {"locf": manifest, "mean": manifest}}
+    draws = compute_per_draw_errors_from_per_user_errors(
+        pd.concat([plain, baked], ignore_index=True), manifests, n_boot=4, seed=0
+    )
+    assert set(draws["subgroup_attr"]) == set(draws["subgroup_value"]) == {"all"}
+    pd.testing.assert_frame_equal(
+        draws,
+        compute_per_draw_errors_from_per_user_errors(plain, manifests, n_boot=4, seed=0),
+    )

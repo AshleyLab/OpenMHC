@@ -77,8 +77,7 @@ def build_demo_user_lookup_from_labels_df(
     covariate is imputed with 0.0 and the per-covariate count is logged, since 0.0 is out
     of distribution for age/BMI and collides with an encoded sex category. The labels
     lookup supplies demographic availability. Available age covariates are
-    calculated through the configured Labels API at the existing age-label date;
-    enrollment ages are used only for subgroup membership.
+    calculated through the configured Labels API at the existing age-label date.
     """
     _demo_df = labels_df[["user_id"] + demo_covariates].copy()
     for c in demo_covariates:

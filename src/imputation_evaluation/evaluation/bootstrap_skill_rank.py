@@ -1,26 +1,29 @@
-"""Cross-task bootstrap for skill score, average rank, and fairness CIs.
+"""Cross-task bootstrap for skill score and average rank CIs.
 
 The participant-level cluster bootstrap in ``bootstrap.py`` produces CIs for
 **per-(scenario, split, channel)** metrics. This module raises that one level:
 it resamples users, recomputes per-(method, scenario, channel) error E for
 **every method together** (paired across methods via a shared resample
 matrix), then re-runs the existing point-flow aggregations (skill score,
-average rank, fairness) on each draw. Stacking draws yields mean / SE /
+average rank) on each draw. Stacking draws yields mean / SE /
 percentile-CI for every cell of the paper's headline table.
 
 Pipeline
 --------
 
 Phase 1 — :func:`compute_per_draw_errors` reads each method's saved
-pairs/, builds per-(method, scenario, split, channel, subgroup) per-user
+pairs/, builds per-(method, scenario, split, channel) per-user
 sufficient stats, generates a single shared resample matrix per split
-(preserving cross-scenario and cross-subgroup covariance within each
-draw), and writes a long-format Parquet of per-draw E values.
+(preserving cross-scenario covariance within each draw), and writes a
+long-format Parquet of per-draw E values.
 
-Phase 2 — :func:`aggregate_skill_rank_fairness` consumes that Parquet and
-runs ``compute_skill_scores`` / ``compute_average_rankings`` /
-``compute_fairness`` per draw; new disparity metrics or λ values rerun
-phase 2 in seconds without touching pairs/.
+Phase 2 — :func:`aggregate_skill_rank` consumes that Parquet and runs
+``compute_skill_scores`` / ``aggregate_task_ranks_to_scopes`` per draw
+without touching pairs/.
+
+Draw and per-user files keep their ``subgroup_attr`` and ``subgroup_value``
+columns, which hold the constant ``"all"``. A cohort is a membership filter of
+those rows, so age and sex rows are not produced here.
 """
 
 from __future__ import annotations
@@ -45,11 +48,6 @@ from imputation_evaluation.evaluation.bootstrap import (
     _bootstrap_indices,
     _summarize,
 )
-from imputation_evaluation.evaluation.disparity_metrics import (
-    DISPARITY_FUNCTIONS,
-    FAIRNESS_COMBINE,
-    disparity_higher_is_better,
-)
 from imputation_evaluation.evaluation.paper_metrics_core import (
     BASELINE_CONTINUOUS,
     BINARY_CATEGORIES_ORDERED,
@@ -67,8 +65,6 @@ logger = logging.getLogger(__name__)
 # Constants — kept in sync with compute_imputation_paper_metrics.py
 # --------------------------------------------------------------------------
 
-ALL_KEY = ("all", "all")  # sentinel cell for the global / non-subgroup metrics
-
 # Skill-score constants — mirror forecasting_evaluation/metrics/metric_spec.py
 # so the two tracks share an estimand. ``BINARY_ERROR_FLOOR`` is the ε on
 # binary E = 1 − AUC so a perfect-AUC user contributes a finite paired ratio
@@ -81,7 +77,7 @@ BINARY_ERROR_FLOOR = 0.005
 
 
 # --------------------------------------------------------------------------
-# Subgroup-aware per-user sufficient statistics
+# Per-user sufficient statistics
 # --------------------------------------------------------------------------
 
 
@@ -96,13 +92,12 @@ class BinaryRows:
 
 @dataclass
 class CellStats:
-    """Per-user sufficient stats for one (scenario, split, subgroup) cell.
+    """Per-user sufficient stats for one (scenario, split) cell.
 
     ``user_ids`` is the canonical user ordering shared with the cell's
     bootstrap-index matrix. ``has_data[ch]`` is True iff any row exists for
-    that channel (after subgroup filtering). For binary channels we also
-    keep the raw row arrays (gt, pred, u_rows) so the AUC bootstrap can
-    operate on subgroup-filtered rows.
+    that channel. For binary channels we also keep the raw row arrays
+    (gt, pred, u_rows) for the per-user AUC.
     """
 
     user_ids: list[str]
@@ -122,54 +117,19 @@ def _channel_file(scenario_split_dir: Path, ch: int) -> Path:
     return scenario_split_dir / f"pairs_ch{ch:02d}.parquet"
 
 
-def _build_cell_user_index(
-    sample_idx_arr: np.ndarray,
-    user_id_arr: list[str],
-    canonical_user_index: dict[str, int],
-    keep_mask: np.ndarray | None,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Map manifest rows to canonical user-row indices, optionally filtering."""
-    if keep_mask is not None:
-        sample_idx_arr = sample_idx_arr[keep_mask]
-        user_id_arr = [user_id_arr[i] for i in np.flatnonzero(keep_mask)]
-    u_rows = np.array([canonical_user_index[u] for u in user_id_arr], dtype=np.int64)
-    return sample_idx_arr, u_rows
-
-
-def _subgroup_cells_from_mapping(
-    subgroup_mapping: dict[int, dict[str, str]] | None,
-    exclude_unknown: bool,
-) -> list[tuple[str, str]]:
-    """Discover ``(attr, value)`` cells present in the per-sample subgroup map.
-
-    Always includes the ``ALL_KEY`` sentinel for the global cell.
-    """
-    cells: set[tuple[str, str]] = {ALL_KEY}
-    if subgroup_mapping:
-        for demo in subgroup_mapping.values():
-            for attr, val in demo.items():
-                if exclude_unknown and val == "unknown":
-                    continue
-                cells.add((attr, val))
-    return sorted(cells)
-
-
-def compute_user_stats_per_cell(
+def compute_user_stats(
     scenario_split_dir: Path,
     manifest: pa.Table,
     canonical_user_ids: list[str],
     canonical_user_index: dict[str, int],
-    cells: list[tuple[str, str]],
-    sample_to_subgroup: dict[int, dict[str, str]] | None,
     n_channels: int = N_CHANNELS,
     *,
     include_binary_rows: bool = True,
-) -> dict[tuple[str, str], CellStats]:
-    """Per-user sufficient stats per (subgroup_attr, subgroup_value) cell.
+) -> CellStats:
+    """Per-user sufficient stats for one method on one (scenario, split).
 
-    Streaming per-channel pass that accumulates per-user sufficient stats
-    for every cell in ``cells``.
-    All cells share the same canonical user ordering so that downstream
+    Streaming per-channel pass that accumulates per-user sufficient stats.
+    All methods share the same canonical user ordering so that downstream
     code can use a single ``idx_b`` matrix per split.
 
     Args:
@@ -179,9 +139,6 @@ def compute_user_stats_per_cell(
             *any* method's manifest for this split. Users absent from a
             particular scenario/method just leave that user's row at zero.
         canonical_user_index: ``user_id -> row in canonical_user_ids``.
-        cells: list of ``(attr, value)`` tuples to populate.
-        sample_to_subgroup: maps ``sample_idx`` to attribute dicts. May be
-            ``None`` if only the ``ALL_KEY`` cell is requested.
         n_channels: number of channels to scan (default ``N_CHANNELS``).
         include_binary_rows: keep raw (gt, pred, u_rows) per binary channel
             so the AUC bootstrap can run later. Costs RAM proportional to
@@ -193,43 +150,21 @@ def compute_user_stats_per_cell(
     # Map manifest sample_idx -> (canonical user row) once.
     full_u_rows = np.array([canonical_user_index[u] for u in uid_arr], dtype=np.int64)
 
-    # Build per-cell row masks over the manifest rows.
-    cell_masks: dict[tuple[str, str], np.ndarray] = {}
-    n_manifest = len(uid_arr)
-    cell_masks[ALL_KEY] = np.ones(n_manifest, dtype=bool)
-    for cell in cells:
-        if cell == ALL_KEY:
-            continue
-        attr, value = cell
-        mask = np.zeros(n_manifest, dtype=bool)
-        if sample_to_subgroup is None:
-            cell_masks[cell] = mask
-            continue
-        for i, sidx in enumerate(sidx_arr):
-            demo = sample_to_subgroup.get(int(sidx))
-            if demo is None:
-                continue
-            if demo.get(attr) == value:
-                mask[i] = True
-        cell_masks[cell] = mask
-
     U = len(canonical_user_ids)
-    out: dict[tuple[str, str], CellStats] = {}
-    for cell in cells:
-        out[cell] = CellStats(
-            user_ids=canonical_user_ids,
-            n=np.zeros((U, n_channels), dtype=np.int64),
-            sse=np.zeros((U, n_channels), dtype=np.float64),
-            sae=np.zeros((U, n_channels), dtype=np.float64),
-            tp=np.zeros((U, n_channels), dtype=np.int64),
-            tn=np.zeros((U, n_channels), dtype=np.int64),
-            fp=np.zeros((U, n_channels), dtype=np.int64),
-            fn=np.zeros((U, n_channels), dtype=np.int64),
-            has_data=np.zeros(n_channels, dtype=bool),
-            binary_rows={},
-        )
+    cs = CellStats(
+        user_ids=canonical_user_ids,
+        n=np.zeros((U, n_channels), dtype=np.int64),
+        sse=np.zeros((U, n_channels), dtype=np.float64),
+        sae=np.zeros((U, n_channels), dtype=np.float64),
+        tp=np.zeros((U, n_channels), dtype=np.int64),
+        tn=np.zeros((U, n_channels), dtype=np.int64),
+        fp=np.zeros((U, n_channels), dtype=np.int64),
+        fn=np.zeros((U, n_channels), dtype=np.int64),
+        has_data=np.zeros(n_channels, dtype=bool),
+        binary_rows={},
+    )
 
-    # sample_idx -> manifest-row, so we can map pair rows to manifest masks.
+    # sample_idx -> manifest-row, so we can map pair rows to users.
     sidx_to_manifest_row = np.full(
         int(sidx_arr.max()) + 1 if len(sidx_arr) else 0, -1, dtype=np.int64
     )
@@ -251,54 +186,31 @@ def compute_user_stats_per_cell(
             raise ValueError(f"{ch_file.name}: rows with sample_idx not in manifest")
 
         u_rows_pair = full_u_rows[pair_manifest_rows]
+        cs.has_data[ch] = True
 
         if ch in cont_set:
             gt_ch = table.column("gt").to_numpy().astype(np.float32)
             pred_ch = table.column("pred").to_numpy().astype(np.float32)
             err = (pred_ch - gt_ch).astype(np.float64)
-            err_sq = err * err
-            err_abs = np.abs(err)
-            for cell, mask in cell_masks.items():
-                if not mask.any():
-                    continue
-                row_mask = mask[pair_manifest_rows]
-                if not row_mask.any():
-                    continue
-                cs = out[cell]
-                cs.has_data[ch] = True
-                u_sub = u_rows_pair[row_mask]
-                np.add.at(cs.n[:, ch], u_sub, 1)
-                np.add.at(cs.sse[:, ch], u_sub, err_sq[row_mask])
-                np.add.at(cs.sae[:, ch], u_sub, err_abs[row_mask])
+            np.add.at(cs.n[:, ch], u_rows_pair, 1)
+            np.add.at(cs.sse[:, ch], u_rows_pair, err * err)
+            np.add.at(cs.sae[:, ch], u_rows_pair, np.abs(err))
         else:
             gt_bool = table.column("gt").to_numpy().astype(bool)
             pred_ch = table.column("pred").to_numpy().astype(np.float32)
             pred_bool = pred_ch > 0.5
-            tp_mask_all = gt_bool & pred_bool
-            tn_mask_all = (~gt_bool) & (~pred_bool)
-            fp_mask_all = (~gt_bool) & pred_bool
-            fn_mask_all = gt_bool & (~pred_bool)
-            for cell, mask in cell_masks.items():
-                if not mask.any():
-                    continue
-                row_mask = mask[pair_manifest_rows]
-                if not row_mask.any():
-                    continue
-                cs = out[cell]
-                cs.has_data[ch] = True
-                u_sub = u_rows_pair[row_mask]
-                np.add.at(cs.tp[:, ch], u_sub, tp_mask_all[row_mask].astype(np.int64))
-                np.add.at(cs.tn[:, ch], u_sub, tn_mask_all[row_mask].astype(np.int64))
-                np.add.at(cs.fp[:, ch], u_sub, fp_mask_all[row_mask].astype(np.int64))
-                np.add.at(cs.fn[:, ch], u_sub, fn_mask_all[row_mask].astype(np.int64))
-                if include_binary_rows:
-                    cs.binary_rows[ch] = BinaryRows(
-                        gt=gt_bool[row_mask],
-                        pred=pred_ch[row_mask],
-                        u_rows=u_sub.astype(np.int64),
-                    )
+            np.add.at(cs.tp[:, ch], u_rows_pair, (gt_bool & pred_bool).astype(np.int64))
+            np.add.at(cs.tn[:, ch], u_rows_pair, ((~gt_bool) & (~pred_bool)).astype(np.int64))
+            np.add.at(cs.fp[:, ch], u_rows_pair, ((~gt_bool) & pred_bool).astype(np.int64))
+            np.add.at(cs.fn[:, ch], u_rows_pair, (gt_bool & (~pred_bool)).astype(np.int64))
+            if include_binary_rows:
+                cs.binary_rows[ch] = BinaryRows(
+                    gt=gt_bool,
+                    pred=pred_ch,
+                    u_rows=u_rows_pair,
+                )
 
-    return out
+    return cs
 
 
 # --------------------------------------------------------------------------
@@ -316,8 +228,7 @@ def _bootstrap_auc_from_arrays(
     """Cluster bootstrap of ROC AUC via Mann-Whitney U with per-user multiplicities.
 
     Mirrors :func:`bootstrap._bootstrap_auc_one_channel` but operates on
-    in-memory arrays (avoids re-reading the parquet file when the same row
-    set is bootstrapped many times under different subgroup masks).
+    in-memory arrays.
     """
     import scipy.sparse as sp
 
@@ -384,9 +295,8 @@ def _bootstrap_auc_from_arrays(
 def _seed_for_split(seed: int, split: str) -> int:
     """Stable per-split seed for the shared resample matrix.
 
-    Every scenario and subgroup cell within the same split shares one
-    resample matrix so that cross-scenario covariance and within-draw
-    fairness pairing are preserved.
+    Every scenario within the same split shares one resample matrix so that
+    cross-scenario covariance is preserved.
 
     Uses SHA-256 rather than Python's built-in ``hash()`` (which is
     process-randomized by ``PYTHONHASHSEED`` for str keys).
@@ -611,7 +521,7 @@ def _rank_per_draw_for_cell(
     column, so different per-channel E scales never appear in the same
     comparison.
 
-    Phase 2 (:func:`aggregate_skill_rank_fairness`) consumes the emitted
+    Phase 2 (:func:`aggregate_skill_rank`) consumes the emitted
     ``rank`` column via :func:`aggregate_task_ranks_to_scopes` to do
     Stage 2 (mean over tasks in scope).
 
@@ -820,7 +730,7 @@ def _per_method_cell_paired_ratios(
       Single-class users have NaN ``AUC_u``; ``np.maximum`` preserves NaN
       so they drop from the join.
     - Inner-join on the canonical user index (both ``CellStats`` share the
-      ordering from :func:`compute_user_stats_per_cell`). Drop users where
+      ordering from :func:`compute_user_stats`). Drop users where
       either side is non-finite or ``e^B_u ≤ 0``; clip the ratio to
       ``[SKILL_CLIP_LOWER, SKILL_CLIP_UPPER]``; drop non-finite or
       non-positive clipped ratios.
@@ -1098,125 +1008,6 @@ def _channel_type(ch: int) -> str:
     return "continuous" if ch in CONTINUOUS_CHANNEL_INDICES else "binary"
 
 
-_REQUIRED_MANIFEST_COLUMNS: tuple[str, ...] = ("sample_idx", "user_id", "date")
-
-
-def _assert_manifests_agree(
-    method_manifests: dict[str, pa.Table],
-    *,
-    split: str,
-    reference_method: str | None = None,
-    n_examples: int = 5,
-) -> None:
-    """Fail fast if methods disagree on ``sample_idx -> (user_id, date)``.
-
-    Fairness subgroup mappings are built from one reference method's manifest
-    and then applied to every method's per-method manifest. If a method's
-    ``sample_idx`` indexes a different ``(user_id, date)`` pair than the
-    reference, fairness subgroup rows are silently mis-assigned to the wrong
-    demographic. This validator enforces the invariant that all methods share
-    the same ``sample_idx -> (user_id, date)`` mapping before any metric work
-    happens.
-
-    Args:
-        method_manifests: Mapping ``{method: pyarrow.Table}`` for one split.
-        split: Split name, used only for error messages.
-        reference_method: Method to treat as the source of truth. If ``None``,
-            uses the first key of ``method_manifests`` (matches the
-            "first method" contract in ``bootstrap_imputation_draws.py``).
-        n_examples: Max number of example ``sample_idx`` rows per mismatch
-            category to include in the error message.
-
-    Raises:
-        ValueError: When any manifest is missing a required column, contains
-            duplicate ``sample_idx`` values, or disagrees with the reference
-            on the set of ``sample_idx`` or the ``(user_id, date)`` mapping.
-    """
-    if not method_manifests:
-        return
-
-    methods = list(method_manifests.keys())
-    if reference_method is None:
-        reference_method = methods[0]
-    if reference_method not in method_manifests:
-        raise ValueError(
-            f"[split={split}] reference_method={reference_method!r} not in "
-            f"method_manifests (have {methods})"
-        )
-
-    def _check_columns(method: str, table: pa.Table) -> None:
-        missing_cols = [c for c in _REQUIRED_MANIFEST_COLUMNS if c not in table.column_names]
-        if missing_cols:
-            raise ValueError(
-                f"[split={split}] manifest for method {method!r} is missing "
-                f"required columns: {missing_cols}. Have: {list(table.column_names)}"
-            )
-
-    def _build_map(method: str, table: pa.Table) -> dict[int, tuple[str, str]]:
-        sample_idxs = table.column("sample_idx").to_pylist()
-        user_ids = table.column("user_id").to_pylist()
-        dates = table.column("date").to_pylist()
-        out: dict[int, tuple[str, str]] = {}
-        duplicates: list[int] = []
-        for sidx, uid, date_str in zip(sample_idxs, user_ids, dates):
-            key = int(sidx)
-            if key in out:
-                duplicates.append(key)
-                continue
-            out[key] = (str(uid), str(date_str))
-        if duplicates:
-            dup_examples = duplicates[:n_examples]
-            raise ValueError(
-                f"[split={split}] manifest for method {method!r} has "
-                f"duplicate sample_idx values (not unique): "
-                f"{len(duplicates)} duplicates, examples: {dup_examples}"
-            )
-        return out
-
-    # Validate every manifest's columns first so column errors surface together
-    # with reference-vs-method errors below.
-    for method, table in method_manifests.items():
-        _check_columns(method, table)
-
-    ref_map = _build_map(reference_method, method_manifests[reference_method])
-    ref_keys = set(ref_map.keys())
-
-    for method, table in method_manifests.items():
-        if method == reference_method:
-            continue
-        method_map = _build_map(method, table)
-        method_keys = set(method_map.keys())
-
-        missing = sorted(ref_keys - method_keys)  # in ref, not in method
-        extra = sorted(method_keys - ref_keys)  # in method, not in ref
-        common = ref_keys & method_keys
-        mismatched = sorted(s for s in common if ref_map[s] != method_map[s])
-
-        if not (missing or extra or mismatched):
-            continue
-
-        lines = [
-            f"Manifest mismatch in [split={split}] between reference method "
-            f"{reference_method!r} and method {method!r}:",
-            f"  missing sample_idx (in reference, not in {method!r}): {len(missing)}",
-            f"  extra sample_idx   (in {method!r}, not in reference): {len(extra)}",
-            f"  user_id/date mismatched: {len(mismatched)} of {len(common)}",
-        ]
-        if missing:
-            lines.append("Examples (missing):")
-            for s in missing[:n_examples]:
-                lines.append(f"  sample_idx={s}   ref={ref_map[s]}")
-        if extra:
-            lines.append("Examples (extra):")
-            for s in extra[:n_examples]:
-                lines.append(f"  sample_idx={s}   {method!r}={method_map[s]}")
-        if mismatched:
-            lines.append("Examples (mismatched):")
-            for s in mismatched[:n_examples]:
-                lines.append(f"  sample_idx={s}   ref={ref_map[s]}   {method!r}={method_map[s]}")
-        raise ValueError("\n".join(lines))
-
-
 def compute_per_draw_errors(
     method_dirs: dict[str, Path],
     scenarios: list[str],
@@ -1225,11 +1016,9 @@ def compute_per_draw_errors(
     seed: int,
     *,
     baseline_method: str = BASELINE_CONTINUOUS,
-    subgroup_mappings: dict[str, dict[int, dict[str, str]]] | None = None,
     channel_stds: np.ndarray | None = None,
     channel_stds_path: Path | None = None,
     include_auc: bool = True,
-    exclude_unknown: bool = False,
     n_channels: int = N_CHANNELS,
     progress_logger: Callable[[str], None] = logger.info,
     emit_per_user_errors: bool = False,
@@ -1251,9 +1040,7 @@ def compute_per_draw_errors(
     that the rank kernel already builds (via :func:`_per_user_errors_for_cell`
     and :func:`_per_user_collapsed_errors_for_cell`) is also emitted as a
     second DataFrame — one finite row per (method, scenario, split, channel,
-    channel_type, subgroup_attr, subgroup_value, user_id). The substrate
-    consumed by the BCa leave-one-user-out jackknife in Phase 2 (see
-    :mod:`imputation_evaluation.evaluation.bca` and METRICS.md §S7).
+    channel_type, subgroup_attr, subgroup_value, user_id).
 
     Args:
         method_dirs: ``{method: pairs_root}`` where ``pairs_root`` contains
@@ -1266,18 +1053,12 @@ def compute_per_draw_errors(
         baseline_method: name of the method whose ``CellStats`` is used as the
             paired denominator when forming ``R``. Defaults to
             :data:`BASELINE_CONTINUOUS` (= ``"locf"``). Rows with no baseline
-            CellStats in their (scenario, cell) keep ``R = NaN``.
-        subgroup_mappings: optional ``{split_name: {sample_idx: {attr: val}}}``
-            built externally (mirrors ``aggregate_imputation_pairs.py``).
-            When provided, per-method manifests are required to agree on the
-            ``sample_idx -> (user_id, date)`` mapping; mismatches raise
-            ``ValueError`` before any metric work happens.
+            CellStats in their scenario keep ``R = NaN``.
         channel_stds: array of length ``n_channels``. If ``None``, loaded
             from each method's ``pairs_root/channel_stds.npy`` and asserted
             to match across methods.
         channel_stds_path: optional explicit path overriding all method dirs.
         include_auc: enable the (slower) AUC bootstrap for binary channels.
-        exclude_unknown: skip subgroup_value=="unknown" cells.
         n_channels: number of channels per pairs/<scenario>/<split>/ dir.
         progress_logger: logger callable invoked with progress messages.
         emit_per_user_errors: when True, also emit and return a per-user
@@ -1320,10 +1101,6 @@ def compute_per_draw_errors(
     per_user_rows: list[tuple] = []
 
     for split in splits:
-        sg_map = (subgroup_mappings or {}).get(split)
-        cells = _subgroup_cells_from_mapping(sg_map, exclude_unknown=exclude_unknown)
-        progress_logger(f"[split={split}] cells = {[f'{a}:{v}' for a, v in cells]}")
-
         # ---------- Per-split canonical user list (union across methods) ----------
         # Manifests are scenario-independent, so we load them once per split.
         method_manifests: dict[str, pa.Table] = {}
@@ -1336,12 +1113,6 @@ def compute_per_draw_errors(
 
         if not method_manifests:
             continue
-
-        # When fairness subgroups are requested, the shared sample_idx -> demo
-        # map only makes sense if every method's manifest agrees on
-        # sample_idx -> (user_id, date). Fail fast if not.
-        if sg_map is not None and len(method_manifests) >= 2:
-            _assert_manifests_agree(method_manifests, split=split)
 
         all_user_ids: list[str] = []
         seen: set[str] = set()
@@ -1376,159 +1147,206 @@ def compute_per_draw_errors(
 
             progress_logger(f"[{scenario}/{split}] methods={list(method_payload.keys())}")
 
-            # ------------------ Per-method, per-cell stats ------------------
-            method_cell_stats: dict[str, dict[tuple[str, str], CellStats]] = {}
+            # ------------------ Per-method stats ------------------
+            method_cell_stats: dict[str, CellStats] = {}
             for method, payload in method_payload.items():
                 progress_logger(f"  computing UserStats for method={method}")
-                method_cell_stats[method] = compute_user_stats_per_cell(
+                method_cell_stats[method] = compute_user_stats(
                     payload["scenario_split_dir"],
                     payload["manifest"],
                     canonical_user_ids=all_user_ids,
                     canonical_user_index=canonical_user_index,
-                    cells=cells,
-                    sample_to_subgroup=sg_map,
                     n_channels=n_channels,
                     include_binary_rows=include_auc,
                 )
 
-            # ------------------ Per-cell paired bootstrap ------------------
-            for cell in cells:
-                attr, value = cell
-
-                # Precompute baseline-side per_user_auc once per cell (NaN if
-                # the baseline is missing from this scenario/split). The
-                # baseline's CellStats shares the canonical user index with
-                # every method, so a single cache entry serves all methods.
-                baseline_cs = method_cell_stats.get(baseline_method, {}).get(cell)
-                if baseline_cs is not None and baseline_cs.has_data.any():
-                    if include_auc:
-                        baseline_per_user_auc = _per_user_auc_from_cell_stats(
-                            baseline_cs, n_channels
-                        )
-                    else:
-                        baseline_per_user_auc = None
+            # ------------------ Paired bootstrap ------------------
+            # Precompute baseline-side per_user_auc once (NaN if
+            # the baseline is missing from this scenario/split). The
+            # baseline's CellStats shares the canonical user index with
+            # every method, so a single cache entry serves all methods.
+            baseline_cs = method_cell_stats.get(baseline_method)
+            if baseline_cs is not None and baseline_cs.has_data.any():
+                if include_auc:
+                    baseline_per_user_auc = _per_user_auc_from_cell_stats(baseline_cs, n_channels)
                 else:
                     baseline_per_user_auc = None
+            else:
+                baseline_per_user_auc = None
 
-                # First pass: per-method E / R / per-user E matrices.
-                # The cross-method rank kernel (computed below) needs every
-                # method's per-user E so it can rank methods against each
-                # other within each (user, task) cell.
-                per_method_E: dict[str, np.ndarray] = {}
-                per_method_R: dict[str, np.ndarray] = {}
-                per_method_per_user_E: dict[str, np.ndarray] = {}
-                per_method_E_cat: dict[str, np.ndarray] = {}
-                per_method_R_cat: dict[str, np.ndarray] = {}
-                per_method_per_user_E_cat: dict[str, np.ndarray] = {}
-                cell_method_cs: dict[str, CellStats] = {}
+            # First pass: per-method E / R / per-user E matrices.
+            # The cross-method rank kernel (computed below) needs every
+            # method's per-user E so it can rank methods against each
+            # other within each (user, task) cell.
+            per_method_E: dict[str, np.ndarray] = {}
+            per_method_R: dict[str, np.ndarray] = {}
+            per_method_per_user_E: dict[str, np.ndarray] = {}
+            per_method_E_cat: dict[str, np.ndarray] = {}
+            per_method_R_cat: dict[str, np.ndarray] = {}
+            per_method_per_user_E_cat: dict[str, np.ndarray] = {}
+            cell_method_cs: dict[str, CellStats] = {}
 
-                emit_collapsed = include_auc and scenario not in EXCLUDE_BINARY_SCENARIOS
+            emit_collapsed = include_auc and scenario not in EXCLUDE_BINARY_SCENARIOS
 
-                for method, cell_stats_map in method_cell_stats.items():
-                    cs = cell_stats_map[cell]
-                    if not cs.has_data.any():
-                        continue
-                    # Precompute the per-(user, channel) AUC matrix once per
-                    # (method, scenario, cell); reused by the per-channel
-                    # reducer (E), the paired-ratio reducer (R), the Part D
-                    # collapsed reducer, and the new per-user E / rank
-                    # kernels below.
-                    if method == baseline_method:
-                        per_user_auc = baseline_per_user_auc
-                    elif include_auc:
-                        per_user_auc = _per_user_auc_from_cell_stats(cs, n_channels)
-                    else:
-                        per_user_auc = None
+            for method, cs in method_cell_stats.items():
+                if not cs.has_data.any():
+                    continue
+                # Precompute the per-(user, channel) AUC matrix once per
+                # (method, scenario); reused by the per-channel
+                # reducer (E), the paired-ratio reducer (R), the Part D
+                # collapsed reducer, and the new per-user E / rank
+                # kernels below.
+                if method == baseline_method:
+                    per_user_auc = baseline_per_user_auc
+                elif include_auc:
+                    per_user_auc = _per_user_auc_from_cell_stats(cs, n_channels)
+                else:
+                    per_user_auc = None
 
-                    E = _per_method_cell_errors(
-                        cs,
-                        idx_b,
-                        channel_stds,
+                E = _per_method_cell_errors(
+                    cs,
+                    idx_b,
+                    channel_stds,
+                    include_auc=include_auc,
+                    per_user_auc=per_user_auc,
+                )
+
+                # Paired ratio R vs baseline. NaN matrix if baseline is
+                # missing for this scenario (paired skill undefined).
+                if baseline_cs is not None:
+                    R = _per_method_cell_paired_ratios(
+                        cell_stats_method=cs,
+                        cell_stats_baseline=baseline_cs,
+                        boot_idx=idx_b,
                         include_auc=include_auc,
-                        per_user_auc=per_user_auc,
+                        per_user_auc_method=per_user_auc,
+                        per_user_auc_baseline=baseline_per_user_auc,
                     )
+                else:
+                    R = np.full((n_boot, n_channels), np.nan, dtype=np.float64)
 
-                    # Paired ratio R vs baseline. NaN matrix if baseline is
-                    # missing for this cell (paired skill undefined).
-                    if baseline_cs is not None:
-                        R = _per_method_cell_paired_ratios(
-                            cell_stats_method=cs,
-                            cell_stats_baseline=baseline_cs,
-                            boot_idx=idx_b,
-                            include_auc=include_auc,
+                per_user_E = _per_user_errors_for_cell(
+                    cs,
+                    n_channels=n_channels,
+                    include_auc=include_auc,
+                    per_user_auc=per_user_auc,
+                )
+
+                per_method_E[method] = E
+                per_method_R[method] = R
+                per_method_per_user_E[method] = per_user_E
+                cell_method_cs[method] = cs
+
+                if emit_collapsed and per_user_auc is not None:
+                    E_cat = _per_method_cell_collapsed_errors(
+                        per_user_auc,
+                        idx_b,
+                        BINARY_CATEGORIES_ORDERED,
+                    )
+                    if baseline_per_user_auc is not None:
+                        R_cat = _per_method_cell_paired_collapsed_ratios(
                             per_user_auc_method=per_user_auc,
                             per_user_auc_baseline=baseline_per_user_auc,
+                            boot_idx=idx_b,
+                            binary_categories=BINARY_CATEGORIES_ORDERED,
                         )
                     else:
-                        R = np.full((n_boot, n_channels), np.nan, dtype=np.float64)
-
-                    per_user_E = _per_user_errors_for_cell(
-                        cs,
-                        n_channels=n_channels,
-                        include_auc=include_auc,
-                        per_user_auc=per_user_auc,
+                        R_cat = np.full(
+                            (n_boot, len(BINARY_CATEGORIES_ORDERED)),
+                            np.nan,
+                            dtype=np.float64,
+                        )
+                    per_user_E_cat = _per_user_collapsed_errors_for_cell(
+                        per_user_auc,
+                        BINARY_CATEGORIES_ORDERED,
                     )
+                    per_method_E_cat[method] = E_cat
+                    per_method_R_cat[method] = R_cat
+                    per_method_per_user_E_cat[method] = per_user_E_cat
 
-                    per_method_E[method] = E
-                    per_method_R[method] = R
-                    per_method_per_user_E[method] = per_user_E
-                    cell_method_cs[method] = cs
+            # Cross-method per-task rank — needs every method's per-user
+            # E together so the rank within each (user, task) cell is
+            # taken across methods. Empty dict when no methods have data.
+            rank_by_method = _rank_per_draw_for_cell(
+                per_method_per_user_E,
+                idx_b,
+            )
+            rank_collapsed_by_method = _rank_per_draw_collapsed_for_cell(
+                per_method_per_user_E_cat,
+                idx_b,
+            )
 
-                    if emit_collapsed and per_user_auc is not None:
-                        E_cat = _per_method_cell_collapsed_errors(
-                            per_user_auc,
-                            idx_b,
-                            BINARY_CATEGORIES_ORDERED,
-                        )
-                        if baseline_per_user_auc is not None:
-                            R_cat = _per_method_cell_paired_collapsed_ratios(
-                                per_user_auc_method=per_user_auc,
-                                per_user_auc_baseline=baseline_per_user_auc,
-                                boot_idx=idx_b,
-                                binary_categories=BINARY_CATEGORIES_ORDERED,
-                            )
-                        else:
-                            R_cat = np.full(
-                                (n_boot, len(BINARY_CATEGORIES_ORDERED)),
-                                np.nan,
-                                dtype=np.float64,
-                            )
-                        per_user_E_cat = _per_user_collapsed_errors_for_cell(
-                            per_user_auc,
-                            BINARY_CATEGORIES_ORDERED,
-                        )
-                        per_method_E_cat[method] = E_cat
-                        per_method_R_cat[method] = R_cat
-                        per_method_per_user_E_cat[method] = per_user_E_cat
-
-                # Cross-method per-task rank — needs every method's per-user
-                # E together so the rank within each (user, task) cell is
-                # taken across methods. Empty dict when no methods have data.
-                rank_by_method = _rank_per_draw_for_cell(
-                    per_method_per_user_E,
-                    idx_b,
-                )
-                rank_collapsed_by_method = _rank_per_draw_collapsed_for_cell(
-                    per_method_per_user_E_cat,
-                    idx_b,
-                )
-
-                # Second pass: emit rows with E / R / rank.
-                for method, E in per_method_E.items():
-                    cs = cell_method_cs[method]
-                    R = per_method_R[method]
-                    rank_mat = rank_by_method.get(method)
-                    for ch in range(n_channels):
-                        if not cs.has_data[ch]:
+            # Second pass: emit rows with E / R / rank.
+            for method, E in per_method_E.items():
+                cs = cell_method_cs[method]
+                R = per_method_R[method]
+                rank_mat = rank_by_method.get(method)
+                for ch in range(n_channels):
+                    if not cs.has_data[ch]:
+                        continue
+                    ch_type = _channel_type(ch)
+                    if ch_type == "binary" and scenario in EXCLUDE_BINARY_SCENARIOS:
+                        continue
+                    col_E = E[:, ch].astype(np.float32)
+                    col_R = R[:, ch].astype(np.float32)
+                    col_rank = (
+                        rank_mat[:, ch].astype(np.float32)
+                        if rank_mat is not None
+                        else np.full(n_boot, np.nan, dtype=np.float32)
+                    )
+                    for b in range(n_boot):
+                        val_E = col_E[b]
+                        if not np.isfinite(val_E):
                             continue
-                        ch_type = _channel_type(ch)
-                        if ch_type == "binary" and scenario in EXCLUDE_BINARY_SCENARIOS:
-                            continue
-                        col_E = E[:, ch].astype(np.float32)
-                        col_R = R[:, ch].astype(np.float32)
+                        val_R = col_R[b]
+                        val_rank = col_rank[b]
+                        rows.append(
+                            {
+                                "method": method,
+                                "scenario": scenario,
+                                "split": split,
+                                "channel": f"ch_{ch}",
+                                "channel_type": ch_type,
+                                "subgroup_attr": "all",
+                                "subgroup_value": "all",
+                                "draw": int(b),
+                                "E": float(val_E),
+                                "R": float(val_R) if np.isfinite(val_R) else float("nan"),
+                                "rank": float(val_rank) if np.isfinite(val_rank) else float("nan"),
+                            }
+                        )
+
+                    if emit_per_user_errors:
+                        # Per-user un-reduced E for this (method, ch). Drop NaN
+                        # users (no data for this channel). Tuple rows (not
+                        # dicts) — see allocation note above.
+                        user_E_col = per_method_per_user_E[method][:, ch]
+                        ch_label = f"ch_{ch}"
+                        for uid_idx in np.flatnonzero(np.isfinite(user_E_col)):
+                            per_user_rows.append(
+                                (
+                                    method,
+                                    scenario,
+                                    split,
+                                    ch_label,
+                                    ch_type,
+                                    "all",
+                                    "all",
+                                    all_user_ids[uid_idx],
+                                    float(user_E_col[uid_idx]),
+                                )
+                            )
+
+                if method in per_method_E_cat:
+                    E_cat = per_method_E_cat[method]
+                    R_cat = per_method_R_cat[method]
+                    rank_cat_mat = rank_collapsed_by_method.get(method)
+                    for cat_idx, (cat_name, _) in enumerate(BINARY_CATEGORIES_ORDERED):
+                        col_E = E_cat[:, cat_idx].astype(np.float32)
+                        col_R = R_cat[:, cat_idx].astype(np.float32)
                         col_rank = (
-                            rank_mat[:, ch].astype(np.float32)
-                            if rank_mat is not None
+                            rank_cat_mat[:, cat_idx].astype(np.float32)
+                            if rank_cat_mat is not None
                             else np.full(n_boot, np.nan, dtype=np.float32)
                         )
                         for b in range(n_boot):
@@ -1542,10 +1360,10 @@ def compute_per_draw_errors(
                                     "method": method,
                                     "scenario": scenario,
                                     "split": split,
-                                    "channel": f"ch_{ch}",
-                                    "channel_type": ch_type,
-                                    "subgroup_attr": attr,
-                                    "subgroup_value": value,
+                                    "channel": f"cat_collapsed:{cat_name}",
+                                    "channel_type": "binary_collapsed",
+                                    "subgroup_attr": "all",
+                                    "subgroup_value": "all",
                                     "draw": int(b),
                                     "E": float(val_E),
                                     "R": float(val_R) if np.isfinite(val_R) else float("nan"),
@@ -1556,12 +1374,8 @@ def compute_per_draw_errors(
                             )
 
                         if emit_per_user_errors:
-                            # Per-user un-reduced E for this (method, cell, ch),
-                            # for the BCa LOO jackknife in Phase 2. Drop NaN
-                            # users (no data for this cell/channel). Tuple
-                            # rows (not dicts) — see allocation note above.
-                            user_E_col = per_method_per_user_E[method][:, ch]
-                            ch_label = f"ch_{ch}"
+                            user_E_col = per_method_per_user_E_cat[method][:, cat_idx]
+                            ch_label = f"cat_collapsed:{cat_name}"
                             for uid_idx in np.flatnonzero(np.isfinite(user_E_col)):
                                 per_user_rows.append(
                                     (
@@ -1569,67 +1383,13 @@ def compute_per_draw_errors(
                                         scenario,
                                         split,
                                         ch_label,
-                                        ch_type,
-                                        attr,
-                                        value,
+                                        "binary_collapsed",
+                                        "all",
+                                        "all",
                                         all_user_ids[uid_idx],
                                         float(user_E_col[uid_idx]),
                                     )
                                 )
-
-                    if method in per_method_E_cat:
-                        E_cat = per_method_E_cat[method]
-                        R_cat = per_method_R_cat[method]
-                        rank_cat_mat = rank_collapsed_by_method.get(method)
-                        for cat_idx, (cat_name, _) in enumerate(BINARY_CATEGORIES_ORDERED):
-                            col_E = E_cat[:, cat_idx].astype(np.float32)
-                            col_R = R_cat[:, cat_idx].astype(np.float32)
-                            col_rank = (
-                                rank_cat_mat[:, cat_idx].astype(np.float32)
-                                if rank_cat_mat is not None
-                                else np.full(n_boot, np.nan, dtype=np.float32)
-                            )
-                            for b in range(n_boot):
-                                val_E = col_E[b]
-                                if not np.isfinite(val_E):
-                                    continue
-                                val_R = col_R[b]
-                                val_rank = col_rank[b]
-                                rows.append(
-                                    {
-                                        "method": method,
-                                        "scenario": scenario,
-                                        "split": split,
-                                        "channel": f"cat_collapsed:{cat_name}",
-                                        "channel_type": "binary_collapsed",
-                                        "subgroup_attr": attr,
-                                        "subgroup_value": value,
-                                        "draw": int(b),
-                                        "E": float(val_E),
-                                        "R": float(val_R) if np.isfinite(val_R) else float("nan"),
-                                        "rank": float(val_rank)
-                                        if np.isfinite(val_rank)
-                                        else float("nan"),
-                                    }
-                                )
-
-                            if emit_per_user_errors:
-                                user_E_col = per_method_per_user_E_cat[method][:, cat_idx]
-                                ch_label = f"cat_collapsed:{cat_name}"
-                                for uid_idx in np.flatnonzero(np.isfinite(user_E_col)):
-                                    per_user_rows.append(
-                                        (
-                                            method,
-                                            scenario,
-                                            split,
-                                            ch_label,
-                                            "binary_collapsed",
-                                            attr,
-                                            value,
-                                            all_user_ids[uid_idx],
-                                            float(user_E_col[uid_idx]),
-                                        )
-                                    )
 
     if rows:
         draws_df = pd.DataFrame(rows)
@@ -1794,13 +1554,11 @@ def _emit_draws_for_cell(
     channel_type_by_label: dict[str, str],
     scenario: str,
     split: str,
-    subgroup_attr: str,
-    subgroup_value: str,
     binary_error_floor: float,
     clip_lower: float,
     clip_upper: float,
 ) -> list[dict]:
-    """Bootstrap reduce one (scenario, split, cell) into per-draw rows.
+    """Bootstrap reduce one (scenario, split) into per-draw rows.
 
     All math mirrors :func:`compute_per_draw_errors`'s per-cell second pass
     (L1336-1573) operating on pre-computed per-user E:
@@ -1899,8 +1657,8 @@ def _emit_draws_for_cell(
                         "split": split,
                         "channel": ch,
                         "channel_type": ch_type,
-                        "subgroup_attr": subgroup_attr,
-                        "subgroup_value": subgroup_value,
+                        "subgroup_attr": "all",
+                        "subgroup_value": "all",
                         "draw": int(b),
                         "E": float(val_E),
                         "R": float(val_R) if np.isfinite(val_R) else float("nan"),
@@ -1930,8 +1688,9 @@ def compute_per_draw_errors_from_per_user_errors(
       * ``per_user_df`` — long-format frame matching
         :data:`PER_USER_ERRORS_PARQUET_COLUMNS`, concatenated across all
         methods in the bootstrap pool. Each method's rows already carry
-        the canonical user_id + subgroup labels (the producer applied
-        the EXCLUDE_BINARY_SCENARIOS row filter).
+        the canonical user_id (the producer applied the
+        EXCLUDE_BINARY_SCENARIOS row filter). Only its ``"all"`` rows are
+        used: published substrates may still hold age and sex rows.
       * ``method_manifests`` — either ``{method: pa.Table}`` for one-split
         callers or ``{split: {method: pa.Table}}`` for multi-split callers.
         The per-split method dict must preserve the SAME insertion order as
@@ -1980,8 +1739,9 @@ def compute_per_draw_errors_from_per_user_errors(
     ):
         df[col] = df[col].astype(str)
     df["E_per_user"] = df["E_per_user"].astype(np.float64)
+    df = df[(df["subgroup_attr"] == "all") & (df["subgroup_value"] == "all")]
 
-    # Map channel → channel_type once per split/scenario (constant across cells).
+    # Map channel → channel_type once.
     channel_type_by_label = (
         df.drop_duplicates(["channel"])
         .set_index("channel")["channel_type"]
@@ -2007,52 +1767,32 @@ def compute_per_draw_errors_from_per_user_errors(
         for scenario in sorted(df_split["scenario"].unique()):
             df_sc = df_split[df_split["scenario"] == scenario]
 
-            # Cells: sentinel ("all","all") + every (attr, value) pair seen.
-            cells = sorted(
-                set(
-                    zip(
-                        df_sc["subgroup_attr"].tolist(),
-                        df_sc["subgroup_value"].tolist(),
-                    )
-                )
-            )
-
-            for attr, value in cells:
-                df_cell = df_sc[
-                    (df_sc["subgroup_attr"] == attr)
-                    & (df_sc["subgroup_value"] == value)
-                ]
-                if df_cell.empty:
+            # Method-major build of per_user_E[method][channel].
+            channels_in_cell = sorted(df_sc["channel"].unique())
+            per_method_E: dict[str, dict[str, np.ndarray]] = {}
+            for method in method_order:
+                df_cm = df_sc[df_sc["method"] == method]
+                if df_cm.empty:
                     continue
-
-                # Method-major build of per_user_E[method][channel].
-                channels_in_cell = sorted(df_cell["channel"].unique())
-                per_method_E: dict[str, dict[str, np.ndarray]] = {}
-                for method in method_order:
-                    df_cm = df_cell[df_cell["method"] == method]
-                    if df_cm.empty:
-                        continue
-                    per_method_E[method] = _build_per_user_E_matrix(
-                        df_cm,
-                        canonical_user_index=canonical_user_index,
-                        channels=channels_in_cell,
-                    )
-
-                cell_rows = _emit_draws_for_cell(
-                    per_method_E=per_method_E,
-                    boot_idx=boot_idx,
-                    baseline_method=baseline_method,
+                per_method_E[method] = _build_per_user_E_matrix(
+                    df_cm,
+                    canonical_user_index=canonical_user_index,
                     channels=channels_in_cell,
-                    channel_type_by_label=channel_type_by_label,
-                    scenario=scenario,
-                    split=split,
-                    subgroup_attr=attr,
-                    subgroup_value=value,
-                    binary_error_floor=binary_error_floor,
-                    clip_lower=clip_lower,
-                    clip_upper=clip_upper,
                 )
-                all_rows.extend(cell_rows)
+
+            cell_rows = _emit_draws_for_cell(
+                per_method_E=per_method_E,
+                boot_idx=boot_idx,
+                baseline_method=baseline_method,
+                channels=channels_in_cell,
+                channel_type_by_label=channel_type_by_label,
+                scenario=scenario,
+                split=split,
+                binary_error_floor=binary_error_floor,
+                clip_lower=clip_lower,
+                clip_upper=clip_upper,
+            )
+            all_rows.extend(cell_rows)
 
     if all_rows:
         return pd.DataFrame(all_rows)
@@ -2119,7 +1859,7 @@ def read_draws_parquet(path: Path) -> tuple[pd.DataFrame, dict | None]:
 
 
 # --------------------------------------------------------------------------
-# Per-user errors Parquet IO (BCa LOO jackknife substrate — see METRICS.md §S7)
+# Per-user errors Parquet IO
 # --------------------------------------------------------------------------
 
 PER_USER_ERRORS_PARQUET_COLUMNS = [
@@ -2178,48 +1918,27 @@ def read_per_user_errors_parquet(path: Path) -> tuple[pd.DataFrame, dict | None]
 
 
 # --------------------------------------------------------------------------
-# Phase-2 aggregation: skill, rank, fairness summaries from the draws table
+# Phase-2 aggregation: skill and rank summaries from the draws table
 # --------------------------------------------------------------------------
 
 
 def _skill_for_draw(
     draw_errors: pd.DataFrame,
     *,
-    baseline_errors: pd.DataFrame | None = None,
     clip_lower: float,
     clip_upper: float,
 ) -> pd.DataFrame:
     """Skill score for one draw slice.
 
-    Preferred path: ``draw_errors`` carries the per-task ``R`` column emitted
-    by :func:`compute_per_draw_errors` (paired user-bootstrap geomean ratio
-    vs LOCF baseline at the per-user grain). ``compute_skill_scores``
-    consumes ``R`` directly when present and ``baseline_errors`` is ignored.
-
-    Legacy path: when ``R`` is absent (e.g. the deprecated fairness
-    ``S − λ·D`` loop's subgroup-vs-global pairing), pass the global
-    ``baseline_errors`` and the function falls back to forming ``E_M /
-    E_B`` per task.
+    ``draw_errors`` carries the per-task ``R`` column emitted by
+    :func:`compute_per_draw_errors` (paired user-bootstrap geomean ratio vs
+    LOCF baseline at the per-user grain).
     """
-    if "R" in draw_errors.columns:
-        cols = ["method", "scenario", "channel", "channel_type", "E", "R"]
-        return compute_skill_scores(
-            draw_errors[cols],
-            None,
-            mode="paired",
-            clip_lower=clip_lower,
-            clip_upper=clip_upper,
-        )
-    cols = ["method", "scenario", "channel", "channel_type", "E"]
-    if baseline_errors is None:
-        raise ValueError(
-            "_skill_for_draw: draw_errors has no 'R' column and "
-            "baseline_errors is None — cannot form the skill ratio."
-        )
+    cols = ["method", "scenario", "channel", "channel_type", "E", "R"]
     return compute_skill_scores(
         draw_errors[cols],
-        baseline_errors[cols],
-        mode="pooled",
+        None,
+        mode="paired",
         clip_lower=clip_lower,
         clip_upper=clip_upper,
     )
@@ -2248,63 +1967,28 @@ def _rank_for_draw(draw_errors: pd.DataFrame) -> pd.DataFrame:
     return aggregate_task_ranks_to_scopes(per_task)
 
 
-def aggregate_skill_rank_fairness(
+def aggregate_skill_rank(
     draws_df: pd.DataFrame,
     *,
     baseline_method: str = "locf",
     clip_lower: float = 1e-2,
     clip_upper: float = 100.0,
-    lambda_fairness: float = 0.5,
-    disparity_fns: dict[str, Callable[[dict[str, float]], float]] | None = None,
-    fairness_combine_name: str = "linear_penalty",
     ci_level: float = 0.95,
 ) -> dict[str, pd.DataFrame]:
-    """Phase-2 core: per-draw skill / rank / fairness, summarised across draws.
+    """Phase-2 core: per-draw skill / rank, summarised across draws.
 
-    ``disparity_fns`` is a ``{name: callable}`` dict — multiple disparities
-    can coexist in one pass. Defaults to all four built-ins.
+    Only the ``subgroup_attr == "all"`` rows are read; published draws may still
+    hold age and sex rows.
 
-    Returns a dict with four DataFrames:
+    Returns a dict with two DataFrames:
     - ``skill_scores``       — columns ``method, scope, mean, se, ci_lo, ci_hi, n_boot, n_tasks``
     - ``avg_rankings``       — same shape (mean of ``avg_rank``)
-    - ``fairness_subgroups`` — columns ``method, demographic_attr, subgroup,
-                                mean, se, ci_lo, ci_hi, n_boot``
-    - ``fairness_summary``   — columns ``method, demographic_attr,
-                                S_overall_{stats}``, then for each disparity
-                                ``disparity_<name>_{stats}`` and
-                                ``fairness_adjusted_<name>_{stats}``,
-                                plus ``lambda, fairness_combine, n_boot``.
-
-    .. deprecated::
-        The ``fairness_subgroups`` / ``fairness_summary`` outputs implement
-        the legacy ``S − λ·D`` fairness-adjusted skill score (Family B).
-        The leaderboard now uses the disparity-ratio "Fairness Skill Score"
-        produced by
-        :func:`scripts.paper_results.aggregate_fairness_skill_score.compute_fairness_skill_scores`
-        (``fairness_skill_score_bootstrap.csv``). The ``skill_scores`` and
-        ``avg_rankings`` outputs of this function are **not** deprecated.
     """
-    warnings.warn(
-        "aggregate_skill_rank_fairness's fairness outputs "
-        "(fairness_subgroups, fairness_summary) implement the deprecated "
-        "S − λ·D fairness-adjusted skill score. Use "
-        "aggregate_fairness_skill_score.compute_fairness_skill_scores for "
-        "the leaderboard's disparity-ratio Fairness Skill Score. The "
-        "skill_scores / avg_rankings outputs of this function remain supported.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if disparity_fns is None:
-        disparity_fns = {n: spec.fn for n, spec in DISPARITY_FUNCTIONS.items()}
-    fairness_combine_fn = FAIRNESS_COMBINE[fairness_combine_name]
-
     if draws_df.empty:
         empty = pd.DataFrame()
         return {
             "skill_scores": empty.copy(),
             "avg_rankings": empty.copy(),
-            "fairness_subgroups": empty.copy(),
-            "fairness_summary": empty.copy(),
         }
 
     splits = sorted(draws_df["split"].unique())
@@ -2316,8 +2000,6 @@ def aggregate_skill_rank_fairness(
 
     skill_per_draw_records: list[dict] = []
     rank_per_draw_records: list[dict] = []
-    fairness_subgroup_records: list[dict] = []
-    fairness_summary_records: list[dict] = []
 
     for split in splits:
         df_split = draws_df[draws_df["split"] == split]
@@ -2325,13 +2007,7 @@ def aggregate_skill_rank_fairness(
         if df_all.empty:
             continue
 
-        # Pre-compute per-draw global baseline + overall skill for
-        # fairness_adjusted lookup.
-        all_by_draw: dict[int, pd.DataFrame] = {
-            int(d): grp for d, grp in df_all.groupby("draw", observed=True)
-        }
-
-        for draw, df_draw in all_by_draw.items():
+        for draw, df_draw in df_all.groupby("draw", observed=True):
             bl = build_baseline_errors(
                 df_draw,
                 baseline_continuous=baseline_method,
@@ -2341,7 +2017,6 @@ def aggregate_skill_rank_fairness(
                 continue
             skill = _skill_for_draw(
                 df_draw,
-                baseline_errors=bl,
                 clip_lower=clip_lower,
                 clip_upper=clip_upper,
             )
@@ -2368,116 +2043,6 @@ def aggregate_skill_rank_fairness(
                         "draw": int(draw),
                     }
                 )
-
-        # Fairness — subgroup S_g uses subgroup model errors against the
-        # global baseline at the same draw (keeps pairing coherent).
-        sg_attrs = sorted(v for v in df_split["subgroup_attr"].unique() if v != "all")
-        for attr in sg_attrs:
-            df_attr = df_split[df_split["subgroup_attr"] == attr]
-            attr_values = sorted(df_attr["subgroup_value"].unique())
-            for draw in sorted(int(d) for d in df_attr["draw"].unique()):
-                df_draw_all = all_by_draw.get(draw)
-                if df_draw_all is None or df_draw_all.empty:
-                    continue
-                bl_global = build_baseline_errors(
-                    df_draw_all,
-                    baseline_continuous=baseline_method,
-                    baseline_binary=baseline_method,
-                )
-                if bl_global.empty:
-                    continue
-                overall_skill_draw = _skill_for_draw(
-                    df_draw_all,
-                    baseline_errors=bl_global,
-                    clip_lower=clip_lower,
-                    clip_upper=clip_upper,
-                )
-                overall_lookup = (
-                    overall_skill_draw[overall_skill_draw["scope"] == "overall"]
-                    .set_index("method")["skill_score"]
-                    .to_dict()
-                )
-
-                df_draw_attr = df_attr[df_attr["draw"] == draw]
-                methods = sorted(df_draw_attr["method"].unique())
-
-                for method in methods:
-                    group_scores: dict[str, float] = {}
-                    for sg_val in attr_values:
-                        sub = df_draw_attr[
-                            (df_draw_attr["method"] == method)
-                            & (df_draw_attr["subgroup_value"] == sg_val)
-                        ]
-                        if sub.empty:
-                            continue
-                        # Drop the per-cell ``R`` column here so
-                        # ``_skill_for_draw`` falls through to the legacy
-                        # E + ``baseline_errors`` path: the documented
-                        # semantics of this deprecated fairness loop are
-                        # "subgroup method E vs **global** baseline E"
-                        # (``bl_global``), and Phase 1's ``R`` was paired
-                        # per-user *inside* the subgroup cell — a different
-                        # pairing. The leaderboard's fair_skill_score is the
-                        # disparity-ratio path in
-                        # ``compute_fair_skill_scores`` and is unaffected
-                        # (it consumes ``E`` directly).
-                        sub_no_R = sub.drop(columns=["R"], errors="ignore")
-                        skill_sg = _skill_for_draw(
-                            sub_no_R,
-                            baseline_errors=bl_global,
-                            clip_lower=clip_lower,
-                            clip_upper=clip_upper,
-                        )
-                        ov = skill_sg[
-                            (skill_sg["method"] == method) & (skill_sg["scope"] == "overall")
-                        ]
-                        if ov.empty:
-                            continue
-                        s_g = float(ov["skill_score"].iloc[0])
-                        group_scores[sg_val] = s_g
-                        fairness_subgroup_records.append(
-                            {
-                                "method": method,
-                                "demographic_attr": attr,
-                                "subgroup": sg_val,
-                                "split": split,
-                                "S_g": s_g,
-                                "draw": int(draw),
-                            }
-                        )
-
-                    if len(group_scores) < 2:
-                        continue
-                    s_overall = overall_lookup.get(method, np.nan)
-                    rec: dict = {
-                        "method": method,
-                        "demographic_attr": attr,
-                        "split": split,
-                        "draw": int(draw),
-                        "S_overall": float(s_overall) if np.isfinite(s_overall) else float("nan"),
-                    }
-                    for name, fn in disparity_fns.items():
-                        d = float(fn(group_scores))
-                        rec[f"disparity_{name}"] = d
-                        if np.isfinite(s_overall) and np.isfinite(d):
-                            # The combine fn applies ``S − λ·d_eff``. For
-                            # disparities where *higher* values mean *fairer*
-                            # (e.g. ``worst_group`` = min(S_g)), flip the sign
-                            # so the fairness-adjusted score still rewards
-                            # better fairness. Lower-is-fairer disparities
-                            # (``max_minus_min``, ``std``, ``relative_drop``)
-                            # are passed through unchanged.
-                            d_eff = -d if disparity_higher_is_better(name) else d
-                            rec[f"fairness_adjusted_{name}"] = float(
-                                fairness_combine_fn(
-                                    float(s_overall),
-                                    d_eff,
-                                    lambda_fairness,
-                                )
-                            )
-                        else:
-                            rec[f"fairness_adjusted_{name}"] = float("nan")
-                    fairness_summary_records.append(rec)
 
     # ------------------ summarise across draws ------------------
     def _summary_table(
@@ -2528,46 +2093,7 @@ def aggregate_skill_rank_fairness(
         key_cols=["method", "scope", "split"],
         extra_cols=["n_tasks"],
     )
-    fairness_subgroup_table = _summary_table(
-        fairness_subgroup_records,
-        "S_g",
-        key_cols=["method", "demographic_attr", "subgroup", "split"],
-        extra_cols=[],
-    )
-
-    # Fairness summary: multiple value cols (S_overall + per-disparity)
-    if fairness_summary_records:
-        fs_df = pd.DataFrame(fairness_summary_records)
-        value_cols = [
-            c
-            for c in fs_df.columns
-            if c.startswith(("S_overall", "disparity_", "fairness_adjusted_"))
-        ]
-        out_rows = []
-        for keys, grp in fs_df.groupby(["method", "demographic_attr", "split"], observed=True):
-            row = {
-                "method": keys[0],
-                "demographic_attr": keys[1],
-                "split": keys[2],
-                "lambda": lambda_fairness,
-                "fairness_combine": fairness_combine_name,
-            }
-            n_boot_seen = len(grp)
-            row["n_boot"] = n_boot_seen
-            for vc in value_cols:
-                summary = _summarize(grp[vc].to_numpy(), ci_level)
-                row[f"{vc}_mean"] = summary["bootstrap_mean"]
-                row[f"{vc}_se"] = summary["bootstrap_se"]
-                row[f"{vc}_ci_lo"] = summary["ci_lo"]
-                row[f"{vc}_ci_hi"] = summary["ci_hi"]
-            out_rows.append(row)
-        fairness_summary_table = pd.DataFrame(out_rows)
-    else:
-        fairness_summary_table = pd.DataFrame()
-
     return {
         "skill_scores": skill_table,
         "avg_rankings": rank_table,
-        "fairness_subgroups": fairness_subgroup_table,
-        "fairness_summary": fairness_summary_table,
     }

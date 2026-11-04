@@ -3,16 +3,16 @@
 The Track-2 bootstrap reference is two files:
 
 ```
-imputation/bootstrap/draws.parquet      # ~107 MB zstd
+imputation/bootstrap/draws.parquet      # ~16 MB zstd
 imputation/bootstrap/draws.meta.json    # provenance sidecar
 ```
 
 ## `draws.parquet`
 
 One row per `(method, scenario, split, channel, channel_type,
-subgroup_attr, subgroup_value, draw)`. Approximate size: **11,374,208
+subgroup_attr, subgroup_value, draw)`. Approximate size: **1,184,000
 rows** for the canonical 1000-draw / 16-method / 6-scenario / test-split
-run; `~107 MB` compressed (`zstd`).
+run; `~16 MB` compressed (`zstd`).
 
 | column | type | description |
 |---|---|---|
@@ -21,8 +21,8 @@ run; `~107 MB` compressed (`zstd`).
 | `split` | string (dict) | data split — `test` |
 | `channel` | string (dict) | `ch_0`..`ch_18` (19 sensor channels) or `cat_collapsed:sleep` / `cat_collapsed:workouts` (collapsed-binary tasks) |
 | `channel_type` | string (dict) | `continuous` (`ch_0`–`ch_6`), `binary` (`ch_7`–`ch_18`), or `binary_collapsed` (the `cat_collapsed:*` tasks) |
-| `subgroup_attr` | string (dict) | `all` (global cell), `age_group`, or `sex` |
-| `subgroup_value` | string (dict) | `all` for the global cell; otherwise the subgroup level (age bucket, sex value, or `unknown`) |
+| `subgroup_attr` | string (dict) | `all` |
+| `subgroup_value` | string (dict) | `all` |
 | `draw` | int32 | bootstrap-draw index in `[0, n_boot)` |
 | `E` | float32 | absolute error for this draw, user-macro reduced |
 | `R` | float32 | paired ratio vs baseline (`locf`) for this draw, geomean over users; `1.0` exactly for the baseline-vs-self row, `NaN` if undefined |
@@ -38,6 +38,11 @@ NaN appears where a task is structurally absent (e.g. binary tasks in the
 `EXCLUDE_BINARY_SCENARIOS` set: `sleep_gap`, `workout_gap`,
 `intensity_failure`).
 
+> **Older snapshots.** Files built before `S_fair` was retired also hold
+> `age_group` and `sex` rows, and their `draws.meta.json` has `include_fairness`,
+> `age_bins` and `exclude_unknown` keys. No reducer in the code repo reads either;
+> filter on `subgroup_attr == "all"`.
+
 ## `draws.meta.json`
 
 Side-car metadata, written next to `draws.parquet`. Schema:
@@ -52,9 +57,6 @@ Side-car metadata, written next to `draws.parquet`. Schema:
   "methods": ["mean", "mode", "locf", ...],          // 16 entries
   "method_dirs": {"locf": "/path/to/pairs", ...},    // source pair dirs (cluster-local)
   "include_auc": true,
-  "include_fairness": true,
-  "age_bins": [18, 30, 40, 50, 60],
-  "exclude_unknown": false,
   "elapsed_seconds": 3531.6,
   "n_rows": 11374208,
   "git_commit": "06e4cbda...",                       // code-repo commit at generation
@@ -66,7 +68,7 @@ Side-car metadata, written next to `draws.parquet`. Schema:
 ## Conventions
 
 - Evaluated against the canonical split `sharable_users_seed42_2026` (`test`).
-- Track-2 baseline for skill / fairness: `locf`.
+- Track-2 baseline for skill: `locf`.
 - Format: single Parquet, dictionary-encoded categoricals, `float32` errors, `int32` draw index, `zstd` compression.
 - Resamples are paired across methods — same `boot_idx` matrix per split, so `R` and `rank` are valid per-draw comparisons.
 
@@ -75,7 +77,7 @@ Side-car metadata, written next to `draws.parquet`. Schema:
 `imputation/bootstrap_with_dense_weekly/` holds the 17-method variant
 (adds `lsm2_weekly`). Same schema as this file; `rank` ranges 1–17
 instead of 1–16 because the comparison pool grew, and `methods` in
-`draws.meta.json` has 17 entries. Skill / fairness values per method
+`draws.meta.json` has 17 entries. Skill values per method
 are byte-identical between the two variants (pairwise vs `locf`).
 
 ## Tracks

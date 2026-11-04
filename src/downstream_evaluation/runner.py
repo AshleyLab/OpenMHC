@@ -49,14 +49,6 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
         lookup, config.split_users, granularity=grain, data_dir=config.data_dir
     )
 
-    if config.predictions_dir is not None:
-        from labels.api import STORE
-
-        # The subgroup export needs enrollment even when age is not an evaluated
-        # task. Fail before loading sensor data or running models, not after scoring.
-        provider.validate_label_dataset()
-        _ = STORE.enrollment
-
     if spec is not None:
         # DataSpec models: build a loader at the spec's resolution; the evaluator builds a
         # per-(task, split) CohortView and chooses eager-list vs streamed delivery from the
@@ -96,27 +88,11 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
     )
     results = evaluator.run(provider, loader_for_run, model, config.tasks, spec=spec)
 
-    # Predictions export: alongside the per-(method, task) parquets the evaluator
-    # wrote, persist one shared per-user subgroup map (age_group + sex) for the
-    # fairness bootstrap. Age uses enrollment createdOn; sex comes from the daily
-    # lookup regardless of model granularity.
+    # Persist per-task fallback counts alongside the predictions so the offline
+    # substrate producer can compute this method's fallback rate without re-running it.
     if config.predictions_dir is not None:
-        from downstream_evaluation.evaluation.predictions_io import (
-            write_fallback_sidecar,
-            write_subgroup_map,
-        )
+        from downstream_evaluation.evaluation.predictions_io import write_fallback_sidecar
 
-        test_users: set[str] = set()
-        for task in config.tasks:
-            try:
-                test_users.update(provider.task_data(task, "test").user_ids.tolist())
-            except KeyError:
-                continue
-        daily_lookup = f"{config.data_dir}/processed/{lookup_filename('daily', config.temporal.is_full_history)}"
-        write_subgroup_map(config.predictions_dir, daily_lookup, test_users)
-
-        # Persist per-task fallback counts alongside the predictions so the offline
-        # substrate producer can compute this method's fallback rate without re-running it.
         method_name = getattr(model, "name", type(model).__name__)
         per_task_counts = {
             task: {"n_fallback": r["n_fallback"], "n_test": r["n_test"]}

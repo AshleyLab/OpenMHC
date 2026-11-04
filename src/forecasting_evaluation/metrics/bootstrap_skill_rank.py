@@ -89,9 +89,9 @@ def _summarize(values: np.ndarray, ci_level: float) -> dict:
 
 # --------------------------------------------------------------------------
 # BCa (bias-corrected & accelerated) interval — point-anchored alternative to the
-# percentile CI for skewed / downward-biased statistics (the fairness disparity
-# ratio). Re-anchors the interval near the point estimate and corrects bias + skew
-# (second-order accurate). Uses ``statistics.NormalDist`` for Φ / Φ⁻¹ (no scipy).
+# percentile CI, opt-in for skill/rank. Re-anchors the interval near the point
+# estimate and corrects bias + skew (second-order accurate). Uses
+# ``statistics.NormalDist`` for Φ / Φ⁻¹ (no scipy).
 # --------------------------------------------------------------------------
 
 _NORM = NormalDist()

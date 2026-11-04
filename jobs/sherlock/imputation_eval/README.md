@@ -54,7 +54,6 @@ After Phase 1 + 2 of the paper bootstrap, `${PAPER_OUT}/` contains:
 | `bootstrap_draws.parquet` | shared-draw error matrix, re-aggregatable |
 | `skill_scores_bootstrap.csv` | macro skill score vs LOCF + 95% CI |
 | `avg_rankings_bootstrap.csv` | average rank across methods + 95% CI |
-| `fairness_skill_score_bootstrap.csv` | disparity-ratio Fairness Skill Score (leaderboard's `fair_skill_score`) + 95% CI |
 | `bootstrap_method_dirs.json` | provenance: which pairs/ fed each method |
 
 ## Prerequisites
@@ -234,18 +233,16 @@ Outputs:
 - 17-method → `${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper/`
 - 16-method → `${SCRATCH_RUN_ROOT}/openmhc-imputation-eval/paper_no_dense/`
 
-Each dir gets `bootstrap_draws.parquet` (~110 MB), `bootstrap_method_dirs.json`,
+Each dir gets `bootstrap_draws.parquet` (~16 MB), `bootstrap_method_dirs.json`,
 and the Phase-2 CSVs (`skill_scores_bootstrap.csv`,
-`avg_rankings_bootstrap.csv`, `fairness_skill_score_bootstrap.csv`). Wallclock:
+`avg_rankings_bootstrap.csv`). Wallclock:
 ~1–2h, parallel.
 
 ### Phase C — substrate producer (array, 17 tasks)
 
-`runs/<m>/per_user_errors.parquet` (Phase A) has only `subgroup_attr=all`.
-The HF substrate format expects subgroup-broken-down rows for `age_group` and
-`sex` so the leaderboard can recompute fairness-skill-score. The producer
-takes the existing `pairs/` + demographics lookup and writes the expanded
-parquets:
+The producer re-reads the existing `pairs/` and writes the parquets Phase D
+uploads. They hold only `subgroup_attr=all`, the same rows as
+`runs/<m>/per_user_errors.parquet` from Phase A:
 
 ```bash
 JID_C=$(sbatch --parsable --dependency=afterok:$JID_A \
@@ -255,7 +252,7 @@ JID_C=$(sbatch --parsable --dependency=afterok:$JID_A \
 Depends on **only** `JID_A` (it needs `paper/bootstrap_method_dirs.json` to
 resolve pairs paths — `JID_B`'s manifest in `paper_no_dense/` would also
 work). Outputs 17 parquets at `paper-verification/per_user/<method>.parquet`
-(~150K rows each). Wallclock: ~45 min, parallel across array tasks.
+(~48K rows each). Wallclock: ~45 min, parallel across array tasks.
 
 ### Phase D — HF upload
 

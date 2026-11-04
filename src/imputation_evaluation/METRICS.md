@@ -9,13 +9,12 @@ thin orchestrators.
 
 ## TL;DR
 
-The leaderboard publishes three families of numbers per method per split:
+The leaderboard publishes two families of numbers per method per split:
 
 | File | Quantity | Reducer | Code |
 |---|---|---|---|
 | `skill_scores_bootstrap.csv` | **Skill score** (regret vs. baseline) | paired per-user geomean | `compute_skill_scores` |
 | `avg_rankings_bootstrap.csv` | **Average rank** (lower is better) | per-user rank, two-stage | `compute_average_rankings` |
-| `fairness_skill_score_bootstrap.csv` | **Fairness skill score** (disparity ratio) | per-attribute geomean | `compute_fair_skill_scores` |
 
 Every cell carries `mean / se / ci_lo / ci_hi / n_boot` from a 1000-draw
 cluster bootstrap over users.
@@ -30,7 +29,6 @@ cluster bootstrap over users.
 | `c` | channel (one of 19, or one of 2 collapsed-binary categories) |
 | `r = (s, c)` | task |
 | `u` | user (cluster unit for the bootstrap) |
-| `g` | subgroup level (e.g. `30-39`, `female`) within attribute `G` ∈ {age_group, sex} |
 | `E_{m,r,u}` | per-task per-user error (defined below) |
 | `R_{m,r}` | per-task paired ratio against the baseline |
 | `S_{m, scope}` | skill score for one scope |
@@ -130,8 +128,8 @@ beats baseline. Code: `compute_skill_scores(mode="paired")` at
 
 The reducer additionally accepts `mode="pooled"` (legacy
 `E_method / E_baseline` on user-macro E) but this is no longer the
-leaderboard estimand and is kept only for the deprecated
-`S − λ·D` fairness loop.
+leaderboard estimand; it stays reachable from
+`compute_imputation_paper_metrics.py --skill-mode pooled`.
 
 ## 4. Average rank T
 
@@ -241,9 +239,7 @@ with an additional **L1 log-space mean over scenarios in scope**.
 `overall` is the headline skill / rank surfaced on the live leaderboard
 (computed by the OpenMHC HF Space's `leaderboard_compute.py` from the
 substrate parquets at `MyHeartCounts/OpenMHC-leaderboard-data:imputation/`).
-The new `overall` is the 3-level form universally applied. The fairness CSV's
-`overall` row is a separate quantity — the cross-attribute macro of the
-per-attribute disparity-ratio skill scores.
+The new `overall` is the 3-level form universally applied.
 
 ### 5.3.1 The universal 3-level B.2 form
 
@@ -276,7 +272,7 @@ R_c  =  exp(  (1/n_c) · Σ_{r ∈ tasks(c)}  log(R_task_r)  )
 ```
 
 — at the per-scenario grain. The **bucket source** is fixed
-(`paper_metrics_core.b2_bucket_for_channel`):
+(`paper_metrics_core._bucket_log_R_per_scenario`):
 - `activity` ← continuous per-channel rows for `ch_0..ch_4`.
 - `physiology` ← continuous per-channel rows for `ch_5..ch_6`.
 - `sleep` ← `cat_collapsed:sleep` synthetic channel key (one row per
@@ -337,90 +333,17 @@ scenarios are continuous-only in the leaderboard.
 This restriction is inherited automatically by `task:*` scopes; no
 per-scenario allowlist exists in the kernel.
 
-## 7. Fairness skill score (disparity ratio)
+## 7. Subgroup (cohort) reporting
 
-Implemented in `_per_attribute_skill_keyed` at
-`paper_metrics_core.py:525-621` and `compute_fair_skill_scores` at
-`:624-708`; bootstrapped by
-[`scripts/paper_results/aggregate_fairness_skill_score.py`](../../scripts/paper_results/aggregate_fairness_skill_score.py).
+Per-user and draw files keep `subgroup_attr` and `subgroup_value`, holding the
+constant `all`. A cohort view is a membership filter of the `all` rows: take each
+participant's `age_group` and `sex` from `labels.user_demographics`, keep the
+rows of the participants in the cohort, and run the skill and rank reducers on
+them. Age and sex rows are no longer produced.
 
-**Per-task per-attribute disparity (mean absolute pairwise difference):**
-
-```
-D_{m, r, G}  =  ( 2 / |G|(|G|-1) )  ·  Σ_{g, g' ∈ G, g ≠ g'}  | E_{m, r, g}  −  E_{m, r, g'} |
-```
-
-where `g` ranges over the levels of attribute `G ∈ {age_group, sex}`
-(see `DEFAULT_FAIRNESS_ATTRS` at `paper_metrics_core.py:35`). The sum
-runs over unordered pairs; the coefficient `2 / |G|(|G|-1)` averages
-across the `|G|(|G|-1)/2` pairs. For `|G| = 2` (sex) this collapses to
-`|E_a − E_b|`, matching the historical max-min formulation; for `|G|
-≥ 3` (age_group with 5 buckets → 10 pairs) MAPD smooths over every
-pair instead of only the two extremes.
-
-**Per-task disparity ratio vs. baseline:**
-
-```
-ratio_{m, r, G}  =  clip( D_{m, r, G} / D_{b, r, G},  CLIP_LOWER,  CLIP_UPPER )
-```
-
-Tasks are dropped from the `G`-aggregation if (i) fewer than two common
-subgroups exist for both `m` and `b` on task `r`, (ii) `D_{b, r, G} ≤ 0`
-or NaN, or (iii) `D_{m, r, G}` is NaN.
-
-**Per-attribute skill (two-stage form, mirrors §5.3.1 — buckets only;
-fairness does not have an L1 over scenarios):**
-
-```
-S^{G}_m  =  1  −  exp(  (1 / K) · Σ_{c ∈ C}  log ratio^{G}_{m, c}  )
-```
-
-where `C = {activity, physiology, sleep, workouts}`, `K = |C ∩ buckets present|`,
-and each bucket-level disparity log ratio is the **per-task mean of
-log(ratio_{m, r, G})** over the bucket's constituent (scenario, channel)
-tasks:
-
-```
-log ratio^{G}_{m, c}  =  (1 / n_c) · Σ_{r ∈ tasks(c)}  log clip(D_{r, j}^{(G)} / D_{r, b}^{(G)},  ℓ,  u)
-```
-
-Bucket sourcing matches the skill / rank side
-(`paper_metrics_core.b2_bucket_for_channel`):
-
-- `activity` and `physiology` come from per-channel continuous rows
-  (`ch_0..ch_4` and `ch_5..ch_6`).
-- `sleep` and `workouts` come from the `cat_collapsed:sleep` and
-  `cat_collapsed:workouts` rows (Part D — collapsed per-scenario tasks).
-- Per-channel binary rows (`ch_7..ch_18`) are dropped: the sleep /
-  workouts buckets reach the headline only via the collapsed rows, so
-  per-channel binary would double-count.
-
-The two-stage form prevents the same task-count imbalance the skill
-side carried before — under flat per-task geomeaning the 10 binary
-workout channels would weigh workouts at 30 / 68 ≈ 44% of the per-attribute
-geomean, eclipsing both continuous categories combined.
-
-**Macro-average over attributes:**
-
-```
-S^{fair}_m  =  (1 / |A|) · Σ_{G ∈ A}  S^{G}_m
-```
-
-Methods missing data for any attribute drop out of the macro to keep the
-average honest (`paper_metrics_core.py:688-690`).
-
-**Emitted scopes** (3 rows per method per split):
-
-| scope | value |
-|---|---|
-| `age_group` | `S^{age_group}_m` |
-| `sex` | `S^{sex}_m` |
-| `overall` | `S^{fair}_m` |
-
-The fairness CSV is **not** broken down by scenario / category / channel
-— that's tracked in [the plan
-file](/home/users/schuetzn/.claude/plans/have-a-look-at-squishy-kernighan.md)
-as an out-of-scope follow-up.
+Files published before `S_fair` was retired also hold `age_group` and `sex`
+rows. The reducers and table generators read only the `all` rows of such files,
+so they need no conversion.
 
 ## 8. Bootstrap (cluster-on-user)
 
@@ -428,9 +351,9 @@ as an out-of-scope follow-up.
 
 For each split, draw `n_boot = 1000` resample matrices `M ∈ N_users × n_boot`,
 each column a multiset bootstrap over the canonical user set.
-The matrix is **shared across all scenarios and subgroups within the
-split** so cross-scenario covariance and within-draw subgroup pairing
-are preserved (`bootstrap_skill_rank.py:_seed_for_split:384-396`,
+The matrix is **shared across all scenarios within the split** so
+cross-scenario covariance is preserved
+(`bootstrap_skill_rank.py:_seed_for_split:384-396`,
 seeded by `SHA-256("seed|split")` so the draw is reproducible across
 runs).
 
@@ -440,14 +363,15 @@ For each draw `(b)`:
 - compute per-task per-user ranks → `task_rank^{(b)}_{m, r}` (Stage 1, §4)
 
 For binary channels, the code precomputes the per-(user, channel) pooled
-AUC matrix once per `(method, scenario, cell)` and reuses it across the
+AUC matrix once per `(method, scenario)` and reuses it across the
 per-channel `E`, paired-ratio `R`, collapsed-binary, and rank reducers
 (`_per_user_auc_from_cell_stats`, wired in the Phase 1 loop at
 `bootstrap_skill_rank.py:399-434, 1355-1363`).
 
 Output: `bootstrap_draws.parquet` with one row per
 `(method, scenario, split, channel, subgroup_attr, subgroup_value, draw)`
-carrying `E`, `R`, `rank`.
+carrying `E`, `R`, `rank`. `subgroup_attr` and `subgroup_value` hold the
+constant `all` (§7).
 
 **Phase 2 — `aggregate_imputation_paper_metrics.py`**
 
@@ -466,38 +390,20 @@ n_boot      =  count of finite draws in this cell
 (`_summarize` in `bootstrap.py`, reused by Phase 2.)
 
 CI level is 0.95 by default (set in `sweep_methods.yaml:ci_level`).
-Pairing via the shared resample matrix controls sampling covariance, but it
-does **not** correct the shape bias of the mean-pairwise-difference disparity
-ratio that powers the fairness skill score. Fairness rows therefore
-additionally carry a deterministic `point` estimate plus a BCa
-(bias-corrected & accelerated) CI alongside the percentile columns
-(§S7). Skill / rank rows stay percentile-only by default — they are
-near-unbiased, so BCa would not move them much — but a
-`bca_skill_rank` knob exists for parity sanity-checks.
-
-Fairness bootstrap follows the same shape: each draw computes
-`(D_j, D_b)` per task, ratio per task, geomean per attribute, macro
-average. SE / CI from `_summarize` over the 1000 draws
-(`aggregate_fairness_skill_score.py`). The fairness CSV columns are
-`[method, scope, split, n_tasks, mean, se, ci_lo, ci_hi, n_boot,
-point, bca_lo, bca_hi]`; `mean / ci_lo / ci_hi` retain their legacy
-percentile semantics, and `point / bca_lo / bca_hi` carry the BCa
-augmentation for the 3 published fairness scopes (`overall`,
-`age_group`, `sex`).
+Pairing via the shared resample matrix controls sampling covariance. Skill / rank
+rows are percentile-only; a `bca_skill_rank` knob exists but is not implemented
+(§S7).
 
 ### 8.1 Recomputing against a subset of methods
 
 The Phase 0 → Phase 1 → Phase 2 boundary is well-defined:
 `bootstrap_draws.parquet` is the canonical Phase-1 output (plus its sibling
-`per_user_errors.parquet`, the BCa LOO substrate emitted by
+`per_user_errors.parquet`, emitted by
 `bootstrap_imputation_draws.py --per-user-errors`), and any subset of the
 methods inside them can be re-aggregated in Phase 2 alone — no Phase 0
-(per-method eval) or Phase 1 (resample) rerun needed. The BCa point + LOO
-jackknife are themselves per-method recomputes against `baseline_method`
-(same invariant as the skill / fairness scores), so subset reruns stay
-bit-identical for the in-subset rows.
+(per-method eval) or Phase 1 (resample) rerun needed.
 
-Both Phase 2 aggregators take a `--method-filter` flag that pre-filters
+The Phase 2 aggregator takes a `--method-filter` flag that pre-filters
 the parquet rows before any reducer runs:
 
 ```bash
@@ -507,39 +413,31 @@ python scripts/paper_results/aggregate_imputation_paper_metrics.py \
   --method-filter locf lsm2 lsm2_weekly_sparse linear brits \
   --baseline-method locf \
   --clip-lower 0.01 --clip-upper 100.0 \
-  --lambda-fairness 0.5 --fairness-combine linear_penalty \
   --ci-level 0.95
-
-python scripts/paper_results/aggregate_fairness_skill_score.py \
-  --draws  ${PAPER_OUT}/bootstrap_draws.parquet \
-  --output ${PAPER_OUT}/subset-A/fairness_skill_score_bootstrap.csv \
-  --method-filter locf lsm2 lsm2_weekly_sparse linear brits \
-  --baseline-method locf --clip-lower 0.01 --clip-upper 100.0 --ci-level 0.95
 ```
 
 Or via the pipeline driver: set `method_filter: [locf, lsm2, …]` in the
 sweep YAML and run `run_paper_pipeline.py --skip-eval --skip-phase1`.
-Both aggregators are dispatched with the filter automatically.
+The aggregator is dispatched with the filter automatically.
 
 **Two invariants the math gives you:**
 
 | Quantity | Depends on the pool? | Why |
 |---|---|---|
 | Skill score (vs. baseline) | **No** | Paired ratio `E_method / E_baseline` per task is independent of every other method in the parquet |
-| Fairness skill score | **No** | Disparity ratio `D_method / D_baseline` per task is also independent |
 | Avg rank | **Yes** | `compute_average_rankings` ranks methods against each other per (scenario, channel, user); changing the pool changes every rank |
-| Bootstrap SE / CI | follows the underlying quantity | Skill / fairness SE unchanged; rank SE depends on pool size |
+| Bootstrap SE / CI | follows the underlying quantity | Skill SE unchanged; rank SE depends on pool size |
 
 So a subset rerun lets you re-cut ranks against a custom comparison
-group while skill / fairness numbers stay bit-identical to the full-pool
+group while skill numbers stay bit-identical to the full-pool
 run.
 
-**Two operational guardrails:**
+**Operational guardrail:**
 
-1. **The baseline must be in the filter.** Both skill and fairness pair
+1. **The baseline must be in the filter.** Skill pairs
    each method's E against the baseline's E per task; if the baseline
    isn't in the parquet rows after filtering, the inner merge produces
-   no rows and the CSV gets empty skill / fairness rows for every
+   no rows and the CSV gets empty skill rows for every
    method. The pipeline driver's `_method_filter_args` helper raises a
    `ValueError` before subprocess launch if the YAML's `method_filter`
    excludes `baseline_method`; the direct CLI does not enforce this, so
@@ -586,11 +484,7 @@ python scripts/paper_results/compute_imputation_paper_metrics.py \
   --output-dir results/paper-fast-point/
 ```
 
-Same `--methods` ranking-pool semantics. The script applies the
-fairness B.2 row-strip (drops per-channel binary `ch_7..ch_18`; keeps
-`cat_collapsed:{sleep,workouts}`) automatically when reducing
-`errors_sg` for the fair skill score, matching the bootstrap CSV's
-`point` column.
+Same `--methods` ranking-pool semantics.
 
 **Public-API integration** — `openmhc.evaluate_imputation` accepts
 `output_dir=` (persists `per_user_errors.parquet`) and
@@ -614,9 +508,8 @@ full surface and the multi-method ranking pattern.
 - The legacy `_per_method_cell_paired_collapsed_ratios` applies
   `BINARY_ERROR_FLOOR` **per-channel inside the nanmean** when
   computing collapsed-binary R; the per-user-errors substrate stores
-  the **unfloored** value. This divergence shows up only on the
-  `unknown` subgroup of `cat_collapsed:sleep / mean / random_noise`
-  and is absorbed by the Phase 2 SE.
+  the **unfloored** value, so the `cat_collapsed:*` R of the two paths
+  can differ on the `all` rows.
 - Strict byte-parity on `bootstrap_draws.parquet` would require
   storing `E_per_user` in float64 (~doubles file size) and
   reconstructing the per-channel-floored cat E inside
@@ -634,8 +527,6 @@ full surface and the multi-method ranking pattern.
 | `SKILL_MIN_PAIRS` | `1` | `bootstrap_skill_rank.py:79` |
 | `EXCLUDE_BINARY_SCENARIOS` | `{sleep_gap, workout_gap, intensity_failure}` | `paper_metrics_core.py:42` |
 | `SEMANTIC_SCENARIOS` | `{sleep_gap, workout_gap, intensity_failure}` | `paper_metrics_core.py:45` |
-| `DEFAULT_FAIRNESS_ATTRS` | `("age_group", "sex")` | `paper_metrics_core.py:35` |
-| Default age bins | `[18, 30, 40, 50, 60]` | `sweep_methods.yaml`, `run_paper_pipeline.py:186` |
 | `n_boot` | `1000` | `sweep_methods.yaml:37` |
 | `seed` | `42` | `sweep_methods.yaml:38` |
 | CI level | `0.95` | `sweep_methods.yaml:51` |
@@ -684,89 +575,14 @@ Bootstrap: repeat the per-user join with each draw's resampled cohort,
 get 1000 values of `S^{task,(b)}`, report
 `mean / se / ci_lo / ci_hi`.
 
-## §S7. BCa (bias-corrected & accelerated) CIs for fairness skill
+## §S7. BCa (bias-corrected & accelerated) CIs for skill / rank
 
-**Why.** The fairness skill score reduces a per-task mean absolute
-pairwise difference (MAPD) disparity ratio `D_{r}^{(G)} =
-(2/|G|(|G|-1)) · Σ_{g≠g'} |E_{r}^{(g)} − E_{r}^{(g')}|` clipped and
-geomean-averaged across tasks. The pairwise-difference disparity is a
-skewed, downward-biased
-statistic: the bootstrap mean `mean_b S^{(G),(b)}` sits below the
-deterministic point estimate `Ŝ^{(G)}`, and the plain percentile CI
-brackets 0 for most mid-pack methods. The shared-resample-matrix
-pairing in §8 addresses sampling **covariance**, not the shape **bias**
-of `max − min` — those are orthogonal concerns. BCa re-anchors the
-interval at `Ŝ^{(G)}` and corrects bias + skew (second-order accurate)
-without changing the reported point estimate.
-
-**Math.** For each headline `(method, scope)` cell:
-
-```
-draws         θ*_b  =  bootstrap S^{(G),(b)} from Phase 2
-point         θ̂      =  compute_fair_skill_scores(per_user → per_cell mean)
-jackknife    θ_{(i)} =  leave-one-user-out recompute of the point flow
-
-z_0           =  Φ⁻¹( frac of draws < θ̂ )                # bias correction
-a             =  Σ_i d_i^3 / (6 · (Σ_i d_i^2)^{3/2}),  d = mean(θ_{(i)}) − θ_{(i)}
-                                                          # acceleration
-α_lo, α_hi    =  Φ( z_0 + (z_0 + z_{α/2})  / (1 − a (z_0 + z_{α/2})) )
-                 Φ( z_0 + (z_0 + z_{1−α/2})/ (1 − a (z_0 + z_{1−α/2})) )
-bca_lo, hi    =  percentile_b θ*_b at (100 · α_lo, 100 · α_hi)
-```
-
-`Φ` / `Φ⁻¹` come from `statistics.NormalDist` (stdlib, no scipy).
-
-**Guards** (fall back to the plain percentile interval):
-
-- 0 finite draws or non-finite point → percentile (or NaN, NaN if
-  draws are empty).
-- All draws equal → `[point, point]` (degenerate).
-- Non-finite `z₀` or `a`; zero or non-finite denominator
-  `1 − a (z₀ + z_q)` → percentile.
-- `z₀ = a = 0` (symmetric draws, symmetric jackknife) → adjusted
-  percentiles collapse to `α/2` and `1 − α/2`: the BCa interval
-  equals the percentile interval exactly.
-
-**Headline scope gating.** BCa is gated to the
-headline-scope set (default ON for fairness):
-
-| Table                                     | Headline scopes for BCa                        | Default |
-|-------------------------------------------|------------------------------------------------|---------|
-| `fairness_skill_score_bootstrap.csv`      | `overall`, `age_group`, `sex` (all 3 emitted)  | **ON**  |
-| `skill_scores_bootstrap.csv` (opt-in)     | `overall` + sensor categories                  | off     |
-| `avg_rankings_bootstrap.csv` (opt-in)     | `overall` + sensor categories                  | off     |
-
-`point` is filled for every row (headline + non-headline); `bca_lo` /
-`bca_hi` are NaN outside the headline set. Per-channel rows therefore
-keep the percentile CI only, even when the opt-in flag is on.
-
-**Skill / rank opt-in caveat.** The `--bca-skill-rank` flag on
-`aggregate_imputation_paper_metrics.py` is wired through the CLI but
-the LOO jackknife of the skill / rank point flow is not yet
-implemented (each LOO recompute would run
-`compute_per_task_paired_R` + `compute_skill_scores` +
-`compute_average_rankings` once per user, ~N × per-iter at N ≈ 5K
-users in the production cohort). Turning the flag on currently raises
-`NotImplementedError` with a pointer back here. The flag is OFF by
-default so the legacy skill / rank CSVs are unchanged.
-
-**Backward compatibility.** The legacy columns
-`[method, scope, split, n_tasks, mean, se, ci_lo, ci_hi, n_boot]`
-keep their exact percentile semantics; `--no-bca` produces a CSV
-byte-identical to the pre-BCa output (asserted by
-`tests/imputation_evaluation/test_imputation_bca.py::test_fairness_bca_off_matches_legacy_csv`).
-
-**Implementation pointers.**
-
-- `src/imputation_evaluation/evaluation/bca.py` — `_jackknife_acceleration`,
-  `_bca_interval`, `_augment_with_bca` (stdlib only).
-- `src/imputation_evaluation/evaluation/bootstrap_skill_rank.py` —
-  `compute_per_draw_errors(emit_per_user_errors=True)` and the
-  `write_per_user_errors_parquet` / `read_per_user_errors_parquet`
-  helpers (Phase 1 substrate).
-- `scripts/paper_results/aggregate_fairness_skill_score.py` —
-  `_jackknife_fair_points_from_per_user`, `_per_user_to_per_cell_E`,
-  `compute_fairness_skill_scores(bca=True, per_user_df=...)`.
+The `--bca-skill-rank` flag on `aggregate_imputation_paper_metrics.py` is wired
+through the CLI but the leave-one-user-out jackknife of the skill / rank point
+flow is not implemented (each recompute would run `compute_per_task_paired_R` +
+`compute_skill_scores` + `compute_average_rankings` once per user, ~N × per-iter
+at N ≈ 5K users in the production cohort). Turning the flag on raises
+`NotImplementedError`. The flag is OFF by default.
 
 ## See also
 

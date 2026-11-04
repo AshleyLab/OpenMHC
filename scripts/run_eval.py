@@ -75,8 +75,8 @@ def main() -> None:
     paths = _DatasetPaths.resolve(os.environ.get("MHC_DATA_DIR"), version=version)
     model = build_model(method, str(paths.root))
 
-    # PREDICTIONS_DIR (optional): emit per-(method, task) test predictions +
-    # _subgroups.json for the paper-metrics bootstrap (skill / rank / fairness CIs).
+    # PREDICTIONS_DIR (optional): emit per-(method, task) test predictions for the
+    # paper-metrics bootstrap (skill / rank CIs).
     # OUTPUT_DIR (optional): emit the per-method leaderboard substrate
     # <OUTPUT_DIR>/<METHOD>.parquet (raw per-user pairs) + meta sidecar for HF upload.
     output_dir = os.environ.get("OUTPUT_DIR")

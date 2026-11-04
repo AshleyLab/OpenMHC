@@ -28,13 +28,6 @@ CLIP_UPPER = 100.0
 BASELINE_CONTINUOUS = "locf"
 BASELINE_BINARY = "locf"
 
-DEFAULT_LAMBDA = 0.5
-
-# Disparity-ratio fair skill score (the metric quoted in the leaderboard's
-# ``fair_skill`` column). See ``compute_fair_skill_scores`` for the full math.
-DEFAULT_FAIRNESS_ATTRS: tuple[str, ...] = ("age_group", "sex")
-FAIRNESS_OVERALL_SCOPE = "overall"
-
 N_CONTINUOUS = 7  # ch_0..ch_6
 N_BINARY = 12  # ch_7..ch_18
 
@@ -79,41 +72,6 @@ def channel_category(channel: str) -> str | None:
 def is_collapsed_channel(channel: str) -> bool:
     """True for the synthetic ``cat_collapsed:*`` channel labels emitted by Part D."""
     return channel.startswith("cat_collapsed:")
-
-
-# Channel → sensor-category bucket for the B.2 two-stage form of
-# ``overall_binary_collapsed`` (skill / rank) and the per-attribute fairness
-# skill score. Maps each row to one of {activity, physiology, sleep,
-# workouts} when it belongs to a bucket consumed by the headline, or to
-# ``None`` for rows that should not contribute (e.g. per-channel binary
-# rows when ``cat_collapsed:*`` is used instead, to avoid double-counting).
-_B2_COLLAPSED_BUCKETS: dict[str, str] = {
-    "cat_collapsed:sleep": "sleep",
-    "cat_collapsed:workouts": "workouts",
-}
-
-
-def b2_bucket_for_channel(channel: str, channel_type: str) -> str | None:
-    """Map a (channel, channel_type) pair to its B.2 bucket name.
-
-    Returns one of ``"activity"`` / ``"physiology"`` / ``"sleep"`` /
-    ``"workouts"`` for rows the two-stage form consumes, or ``None`` for
-    rows it ignores (the per-channel binary ``ch_7..ch_18`` rows — the
-    binary side reaches the headline only via the ``cat_collapsed:*``
-    rows so per-channel binary would double-count).
-
-    Used identically on the skill / rank side (via ``compute_skill_scores``
-    and ``aggregate_task_ranks_to_scopes``) and on the fairness side (via
-    ``_per_attribute_skill_keyed``), so the four scores reflect a
-    consistent category-balanced estimand.
-    """
-    if channel in _B2_COLLAPSED_BUCKETS:
-        return _B2_COLLAPSED_BUCKETS[channel]
-    if channel_type == "continuous":
-        return channel_category(channel)
-    # Per-channel binary rows (channel_type == "binary"): skipped — replaced
-    # by the cat_collapsed:* rows above.
-    return None
 
 
 # --------------------------------------------------------------------------
@@ -240,17 +198,10 @@ def _scenario_rank_per_method(
             cols.append("scenario_users")
         return pd.DataFrame(columns=cols)
 
-    # Map (channel, channel_type) → bucket via b2_bucket_for_channel.
-    # b2_bucket_for_channel needs channel_type; the per-task frames
-    # produced by the rank kernel carry it implicitly through
+    # Recover the bucket from the channel name alone: the per-task frames
+    # produced by the rank kernel carry the channel type implicitly through
     # ``channel`` (per-channel ch_K) and the collapsed ``cat_collapsed:*``
-    # synthetic key — so we can recover the bucket from the channel
-    # name alone (no channel_type column is needed for the lookup since
-    # the kernel decides bucket by channel-suffix or by category
-    # membership). To stay symmetric with the skill kernel and the
-    # ``b2_bucket_for_channel`` contract we synthesize a channel_type:
-    # collapsed channels → "binary_collapsed"; everything else falls back
-    # to continuous-vs-binary via ``channel_category``.
+    # synthetic key.
     df = per_task.copy()
     chan_str = df["channel"].astype(str)
     cat = chan_str.map(channel_category)
@@ -409,10 +360,9 @@ def compute_skill_scores(
        bootstrap kernel
        :func:`bootstrap_skill_rank._per_method_cell_paired_ratios`.
     2. ``mode="pooled"`` (legacy opt-in). Form ``E_method / E_baseline`` per
-       task from ``errors`` and ``baseline_errors``, clip, geomean. Used
-       only by the deprecated ``S − λ·D`` fairness path, which pairs
-       subgroup-method E against a global-baseline E (a different pairing
-       than the leaderboard's subgroup-internal R).
+       task from ``errors`` and ``baseline_errors``, clip, geomean. Not the
+       leaderboard estimand; reachable from
+       ``compute_imputation_paper_metrics.py --skill-mode pooled``.
 
     Emits these scopes (identical layout in both modes):
 
@@ -517,8 +467,7 @@ def compute_skill_scores(
     # L1 (across scenarios):          per-method mean over scenarios-in-scope
     #   of L2 values. ``S_scope = 1 − exp(L1)``.
     #
-    # Bucket sourcing (matches ``b2_bucket_for_channel`` and the fairness
-    # kernel):
+    # Bucket sourcing:
     #   activity   ← continuous category=="activity" rows (ch_0..ch_4)
     #   physiology ← continuous category=="physiology" rows (ch_5..ch_6)
     #   sleep      ← cat_collapsed:sleep rows (Part D)
@@ -815,254 +764,6 @@ def compute_average_rankings(errors: pd.DataFrame) -> pd.DataFrame:
     ``cat_collapsed:*`` rows are present.
     """
     return _average_rankings_per_user(errors)
-
-
-# --------------------------------------------------------------------------
-# Disparity-ratio fair skill score
-# --------------------------------------------------------------------------
-
-
-def _per_attribute_skill_keyed(
-    df_attr: pd.DataFrame,
-    *,
-    extra_keys: list[str],
-    baseline_method: str,
-    clip_lower: float,
-    clip_upper: float,
-) -> pd.DataFrame:
-    """Per-(method, *extra_keys) fairness skill score for one attribute.
-
-    ``df_attr`` is the long-format error frame for one ``subgroup_attr``
-    value (with at least two ``subgroup_value`` levels). Must contain
-    ``method, scenario, channel, channel_type, subgroup_value, E`` plus
-    every column listed in ``extra_keys`` (e.g. ``"draw"`` for the
-    bootstrap path; ``[]`` for the deterministic point estimate).
-
-    For each task r = (scenario, channel) and key tuple k = (*extra_keys),
-    we restrict to the **common subgroup set** that both the method and the
-    baseline have data for in that task/key, and then:
-        D^{(k)}_{r, j}  =  (2 / |G|(|G|-1)) * Σ_{g, g' ∈ G, g ≠ g'}
-                                  | E^{(k)}_{r, j, g}  -  E^{(k)}_{r, j, g'} |
-        D^{(k)}_{r, b}  =  same, for the baseline method b.
-        ratio          =  clip(D_j / D_b,  clip_lower, clip_upper)
-    The disparity is the **mean absolute pairwise difference** (MAPD)
-    across the common subgroup set — averaged over all unordered (g, g')
-    pairs. For ``|G| = 2`` (e.g. sex) this collapses to ``|E_a − E_b|``,
-    matching the previous max-min formulation; for ``|G| ≥ 3`` (e.g.
-    age_group with 5 buckets → 10 pairs) MAPD is smoother because every
-    pair contributes instead of only the two extremes.
-    Drop tasks where fewer than two common subgroups exist, where the
-    baseline is already perfectly fair (D_b ≤ 0), or where any D is NaN.
-    Then
-        S^{(k)}_{method}  =  1 - exp(mean_r log(ratio))
-
-    The ≥2-common-subgroup guard prevents a known failure mode where a
-    method that happens to have data for only one subgroup of a task/draw
-    would yield D_j = 0 by construction (a single value has no pairwise
-    differences), get clipped to ``clip_lower`` after dividing by
-    D_b > 0, and earn a near-perfect ``S_attr ≈ 1 - clip_lower`` for free.
-    This can happen in the bootstrap path (per-draw row drop-outs from
-    non-finite metrics, single-class AUC draws, missing manifest
-    coverage) even when the upstream subgroup universe is logically the
-    same across methods.
-
-    Returns one row per (method, *extra_keys) with columns
-    ``[method, *extra_keys, S_attr, n_tasks]``.
-    """
-    task_keys = [*extra_keys, "scenario", "channel", "channel_type"]
-    method_task_keys = [*task_keys, "method"]
-
-    # Pair each method row with the baseline's E for the same (task,
-    # subgroup_value). The inner merge restricts every (method, task) row
-    # set to subgroups the baseline also has data for, so D_j and D_b are
-    # computed over the SAME subgroup set per task. This both aligns the
-    # comparison and excludes orphan rows that would collapse D_j to 0 when
-    # a method has only one subgroup row for a task/draw.
-    bl_rows = df_attr.loc[
-        df_attr["method"] == baseline_method,
-        [*task_keys, "subgroup_value", "E"],
-    ].rename(columns={"E": "E_b"})
-    aligned = df_attr.merge(
-        bl_rows,
-        on=[*task_keys, "subgroup_value"],
-        how="inner",
-    )
-    if aligned.empty:
-        return pd.DataFrame(columns=["method", *extra_keys, "S_attr", "n_tasks"])
-
-    def _mapd(series: pd.Series) -> float:
-        """Mean absolute pairwise difference of a numeric series.
-
-        Computes ``(2 / n(n-1)) * Σ_{i<j} |x_i − x_j|`` — i.e. the mean
-        of ``|x_i − x_j|`` over the ``n(n-1)/2`` unordered pairs.
-        Returns NaN when fewer than 2 finite values are present.
-        """
-        vals = series.to_numpy()
-        # NaNs would propagate into the pairwise differences; mirror the
-        # downstream "any D NaN" drop by short-circuiting here.
-        vals = vals[np.isfinite(vals)]
-        n = vals.size
-        if n < 2:
-            return float("nan")
-        # |x_i - x_j| for every pair (n,n); take the upper triangle so
-        # each unordered pair counts once.
-        diffs = np.abs(vals[:, None] - vals[None, :])
-        iu, ju = np.triu_indices(n, k=1)
-        return float(diffs[iu, ju].mean())
-
-    grouped = aligned.groupby(method_task_keys, observed=True)
-    D = pd.DataFrame(
-        {
-            "D_j": grouped["E"].apply(_mapd),
-            "D_b": grouped["E_b"].apply(_mapd),
-            "n_sub": grouped["subgroup_value"].nunique(),
-        }
-    ).reset_index()
-
-    # Drop tasks where:
-    #   - fewer than 2 common (method ∩ baseline) subgroups exist; the
-    #     mean pairwise difference is undefined (NaN from ``_mapd``) and
-    #     a single subgroup row would otherwise look "perfectly fair".
-    #   - the baseline is already perfectly fair (D_b ≤ 0).
-    #   - either disparity is NaN.
-    # The D_b > 0 / NaN guards mirror compute_skill_scores'
-    # ``e_baseline <= 0 or np.isnan(e_baseline)`` drop rule.
-    keep = (
-        (D["n_sub"] >= 2)
-        & (D["D_b"] > 0)
-        & D["D_b"].notna()
-        & D["D_j"].notna()
-        & (D["D_j"] >= 0)  # |·|-based, non-negative by construction
-    )
-    D = D.loc[keep].copy()
-    if D.empty:
-        return pd.DataFrame(columns=["method", *extra_keys, "S_attr", "n_tasks"])
-
-    ratio = (D["D_j"] / D["D_b"]).clip(lower=clip_lower, upper=clip_upper)
-    D["log_ratio"] = np.log(ratio.to_numpy())
-
-    # B.2 two-stage form: per-task log_ratios collapse to one value per
-    # sensor-category bucket first, then we average over buckets per
-    # (method, *extra_keys). Mirrors the ``overall_binary_collapsed`` skill
-    # / rank aggregation in ``compute_skill_scores`` so the fairness score
-    # is category-balanced rather than task-count-weighted (where
-    # workouts' 10 binary channels would dominate the per-attribute
-    # geomean at 30 / 68 ≈ 44% weight).
-    D["bucket"] = [
-        b2_bucket_for_channel(ch, ct)
-        for ch, ct in zip(D["channel"].astype(str), D["channel_type"].astype(str))
-    ]
-    D = D[D["bucket"].notna()]
-    if D.empty:
-        return pd.DataFrame(columns=["method", *extra_keys, "S_attr", "n_tasks"])
-
-    # Stage 1: per (method, *extra_keys, bucket), mean of per-task log_ratio.
-    stage1 = (
-        D.groupby(["method", *extra_keys, "bucket"], observed=True)["log_ratio"]
-        .mean()
-        .reset_index(name="bucket_log_ratio")
-    )
-    # Stage 2: per (method, *extra_keys), arithmetic mean over buckets.
-    # ``n_tasks`` counts buckets present (≤ 4).
-    agg = (
-        stage1.groupby(["method", *extra_keys], observed=True)
-        .agg(
-            log_ratio_mean=("bucket_log_ratio", "mean"),
-            n_tasks=("bucket_log_ratio", "size"),
-        )
-        .reset_index()
-    )
-    agg["S_attr"] = 1.0 - np.exp(agg["log_ratio_mean"])
-    return agg[["method", *extra_keys, "S_attr", "n_tasks"]]
-
-
-def compute_fair_skill_scores(
-    errors: pd.DataFrame,
-    *,
-    attrs: Iterable[str] = DEFAULT_FAIRNESS_ATTRS,
-    baseline_method: str = BASELINE_CONTINUOUS,
-    clip_lower: float = CLIP_LOWER,
-    clip_upper: float = CLIP_UPPER,
-) -> pd.DataFrame:
-    """Deterministic disparity-ratio fair skill score per method.
-
-    Input ``errors`` is the long-format per-subgroup error frame:
-    ``[method, scenario, channel, channel_type, subgroup_attr,
-    subgroup_value, E]``. Rows for the global ``subgroup_attr == "all"``
-    cell are ignored.
-
-    For each attribute in ``attrs`` we compute the per-task **mean
-    absolute pairwise difference** (MAPD) disparity for the method and
-    for the baseline, clip the ratio, and take the geometric mean across
-    tasks (see ``_per_attribute_skill_keyed``). The overall score is the
-    macro-average across attributes — methods missing any attribute drop
-    out of the overall row to keep the average honest.
-
-    Returns one row per (method, scope) with columns
-    ``[method, scope, fair_skill_score, n_tasks]``. ``scope`` is one entry
-    per attribute plus ``"overall"`` for the macro-average.
-    """
-    attrs = list(attrs)
-    per_attr_results: dict[str, pd.DataFrame] = {}
-    results: list[dict] = []
-
-    for attr in attrs:
-        df_attr = errors[errors["subgroup_attr"] == attr]
-        if df_attr.empty:
-            continue
-        if df_attr["subgroup_value"].nunique() < 2:
-            # Max-min disparity is degenerate with a single subgroup.
-            continue
-
-        per_attr = _per_attribute_skill_keyed(
-            df_attr,
-            extra_keys=[],
-            baseline_method=baseline_method,
-            clip_lower=clip_lower,
-            clip_upper=clip_upper,
-        )
-        if per_attr.empty:
-            continue
-        per_attr_results[attr] = per_attr
-
-        for _, row in per_attr.iterrows():
-            results.append(
-                {
-                    "method": row["method"],
-                    "scope": attr,
-                    "fair_skill_score": float(row["S_attr"]),
-                    "n_tasks": int(row["n_tasks"]),
-                }
-            )
-
-    # Macro-average across attributes per method — drop methods missing
-    # any attribute so the mean is honest.
-    if per_attr_results:
-        stacked = pd.concat(
-            [df.assign(attr=name) for name, df in per_attr_results.items()],
-            ignore_index=True,
-        )
-        n_seen = stacked.groupby("method", observed=True)["attr"].nunique()
-        full = n_seen[n_seen == len(per_attr_results)].index
-        stacked = stacked[stacked["method"].isin(full)]
-        overall = (
-            stacked.groupby("method", observed=True)
-            .agg(S_fair=("S_attr", "mean"), n_tasks=("n_tasks", "sum"))
-            .reset_index()
-        )
-        for _, row in overall.iterrows():
-            results.append(
-                {
-                    "method": row["method"],
-                    "scope": FAIRNESS_OVERALL_SCOPE,
-                    "fair_skill_score": float(row["S_fair"]),
-                    "n_tasks": int(row["n_tasks"]),
-                }
-            )
-
-    if not results:
-        return pd.DataFrame(columns=["method", "scope", "fair_skill_score", "n_tasks"])
-    return pd.DataFrame(results)
 
 
 def build_baseline_errors(

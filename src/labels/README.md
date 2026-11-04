@@ -6,6 +6,7 @@ This module exposes an in-memory lookup for stored label values with automatic t
 - `labels.configure(data_dir=None)`: select a dataset for labels and devices, refreshing metadata and cached payloads in place.
 - `labels.age_at(health_code, date)`: calculate calendar-year age at an explicit `pandas.Timestamp`.
 - `labels.age_at_enrollment(health_code)`: calculate calendar-year age at enrollment `createdOn`.
+- `labels.user_demographics(user_ids, paths=None)`: return `{user_id: {"age_group": ..., "sex": ...}}`. This is the one definition of each participant's age and sex groups.
 - `labels.get_labels(health_code: str, timestamp: pandas.Timestamp, label: str, enforce_type: bool = True, return_valid_only: bool = True) -> LabelResult`
 - `labels.LABEL_NAMES`: list of available labels (including `"age"`).
 - `labels.LABEL_TYPES`: dict mapping label names to their semantic types (`binary`, `ordinal`, `categorical`, `multi_categorical`, `continuous`).
@@ -115,7 +116,7 @@ This function does not change the stored-value behavior of `get_labels(..., labe
 
 The benchmark age convention is `reference_date.year - birth_year`. Use the
 existing age-label timestamp for the Track 1 target and enrollment `createdOn`
-for age subgroups across tracks. Evaluation callers now follow these references.
+for age groups. Evaluation callers now follow these references.
 `age_at_enrollment(health_code)` uses `createdOn` and the same age arithmetic;
 missing metadata raises `KeyError`, and invalid metadata raises `ValueError`. This convention does not count completed birthdays or divide elapsed days
 by a year length.
@@ -125,8 +126,8 @@ exclusions. Its age target requires one dated age observation per participant;
 missing or ambiguous metadata for an eligible target raises instead of silently
 changing the cohort. TSFM age anchors use that same observation. Linear's age
 covariate uses the age-label date and retains lookup missingness and zero filling.
-Subgroup callers retain participants with missing/invalid enrollment metadata as
-`unknown`. Imputation's saved-pair analysis also uses enrollment age.
+`user_demographics` retains participants with missing/invalid enrollment metadata
+as `unknown`.
 
 During release construction, shift the private full birthdate by the same offset
 as the reference dates, then retain its year. The age-preserving offset generator

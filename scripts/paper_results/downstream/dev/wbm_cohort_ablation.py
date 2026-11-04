@@ -44,7 +44,7 @@ import pandas as pd
 from downstream_evaluation.data.provider import LOOKUP_BY_GRANULARITY, TaskDataProvider
 from downstream_evaluation.data.splits import load_split_file
 from downstream_evaluation.evaluation.bootstrap_skill_rank import (
-    aggregate_skill_rank_fairness,
+    aggregate_skill_rank,
     align_across_methods,
     compute_per_draw_errors,
     load_bootstrap_test_users,
@@ -123,10 +123,9 @@ def cohort_skill(
     """Run the paired bootstrap + skill aggregation for one cohort; tag with ``cohort``."""
     aligned = align_across_methods(method_tasks)
     draws = compute_per_draw_errors(
-        aligned, n_bootstrap=n_bootstrap, seed=seed, subgroup_map=None, subgroup_attributes=None,
-        test_uids=test_uids,
+        aligned, n_bootstrap=n_bootstrap, seed=seed, test_uids=test_uids,
     )
-    tables = aggregate_skill_rank_fairness(
+    tables = aggregate_skill_rank(
         draws, baseline=baseline, clip_lower=clip_lower, clip_upper=clip_upper, ci_level=ci_level
     )
     skill = tables["skill_scores"]

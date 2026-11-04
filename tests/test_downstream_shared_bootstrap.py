@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+import yaml
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import average_precision_score
 
@@ -59,12 +60,11 @@ def test_shared_participant_counts_and_full_sampling_population(monkeypatch):
     observed = []
     original = engine._per_task_metric_on_indices
 
-    def record(aligned, methods, tasks, indices, mask_per_task=None):
-        if mask_per_task is None:
-            observed.append(
-                {t: Counter(aligned[methods[0]][t]["uids"][indices[t]]) for t in tasks}
-            )
-        return original(aligned, methods, tasks, indices, mask_per_task)
+    def record(aligned, methods, tasks, indices):
+        observed.append(
+            {t: Counter(aligned[methods[0]][t]["uids"][indices[t]]) for t in tasks}
+        )
+        return original(aligned, methods, tasks, indices)
 
     monkeypatch.setattr(engine, "_per_task_metric_on_indices", record)
     draws = calculate(raw, population)
@@ -88,13 +88,11 @@ def test_shared_participant_counts_and_full_sampling_population(monkeypatch):
     assert draws.attrs["bootstrap"]["eligible_union_n"] == 5
 
 
-def test_metrics_and_subgroups_match_independent_expanded_samples():
+def test_metrics_match_independent_expanded_samples():
     raw, population = predictions()
-    groups = {u: {"sex": "A" if u in ["u0", "u1", "u4"] else "B"} for u in population}
-    draws = calculate(raw, population, subgroup_map=groups, subgroup_attributes=["sex"])
-    values = draws.set_index(
-        ["method", "task", "subgroup_attr", "subgroup_value", "draw"]
-    ).E
+    draws = calculate(raw, population)
+    assert set(draws.subgroup_attr) == set(draws.subgroup_value) == {"all"}
+    values = draws.set_index(["method", "task", "draw"]).E
     rng = np.random.default_rng(42)
     resamples = [None] + [
         rng.choice(sorted(population), size=len(population), replace=True)
@@ -105,31 +103,26 @@ def test_metrics_and_subgroups_match_independent_expanded_samples():
         for method, tasks in raw.items():
             for task, payload in tasks.items():
                 lookup = {u: i for i, u in enumerate(payload["uids"])}
-                for attr, value in [("all", "all"), ("sex", "A"), ("sex", "B")]:
-                    source = payload["uids"] if sampled is None else sampled
-                    indices = [
-                        lookup[u]
-                        for u in source
-                        if u in lookup and (attr == "all" or groups[u][attr] == value)
-                    ]
-                    yy, pp = payload["y_true"][indices], payload["y_pred"][indices]
-                    key = (method, task, attr, value, draw)
-                    if len(np.unique(yy)) < 2 or (
-                        task != "binary" and len(np.unique(pp)) < 2
-                    ):
-                        assert key not in values.index
-                        continue
-                    metric = (
-                        average_precision_score(yy, pp)
-                        if task == "binary"
-                        else (
-                            spearmanr(yy, pp).statistic
-                            if task == "ordinal"
-                            else pearsonr(yy, pp).statistic
-                        )
+                source = payload["uids"] if sampled is None else sampled
+                indices = [lookup[u] for u in source if u in lookup]
+                yy, pp = payload["y_true"][indices], payload["y_pred"][indices]
+                key = (method, task, draw)
+                if len(np.unique(yy)) < 2 or (
+                    task != "binary" and len(np.unique(pp)) < 2
+                ):
+                    assert key not in values.index
+                    continue
+                metric = (
+                    average_precision_score(yy, pp)
+                    if task == "binary"
+                    else (
+                        spearmanr(yy, pp).statistic
+                        if task == "ordinal"
+                        else pearsonr(yy, pp).statistic
                     )
-                    assert values.loc[key] == pytest.approx(1 - metric, abs=1e-14)
-                    expected_keys.add(key)
+                )
+                assert values.loc[key] == pytest.approx(1 - metric, abs=1e-14)
+                expected_keys.add(key)
     assert set(values.index) == expected_keys
 
 
@@ -243,6 +236,71 @@ def test_metadata_persisted_and_conflicts_rejected(tmp_path):
     assert not (tmp_path / "bad.parquet").exists()
 
 
+def test_aggregate_reads_only_all_rows():
+    """Draws built before S_fair was retired keep working: their age and sex rows are ignored."""
+    raw, population = predictions()
+    draws = calculate(raw, population, n=5)
+    plain = engine.aggregate_skill_rank(draws, baseline="linear", domain_map=DOMAIN)
+    assert set(plain) == {"skill_scores", "avg_rankings"}
+    baked = draws.assign(subgroup_attr="sex", subgroup_value="A", E=0.5)
+    with_baked = engine.aggregate_skill_rank(
+        pd.concat([draws, baked], ignore_index=True), baseline="linear", domain_map=DOMAIN
+    )
+    for key, table in plain.items():
+        pd.testing.assert_frame_equal(table, with_baked[key], check_exact=True)
+
+
+def test_phase2_script_writes_only_skill_rank_and_task_tables(tmp_path, monkeypatch):
+    """Phase 2 writes three CSVs, with no fairness table."""
+    raw, population = predictions()
+    draws_path = tmp_path / "draws.parquet"
+    engine.write_draws_parquet(calculate(raw, population, n=3), draws_path)
+    script = module(
+        "downstream_phase2_test",
+        "scripts/paper_results/downstream/aggregate_downstream_paper_metrics.py",
+    )
+    out = tmp_path / "out"
+    monkeypatch.setattr(
+        sys, "argv", ["aggregate", "--draws", str(draws_path), "--output-dir", str(out)]
+    )
+    assert script.main() == 0
+    assert sorted(p.name for p in out.iterdir()) == [
+        "avg_rankings_bootstrap.csv",
+        "skill_scores_bootstrap.csv",
+        "task_metrics_bootstrap.csv",
+    ]
+
+
+def test_leaderboard_json_needs_only_skill_and_rank_tables(tmp_path, monkeypatch):
+    """The JSON renders from the two skill and rank CSVs, with no fair_skill field."""
+    script = module(
+        "downstream_leaderboard_json_test",
+        "scripts/paper_results/downstream/leaderboard/build_leaderboard_json.py",
+    )
+    rows = [{"method": key, "scope": "Overall", "point": 0.5} for key, _, _ in script.METHODS]
+    for name in ("skill_scores_bootstrap.csv", "avg_rankings_bootstrap.csv"):
+        pd.DataFrame(rows).to_csv(tmp_path / name, index=False)
+    (tmp_path / "current.json").write_text(json.dumps({"imputation": []}))
+    out = tmp_path / "updated.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "build",
+            "--current",
+            str(tmp_path / "current.json"),
+            "--paper-dir",
+            str(tmp_path),
+            "--output",
+            str(out),
+        ],
+    )
+    script.main()
+    section = json.loads(out.read_text())["downstream"]
+    assert len(section) == len(script.METHODS)
+    assert all("fair_skill" not in row for row in section)
+
+
 @pytest.mark.parametrize("change", ["duplicate", "overlap", "missing", "empty"])
 def test_invalid_split_files_fail(tmp_path, change):
     split = {"train": ["train"], "validation": ["val"], "test": ["u0", "u1"]}
@@ -295,6 +353,34 @@ def module(name, relative):
     return loaded
 
 
+def test_pipeline_rejects_retired_fairness_keys(tmp_path, monkeypatch):
+    """A config that still asks for fairness must not run without it."""
+    pipeline = module(
+        "downstream_pipeline_test",
+        "scripts/paper_results/downstream/run_paper_pipeline.py",
+    )
+    config = tmp_path / "paper.yaml"
+    out = tmp_path / "out"
+    config.write_text(
+        yaml.safe_dump(
+            {"fairness_attributes": ["sex"], "methods": ["model"], "output_dir": str(out)}
+        )
+    )
+    monkeypatch.setattr(sys, "argv", ["run", "--config", str(config)])
+    with pytest.raises(SystemExit, match="fairness_attributes"):
+        pipeline.main()
+    assert not out.exists()
+
+
+def test_shipped_paper_config_has_no_retired_keys():
+    pipeline = module(
+        "downstream_pipeline_test",
+        "scripts/paper_results/downstream/run_paper_pipeline.py",
+    )
+    cfg = yaml.safe_load((pipeline.REPO_ROOT / "configs/paper/downstream_paper.yaml").read_text())
+    assert not pipeline.RETIRED_KEYS & set(cfg)
+
+
 def test_pipeline_forwards_split_and_bootstrap_options():
     pipeline = module(
         "downstream_pipeline_test",
@@ -311,7 +397,6 @@ def test_pipeline_forwards_split_and_bootstrap_options():
         version="xs",
         split_file="custom.json",
         baseline_method="reference",
-        fairness_attributes=[],
     )
     pipeline._phase1_bootstrap(cfg, Path("draws.parquet"), ["reference", "model"], True)
     cmd = calls[0]
@@ -322,12 +407,22 @@ def test_pipeline_forwards_split_and_bootstrap_options():
         ("--baseline", "reference"),
     ]:
         assert cmd[cmd.index(key) + 1] == value
-    assert cmd[cmd.index("--fairness_attributes") + 1] == "--output"
 
 
-def test_cli_round_trip_uses_explicit_split_and_disables_subgroups(
-    tmp_path, monkeypatch
-):
+def test_pipeline_phase2_runs_only_the_skill_rank_aggregator():
+    """Phase 2 has one step, which no longer needs the saved predictions."""
+    pipeline = module(
+        "downstream_pipeline_phase2_test",
+        "scripts/paper_results/downstream/run_paper_pipeline.py",
+    )
+    calls = []
+    pipeline._run = lambda cmd, dry_run: calls.append(cmd)
+    cfg = dict(baseline_method="linear", clip_lower=0.01, clip_upper=100.0, ci_level=0.95)
+    pipeline._phase2_aggregate(cfg, Path("draws.parquet"), Path("out"), True)
+    assert [Path(cmd[1]).name for cmd in calls] == ["aggregate_downstream_paper_metrics.py"]
+
+
+def test_cli_round_trip_uses_explicit_split(tmp_path, monkeypatch):
     raw, population = predictions()
     for method, tasks in raw.items():
         csv = []
@@ -343,9 +438,6 @@ def test_cli_round_trip_uses_explicit_split_and_disables_subgroups(
     split = tmp_path / "split.json"
     split.write_text(
         json.dumps({"train": ["train"], "validation": ["val"], "test": population})
-    )
-    (tmp_path / "predictions/_subgroups.json").write_text(
-        json.dumps({u: {"sex": "A"} for u in population})
     )
     cli = module(
         "downstream_cli_test",
@@ -371,14 +463,14 @@ def test_cli_round_trip_uses_explicit_split_and_disables_subgroups(
             "4",
             "--seed",
             "42",
-            "--fairness_attributes",
             "--output",
             str(destination),
         ],
     )
     cli.main()
     saved, meta = engine.read_draws_parquet(destination)
-    assert meta["sampling_population_n"] == 6 and meta["fairness_attributes"] == []
+    assert meta["sampling_population_n"] == 6
+    assert "fairness_attributes" not in meta and "subgroup_sampling" not in meta
     assert meta["split_sha256"] == hashlib.sha256(split.read_bytes()).hexdigest()
     assert set(saved.subgroup_attr) == {"all"}
     expected = calculate(raw, population, n=4)

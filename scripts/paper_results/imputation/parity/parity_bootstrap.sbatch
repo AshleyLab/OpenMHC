@@ -32,7 +32,6 @@ python scripts/paper_results/imputation/bootstrap_imputation_draws.py \
     --output "$VERIF/bootstrap/bootstrap_draws.parquet" \
     --per-user-errors "$VERIF/bootstrap/per_user_errors.parquet" \
     --n-boot 1000 --seed 42 --splits test \
-    --age-bins 18 30 40 50 60 \
     --strict
 
 echo "=== (2/2) Parity diff ==="

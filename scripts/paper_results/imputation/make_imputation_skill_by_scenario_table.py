@@ -8,17 +8,13 @@ reference ``imputation/bootstrap_with_dense_weekly/draws.parquet`` (the main
 16-method draws + the dense ``lsm2_weekly``) plus the matching per-method
 substrate parquets — so all rows are ranked within one consistent 17-method pool.
 
-Columns: Aggregate Skill Score $S$, Average Rank $R$, Fairness Skill Score
-$S_{\\text{fair}}$ (the **disparity-ratio** score used by the main table — the
-deprecated $S-\\lambda\\bar D$ score and its $\\bar D$ column are dropped), and
-per-scenario Skill Scores for the six masking scenarios. Values are deterministic
-point estimates on the held-out test split; sub/superscripts give the $95\\%$
-bootstrap confidence interval ($B{=}1000$): the percentile interval for every
-column except $S_{\\text{fair}}$, which uses the BCa interval.
+Columns: Aggregate Skill Score $S$, Average Rank $R$, and per-scenario Skill
+Scores for the six masking scenarios. Values are deterministic point estimates
+on the held-out test split; sub/superscripts give the $95\\%$ bootstrap percentile
+confidence interval ($B{=}1000$).
 
-Reductions are the canonical ones (``aggregate_skill_rank_fairness`` for
-skill/rank, ``compute_fairness_skill_scores`` for the disparity-ratio fairness),
-identical to ``make_imputation_latex_tables.py`` but over the dense-weekly
+Reductions are the canonical ones (``aggregate_skill_rank`` on the ``"all"``
+rows), identical to ``make_imputation_latex_tables.py`` but over the dense-weekly
 superset.
 
 Usage:
@@ -64,11 +60,10 @@ METHODS: dict[str, tuple[str, str, str]] = {
 }
 
 # (header, source, scope, center, scale100, lower_better, ref_zero)
-#   source: "skill" | "rank" | "fair"; center is always the deterministic "point".
+#   source: "skill" | "rank"; center is always the deterministic "point".
 COLUMNS = [
     (r"$S\uparrow$", "skill", "overall", "point", True, False, True),
     (r"$R\downarrow$", "rank", "overall", "point", False, True, False),
-    (r"$S_{\text{fair}}\uparrow$", "fair", "overall", "point", True, False, True),
     (r"Random noise\,$\uparrow$", "skill", "random_noise", "point", True, False, True),
     (r"Temporal slice\,$\uparrow$", "skill", "temporal_slice", "point", True, False, True),
     (r"Signal slice\,$\uparrow$", "skill", "signal_slice", "point", True, False, True),
@@ -91,14 +86,14 @@ HEADER_TMPL = r"""\begin{table}[t!]
     \renewcommand{\arraystretch}{1.05}
     \centering
     \captionsetup{width=\textwidth}
-    \caption{\textbf{Imputation Results by Masking Scenario.} Aggregate Skill Score $S$ (in \%; $0=$LOCF reference), Average Rank $R$, Fairness Skill Score $S_{\text{fair}}$ (disparity-ratio; see Appendix~\ref{app:fairness_skillscore}), and per-scenario Skill Scores across all six masking scenarios (lower is better for $R$; higher otherwise). Single-day methods above; long-context methods ($\geq 7\times 1440$ time steps) below. Gradients computed within each track. Values are point estimates on the held-out test split; sub/superscripts give the $95\%$ bootstrap confidence interval ($B{=}1000$): the percentile interval for every column except $S_{\text{fair}}$, which uses the bias-corrected and accelerated (BCa) interval.}
+    \caption{\textbf{Imputation Results by Masking Scenario.} Aggregate Skill Score $S$ (in \%; $0=$LOCF reference), Average Rank $R$, and per-scenario Skill Scores across all six masking scenarios (lower is better for $R$; higher otherwise). Single-day methods above; long-context methods ($\geq 7\times 1440$ time steps) below. Gradients computed within each track. Values are point estimates on the held-out test split; sub/superscripts give the $95\%$ bootstrap percentile confidence interval ($B{=}1000$).}
     \label{tab:imputation_appendix_skill_by_scenario}
     \small
     \setlength{\tabcolsep}{1.5pt}
     \resizebox{\linewidth}{!}{%
-    \begin{tabular}{l ccccccccc}
+    \begin{tabular}{l cccccccc}
     \toprule[1.5pt]
-    \textbf{Method} & $S\uparrow$ & $R\downarrow$ & $S_{\text{fair}}\uparrow$ & Random noise\,$\uparrow$ & Temporal slice\,$\uparrow$ & Signal slice\,$\uparrow$ & Sleep gap\,$\uparrow$ & Workout gap\,$\uparrow$ & Intensity failure\,$\uparrow$ \\
+    \textbf{Method} & $S\uparrow$ & $R\downarrow$ & Random noise\,$\uparrow$ & Temporal slice\,$\uparrow$ & Signal slice\,$\uparrow$ & Sleep gap\,$\uparrow$ & Workout gap\,$\uparrow$ & Intensity failure\,$\uparrow$ \\
     \midrule
 """
 FOOTER = r"""    \bottomrule[1.5pt]
@@ -126,16 +121,11 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
     from huggingface_hub import hf_hub_download
 
     from imputation_evaluation.evaluation.bootstrap_skill_rank import (
-        aggregate_skill_rank_fairness,
+        aggregate_skill_rank,
         read_draws_parquet,
     )
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    from aggregate_fairness_skill_score import (  # noqa: E402
-        SENSITIVE_ATTRS,
-        compute_fairness_skill_scores,
-    )
     from make_imputation_latex_tables import attach_skill_rank_point  # noqa: E402
 
     draws_path = hf_hub_download(
@@ -143,7 +133,7 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
     )
     draws_df, _ = read_draws_parquet(Path(draws_path))
     all_rows = draws_df[draws_df["subgroup_attr"] == "all"]
-    tables = aggregate_skill_rank_fairness(all_rows)
+    tables = aggregate_skill_rank(all_rows)
 
     per_method = [
         pd.read_parquet(
@@ -160,14 +150,6 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
     # comes from the bootstrap summary. See ``attach_skill_rank_point`` for the
     # test-split + cross-method pool invariants.
     skill_tbl, rank_tbl = attach_skill_rank_point(tables, per_user_df, baseline=REFERENCE)
-
-    # Fairness: deterministic point + BCa interval (matches the main table). The
-    # BCa jackknife needs the per-user substrate.
-    fairness = compute_fairness_skill_scores(
-        draws_df, attrs=list(SENSITIVE_ATTRS), baseline_method=REFERENCE,
-        bca=True, per_user_df=per_user_df,
-    )
-    fairness = fairness[(fairness["scope"] == "overall") & (fairness["split"] == "test")]
 
     out: dict[str, dict[tuple[str, str], tuple[float, float, float]]] = {m: {} for m in METHODS}
 
@@ -186,7 +168,6 @@ def reduce_from_hf(repo_id: str, revision: str | None) -> dict[str, dict[tuple[s
 
     _ingest(skill_tbl, "skill", "point", "ci_lo", "ci_hi")
     _ingest(rank_tbl, "rank", "point", "ci_lo", "ci_hi")
-    _ingest(fairness, "fair", "point", "bca_lo", "bca_hi")
     return out
 
 
@@ -198,7 +179,7 @@ def intensity(value: float, vmin: float, vmax: float, lower_better: bool) -> int
 
 
 def fmt_cell(method, center, lo, hi, scale100, ref_zero, n, is_best) -> str:
-    """One LaTeX cell: optional color + ``$value^{+upper}_{-lower}$`` (percentile/BCa CI)."""
+    """One LaTeX cell: optional color + ``$value^{+upper}_{-lower}$`` (percentile CI)."""
     if ref_zero and method == REFERENCE:
         return r"$0.0$"
     center = _require_finite_float(center, f"center for method={method!r}")

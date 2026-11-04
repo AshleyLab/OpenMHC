@@ -4,8 +4,7 @@ Two layers:
 * unit tests of the shared BCa core in ``bootstrap_skill_rank.py``
   (``_bca_interval`` / ``_jackknife_acceleration`` / ``_augment_with_bca``);
 * integration tests reusing the on-disk metrics fixtures from
-  ``test_forecasting_fair_skill_score_bootstrap`` (fairness, BCa on by default)
-  and ``test_forecasting_bootstrap_skill_rank`` (skill/rank, BCa opt-in).
+  ``test_forecasting_bootstrap_skill_rank`` (skill/rank, BCa opt-in).
 """
 
 from __future__ import annotations
@@ -14,21 +13,14 @@ import numpy as np
 import pandas as pd
 import pytest
 
-# Reuse the existing tiny on-disk fixtures (separate modules -> no name clash).
+# Reuse the existing tiny on-disk fixtures.
 import test_forecasting_bootstrap_skill_rank as sr_fix
-import test_forecasting_fair_skill_score_bootstrap as fair_fix
 
-from forecasting_evaluation.metrics.bootstrap_fair_skill_score import (
-    _fairness_headline_scopes,
-    _jackknife_fair_points,
-)
 from forecasting_evaluation.metrics.bootstrap_skill_rank import (
     _augment_with_bca,
     _bca_interval,
     _jackknife_acceleration,
 )
-
-_HEADLINE = {"overall", "activity", "sleep", "age_group", "sex"}  # present in the fixture
 
 
 # --------------------------------------------------------------------------
@@ -164,84 +156,6 @@ def test_augment_with_bca_empty_frame_gets_columns():
     )
     assert {"point", "bca_lo", "bca_hi"}.issubset(out.columns)
     assert out.empty
-
-
-# --------------------------------------------------------------------------
-# Fairness integration — BCa is ON by default
-# --------------------------------------------------------------------------
-
-
-def test_fairness_bca_columns_and_gating(tmp_path):
-    """Fairness output carries point/bca_lo/bca_hi with BCa gated to headline scopes.
-
-    Headline scopes get finite BCa intervals, per-channel scopes get NaN,
-    ``bca_lo <= point <= bca_hi`` holds where defined, and the baseline-vs-itself
-    scope collapses to ``[0, 0]``.
-    """
-    models = fair_fix._make_models(tmp_path)
-    out = fair_fix._bootstrap(models, fair_fix._demographics(), n_boot=300, seed=11)[
-        "fairness_skill_scores"
-    ]
-    assert {"point", "bca_lo", "bca_hi"}.issubset(out.columns)
-    # point is filled for every row; bca only for headline scopes.
-    assert out["point"].notna().all()
-    head = out[out["scope"].isin(_HEADLINE)]
-    nonhead = out[~out["scope"].isin(_HEADLINE)]
-    assert head[["bca_lo", "bca_hi"]].notna().all().all()
-    assert nonhead[["bca_lo", "bca_hi"]].isna().all().all()
-    # BCa brackets the (reported) point.
-    defined = head.dropna(subset=["bca_lo", "bca_hi", "point"])
-    assert (defined["bca_lo"] <= defined["point"] + 1e-9).all()
-    assert (defined["point"] <= defined["bca_hi"] + 1e-9).all()
-    # Baseline vs itself -> exactly fair -> degenerate [0, 0] interval.
-    base_head = out[(out["model"] == "baseline") & out["scope"].isin(_HEADLINE)]
-    assert (base_head["bca_lo"].abs() < 1e-9).all()
-    assert (base_head["bca_hi"].abs() < 1e-9).all()
-
-
-def test_fairness_bca_preserves_percentile_columns(tmp_path):
-    """``bca=True`` only *adds* columns, leaving the percentile table unchanged.
-
-    With ``bca=False`` the legacy table is produced; for the same seed the
-    percentile mean/se/CI are byte-identical whether or not BCa is enabled.
-    """
-    models = fair_fix._make_models(tmp_path)
-    demo = fair_fix._demographics()
-    without = fair_fix._bootstrap(models, demo, n_boot=120, seed=9, bca=False)[
-        "fairness_skill_scores"
-    ]
-    with_bca = fair_fix._bootstrap(models, demo, n_boot=120, seed=9, bca=True)[
-        "fairness_skill_scores"
-    ]
-    assert not {"point", "bca_lo", "bca_hi"}.intersection(without.columns)
-    assert {"point", "bca_lo", "bca_hi"}.issubset(with_bca.columns)
-    shared = ["model", "scope", "mean", "se", "ci_lo", "ci_hi", "n_boot"]
-    pd.testing.assert_frame_equal(
-        without[shared].sort_values(["model", "scope"]).reset_index(drop=True),
-        with_bca[shared].sort_values(["model", "scope"]).reset_index(drop=True),
-    )
-
-
-def test_jackknife_fair_points_one_finite_value_per_user(tmp_path):
-    """The fairness jackknife returns one finite value per user per headline key."""
-    models = fair_fix._make_models(tmp_path)
-    demo = fair_fix._demographics()
-    error_df = fair_fix._error_df(models)
-    users = sorted(set(error_df["user_id"].astype(str)))
-    jack = _jackknife_fair_points(
-        error_df,
-        demo,
-        users,
-        baseline_model="baseline",
-        attrs=("age_group", "sex"),
-        clip_lower=0.01,
-        clip_upper=100.0,
-        scopes=_fairness_headline_scopes(("age_group", "sex")),
-    )
-    assert jack  # non-empty
-    for key, arr in jack.items():
-        assert arr.shape == (len(users),), key
-        assert np.isfinite(arr).all(), key
 
 
 # --------------------------------------------------------------------------

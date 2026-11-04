@@ -8,8 +8,7 @@ phase prints its command and aborts:
   Phase 0 — ``run_eval.py`` per method  → ``eval_<m>.csv`` + per-(method, task) preds
             (mirrors forecasting/imputation; ``--skip-eval`` to reuse existing ones)
   Phase 1 — ``bootstrap_downstream_draws.py``         → ``bootstrap_draws.parquet``
-  Phase 2 — ``aggregate_downstream_paper_metrics.py`` → 4 sidecar CSVs
-            ``aggregate_fairness_skill_score.py``     → ``fairness_skill_score_bootstrap.csv``
+  Phase 2 — ``aggregate_downstream_paper_metrics.py`` → 3 sidecar CSVs
 
 By default Phase 0 regenerates the predictions under ``predictions_dir`` (needs the
 dataset + a GPU for the neural models). Pass ``--skip-eval`` to start from the frozen
@@ -24,7 +23,7 @@ Usage::
     # re-aggregate from frozen predictions (the everyday path):
     ... --config configs/paper/downstream_paper.yaml --skip-eval
 
-    # re-aggregate only (draws already exist), e.g. to retune the fairness knobs:
+    # re-aggregate only (draws already exist), e.g. to retune the clip bounds:
     ... --config configs/paper/downstream_paper.yaml --skip-eval --skip-phase1
 """
 
@@ -45,6 +44,8 @@ log = logging.getLogger(__name__)
 HERE = Path(__file__).resolve().parent
 # scripts/paper_results/downstream/run_paper_pipeline.py -> parents[3] = repo root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Retired with S_fair. A file that still sets them fails rather than being half-honored.
+RETIRED_KEYS = frozenset({"fairness_attributes"})
 
 
 def _run(cmd: list[str], dry_run: bool, env: dict | None = None) -> None:
@@ -97,14 +98,13 @@ def _phase1_bootstrap(cfg: dict, draws: Path, methods: list[str], dry_run: bool)
             "--version", str(cfg.get("version", "full")),
             *(["--data-dir", str(cfg["data_dir"])] if cfg.get("data_dir") else []),
             *(["--split-file", str(cfg["split_file"])] if cfg.get("split_file") else []),
-            "--fairness_attributes", *cfg.get("fairness_attributes", ["age_group", "sex"]),
             "--output", str(draws),
         ],
         dry_run,
     )
 
 
-def _phase2_aggregate(cfg: dict, draws: Path, out_dir: Path, methods: list[str], dry_run: bool) -> None:
+def _phase2_aggregate(cfg: dict, draws: Path, out_dir: Path, dry_run: bool) -> None:
     agg = [
         sys.executable,
         str(HERE / "aggregate_downstream_paper_metrics.py"),
@@ -116,28 +116,10 @@ def _phase2_aggregate(cfg: dict, draws: Path, out_dir: Path, methods: list[str],
         "--ci-level", str(cfg["ci_level"]),
     ]
     _run(agg, dry_run)
-    # Pass the predictions through so the fairness reducer can run the leave-one-
-    # user-out jackknife and emit the BCa interval alongside the percentile CI.
-    _run(
-        [
-            sys.executable,
-            str(HERE / "aggregate_fairness_skill_score.py"),
-            "--draws", str(draws),
-            "--output", str(out_dir / "fairness_skill_score_bootstrap.csv"),
-            "--baseline-method", cfg["baseline_method"],
-            "--clip-lower", str(cfg["clip_lower"]),
-            "--clip-upper", str(cfg["clip_upper"]),
-            "--ci-level", str(cfg["ci_level"]),
-            "--predictions_dir", str(cfg["predictions_dir"]),
-            "--csvs_dir", str(cfg["csvs_dir"]),
-            "--methods", *methods,
-        ],
-        dry_run,
-    )
 
 
 def main() -> None:
-    """Read the config, chain phase 0 (eval) → phase 1 → phase 2 (+ fairness reducer)."""
+    """Read the config, chain phase 0 (eval) → phase 1 → phase 2."""
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -173,6 +155,9 @@ def main() -> None:
     args = p.parse_args()
 
     cfg = yaml.safe_load(args.config.read_text())
+    retired = sorted(RETIRED_KEYS & set(cfg))
+    if retired:
+        raise SystemExit(f"{args.config} has keys retired with S_fair, remove them: {retired}")
     methods = args.methods or cfg["methods"]
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -190,7 +175,7 @@ def main() -> None:
     if not args.skip_phase1:
         _phase1_bootstrap(cfg, draws, methods, args.dry_run)
     if not args.skip_phase2:
-        _phase2_aggregate(cfg, draws, out_dir, methods, args.dry_run)
+        _phase2_aggregate(cfg, draws, out_dir, args.dry_run)
 
     log.info("Pipeline complete → %s", out_dir)
 

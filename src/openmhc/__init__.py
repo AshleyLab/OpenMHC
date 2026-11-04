@@ -105,14 +105,14 @@ def evaluate_prediction(
         data_dir: Path to the dataset root. If omitted, ``MHC_DATA_DIR``
             must be set.
         seed: Random seed for classifiers and splits.
-        predictions_dir: when set, write per-(method, task) test predictions +
-            a shared ``_subgroups.json`` here, for the paper-metrics bootstrap.
+        predictions_dir: when set, write per-(method, task) test predictions
+            here, for the paper-metrics bootstrap.
         output_dir: when set, write the per-method leaderboard substrate
-            ``<output_dir>/<method>.parquet`` (raw per-user prediction pairs,
-            subgroup-expanded) + a ``.meta.json`` sidecar, and populate
+            ``<output_dir>/<method>.parquet`` (raw per-user prediction pairs)
+            + a ``.meta.json`` sidecar, and populate
             ``PredictionResults.per_user_pairs``. This is the file you upload to
-            the leaderboard; the maintainers recompute skill / rank / fairness
-            from it vs. the Linear baseline.
+            the leaderboard; the maintainers recompute skill / rank from it vs.
+            the Linear baseline.
         method_name: value for the substrate's ``method`` column and the
             ``<method>.parquet`` filename (the leaderboard groups by it; the
             upload filename must match). Defaults to ``model.name``.

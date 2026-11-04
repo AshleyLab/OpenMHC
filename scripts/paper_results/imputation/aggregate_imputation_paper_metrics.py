@@ -7,18 +7,8 @@ Reads ``bootstrap_draws.parquet`` produced by phase 1
 * ``skill_scores_bootstrap.csv``
 * ``avg_rankings_bootstrap.csv``
 
-The leaderboard's Fairness Skill Score (disparity-ratio formulation) is
-produced by ``aggregate_fairness_skill_score.py`` as a separate sidecar
-and is **not** emitted here.
-
-The legacy ``S − λ·D`` fairness-adjusted outputs
-(``fairness_subgroup_scores_bootstrap.csv``,
-``fairness_summary_bootstrap.csv``) are **deprecated** and no longer
-written by default. Pass ``--write-deprecated-fairness`` to opt back in
-for back-compat consumers.
-
-Phase 2 is **fast** — every reader passes a different subset of named
-disparity functions, λ, or clip bounds without re-resampling.
+Phase 2 is **fast** — rerun it with other clip bounds or a method subset
+without re-resampling.
 
 Example::
 
@@ -35,13 +25,9 @@ import sys
 from pathlib import Path
 
 from imputation_evaluation.evaluation.bootstrap_skill_rank import (
-    aggregate_skill_rank_fairness,
+    aggregate_skill_rank,
     read_draws_parquet,
     read_per_user_errors_parquet,
-)
-from imputation_evaluation.evaluation.disparity_metrics import (
-    DISPARITY_FUNCTIONS,
-    FAIRNESS_COMBINE,
 )
 
 logging.basicConfig(
@@ -65,7 +51,7 @@ def _parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         required=True,
-        help="Directory for the four sidecar CSVs",
+        help="Directory for the two sidecar CSVs",
     )
     p.add_argument(
         "--baseline-method",
@@ -85,26 +71,6 @@ def _parse_args() -> argparse.Namespace:
         help="Upper clip bound for error ratios (default: 100.0)",
     )
     p.add_argument(
-        "--lambda-fairness",
-        type=float,
-        default=0.5,
-        help="Lambda for fairness-combine (default: 0.5)",
-    )
-    p.add_argument(
-        "--disparity-fn",
-        action="append",
-        default=None,
-        choices=sorted(DISPARITY_FUNCTIONS.keys()),
-        help="Named disparity function (repeat to compute several in one pass). "
-        "Default: all registered disparities.",
-    )
-    p.add_argument(
-        "--fairness-combine",
-        default="linear_penalty",
-        choices=sorted(FAIRNESS_COMBINE.keys()),
-        help="Named fairness-combine function (default: linear_penalty)",
-    )
-    p.add_argument(
         "--ci-level",
         type=float,
         default=0.95,
@@ -116,19 +82,12 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help=(
             "Restrict the rank comparison pool to these methods only. "
-            "Skill / fairness values stay the same (pairwise vs. baseline); "
+            "Skill values stay the same (pairwise vs. baseline); "
             "avg_rank values shift because the pool size changes. The "
             "baseline method (default: locf) MUST be in the filter or "
             "skill rows will be empty. See METRICS.md §8.1 for the full "
             "subset-recompute workflow."
         ),
-    )
-    p.add_argument(
-        "--write-deprecated-fairness",
-        action="store_true",
-        help="Also write the deprecated S − λ·D fairness CSVs "
-        "(fairness_subgroup_scores_bootstrap.csv, "
-        "fairness_summary_bootstrap.csv). Off by default.",
     )
     bca_grp = p.add_mutually_exclusive_group()
     bca_grp.add_argument(
@@ -137,9 +96,8 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         default=False,
         help=(
-            "Opt-in BCa CI augmentation for skill / rank tables, as a parity "
-            "sanity-check against the fairness BCa. Default OFF — skill and "
-            "rank are near-unbiased, so the BCa interval is close to the "
+            "Opt-in BCa CI augmentation for skill / rank tables. Default OFF — "
+            "skill and rank are near-unbiased, so the BCa interval is close to the "
             "percentile CI in practice. Requires --per-user-errors. NOTE: "
             "the LOO jackknife required by BCa is currently not wired up for "
             "skill / rank (it would require an N-iteration recompute of the "
@@ -185,13 +143,6 @@ def main() -> int:
         df = df[df["method"].isin(args.method_filter)].copy()
         logger.info("After --method-filter: %d rows", len(df))
 
-    if args.disparity_fn:
-        disparity_fns = {n: DISPARITY_FUNCTIONS[n].fn for n in args.disparity_fn}
-    else:
-        disparity_fns = {n: spec.fn for n, spec in DISPARITY_FUNCTIONS.items()}
-    logger.info("Disparities: %s", sorted(disparity_fns.keys()))
-    logger.info("Fairness-combine: %s, lambda=%s", args.fairness_combine, args.lambda_fairness)
-
     if "rank" not in df.columns:
         logger.error(
             "The Phase-2 reducer requires a 'rank' column on the draws "
@@ -230,18 +181,14 @@ def main() -> int:
             "jackknife requires N (~5K user) recomputes of the point flow "
             "(compute_per_task_paired_R + compute_skill_scores + "
             "compute_average_rankings). Wiring + optimisation is tracked as "
-            "follow-up work; for the leaderboard-relevant fairness BCa, see "
-            "scripts/paper_results/aggregate_fairness_skill_score.py --bca."
+            "follow-up work."
         )
 
-    tables = aggregate_skill_rank_fairness(
+    tables = aggregate_skill_rank(
         df,
         baseline_method=args.baseline_method,
         clip_lower=args.clip_lower,
         clip_upper=args.clip_upper,
-        lambda_fairness=args.lambda_fairness,
-        disparity_fns=disparity_fns,
-        fairness_combine_name=args.fairness_combine,
         ci_level=args.ci_level,
     )
 
@@ -250,16 +197,6 @@ def main() -> int:
         "skill_scores": out / "skill_scores_bootstrap.csv",
         "avg_rankings": out / "avg_rankings_bootstrap.csv",
     }
-    if args.write_deprecated_fairness:
-        paths["fairness_subgroups"] = out / "fairness_subgroup_scores_bootstrap.csv"
-        paths["fairness_summary"] = out / "fairness_summary_bootstrap.csv"
-    else:
-        logger.info(
-            "Skipping deprecated S − λ·D fairness CSVs "
-            "(pass --write-deprecated-fairness to opt in). "
-            "Leaderboard fairness numbers come from "
-            "aggregate_fairness_skill_score.py."
-        )
     for key, path in paths.items():
         tbl = tables[key]
         tbl.to_csv(path, index=False, float_format="%.6f")

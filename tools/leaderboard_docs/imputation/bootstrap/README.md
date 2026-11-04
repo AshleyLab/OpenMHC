@@ -2,29 +2,31 @@
 
 This subdir holds the **Phase-1 bootstrap reference** for the Track-2
 (imputation) leaderboard recompute — the long-format per-draw frame that
-the skill / rank / fairness CIs reduce from.
+the skill / rank CIs reduce from.
 
 ## Layout
 
 ```
 imputation/bootstrap/
-├── draws.parquet      # per-(method, scenario, channel, subgroup, draw) E/R/rank
+├── draws.parquet      # per-(method, scenario, channel, draw) E/R/rank
 └── draws.meta.json    # provenance: seed, n_boot, methods, scenarios, git commit
 ```
 
 ## What's it for
 
 Each row of `draws.parquet` is one bootstrap draw of one task for one
-method. Phase-2 aggregators reduce it three ways:
+method. Phase-2 aggregators reduce it two ways:
 
 - **Skill score** `S = 1 − exp(mean_r log(R))` — paired against `locf`; per-(method, scope) mean / SE / percentile-CI across draws.
 - **Average rank** — per-(method, scope) mean of the per-draw cross-method
   rank, mean / SE / CI across draws.
-- **Fairness skill score** — per-attribute mean-absolute-pairwise-difference
-  disparity ratio `D_method / D_baseline`, geomean-averaged across tasks,
-  with BCa intervals.
 
-The same draws frame backs all three; only the reducer changes.
+The same draws frame backs both; only the reducer changes.
+
+> **Older snapshots.** Files built before `S_fair` was retired also hold
+> `age_group` and `sex` rows, and their `draws.meta.json` has `include_fairness`,
+> `age_bins` and `exclude_unknown` keys. No reducer in the code repo reads either;
+> filter on `subgroup_attr == "all"`.
 
 ## Provenance
 
@@ -35,14 +37,13 @@ in the code repo. The current snapshot was built with:
 - `splits = ["test"]`
 - All 6 imputation scenarios
 - 16 methods (see `draws.meta.json:methods`)
-- `age_bins = [18, 30, 40, 50, 60]`, `exclude_unknown = false`
 
 See `draws.meta.json` for the exact git commit, method-dirs manifest, and
 runtime metadata.
 
 ## Note: no pooled `per_user_errors.parquet`
 
-The BCa LOO substrate (per-user errors pooled across all methods) is
+The per-user errors pooled across all methods are
 **not** stored here — it is exactly the concatenation of the per-method
 substrate files one level up:
 
@@ -52,7 +53,8 @@ pooled = pd.concat(
     [pd.read_parquet(p) for p in glob.glob("imputation/*.parquet")],
     ignore_index=True,
 )
-# 2,376,160 rows = 148,510 rows/method × 16 methods
+# One row per (method, scenario, split, channel, subgroup, user); read
+# subgroup_attr == "all" (older files also hold age and sex rows).
 ```
 
 The same provenance (seed, n_boot, method list, git commit) lives in
@@ -84,8 +86,8 @@ See [`SCHEMA.md`](SCHEMA.md) for the full column spec.
 ## Sibling: 17-method variant
 
 `imputation/bootstrap_with_dense_weekly/` holds the same reducer applied
-to a 17-method pool that adds `lsm2_weekly` (dense 7-day LSM-2). Skill /
-fairness numbers per method are identical to this canonical variant
+to a 17-method pool that adds `lsm2_weekly` (dense 7-day LSM-2). Skill
+numbers per method are identical to this canonical variant
 (they're pairwise vs `locf`); only average-rank values shift because the
 comparison pool grew. See that dir's README for when to use which.
 

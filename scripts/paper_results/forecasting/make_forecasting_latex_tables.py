@@ -8,11 +8,8 @@ matching the existing hand-written arXiv table (booktabs rules, per-column
 
 Uncertainty is reported as a 95% bootstrap confidence interval rendered as an
 asymmetric ``value^{+upper}_{-lower}`` super/subscript (not the SE), mirroring
-the imputation table. For every column except ``S_fair`` the center is the
-bootstrap ``mean`` and the interval is the percentile CI (``ci_lo``/``ci_hi``).
-``S_fair`` (from ``forecasting_fairness_skill_score_bootstrap.csv``, scope
-``overall``) uses the deterministic ``point`` estimate and the BCa interval
-(``bca_lo``/``bca_hi``).
+the imputation table. Every column's center is the deterministic ``point``
+estimate and its interval is the percentile CI (``ci_lo``/``ci_hi``).
 
 Seasonal Naive is the reference: in every skill column it renders as a plain
 ``$0.0$`` (no CI, no color); it still gets a real value+CI in the rank column.
@@ -75,12 +72,10 @@ GROUP_TITLE = {
 #   metric : value of the ``metric`` column to filter on (rank CSV only), else None
 SKILL = "forecasting_skill_score_bootstrap.csv"
 RANK = "forecasting_grouped_metric_rank_bootstrap.csv"
-FAIR = "forecasting_fairness_skill_score_bootstrap.csv"
 
 COLUMNS: list[tuple[str, str, str, str, str, str, bool, bool, bool, str | None]] = [
     (r"$R \downarrow$",            RANK,  "overall",          "point", "ci_lo",  "ci_hi",  False, True,  False, "overall"),
     (r"$S \uparrow$",              SKILL, "overall_score",    "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
-    (r"$S_{\text{fair}} \uparrow$",FAIR,  "overall",          "point", "bca_lo", "bca_hi", True,  False, True,  None),
     (r"Activity\,$\uparrow$",      SKILL, "activity_score",   "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
     (r"Physio.\,$\uparrow$",       SKILL, "physiology_score", "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
     (r"Sleep\,$\uparrow$",         SKILL, "sleep_score",      "point", "ci_lo",  "ci_hi",  True,  False, True,  None),
@@ -96,12 +91,10 @@ HEADER = r"""\begin{table*}[t]
 \textbf{Forecasting Results.}
 We report Average Rank $R$, Aggregate Skill Score $S$
 (in \%; $0=\textsc{Seasonal Naive}$ reference),
-Fairness-adjusted Skill Score $S_{\mathrm{fair}}$, and category-specific
-Skill Scores for \textit{Activity}, \textit{Physiology}, \textit{Sleep},
+and category-specific Skill Scores for \textit{Activity}, \textit{Physiology}, \textit{Sleep},
 and \textit{Workout}. FT denotes fine-tuned. Values are point estimates on the
 held-out test split; subscripts and superscripts indicate the $95\%$ bootstrap
-confidence interval ($1000$ resamples): the percentile interval for every column
-except $S_{\mathrm{fair}}$, which uses the bias-corrected and accelerated (BCa) interval.
+percentile confidence interval ($1000$ resamples).
 }
 \label{tab:forecasting_grouped_model_summary}
 
@@ -115,14 +108,13 @@ except $S_{\mathrm{fair}}$, which uses the bias-corrected and accelerated (BCa) 
 
 \begin{tabularx}{\textwidth}{
     >{\raggedright\arraybackslash}X
-    *{7}{>{\centering\arraybackslash}m{1.35cm}}
+    *{6}{>{\centering\arraybackslash}m{1.35cm}}
 }
 \toprule[1.4pt]
 
 \textbf{Method}
 & \mbox{$R\,\downarrow$}
 & \mbox{$S\,\uparrow$}
-& \mbox{$S_{\mathrm{fair}}\,\uparrow$}
 & \mbox{Activity~$\uparrow$}
 & \mbox{Physio.~$\uparrow$}
 & \mbox{Sleep~$\uparrow$}

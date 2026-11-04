@@ -12,8 +12,7 @@ produced by :class:`imputation_evaluation.evaluation.evaluator.ImputationEvaluat
 plus the canonical producer's display metrics merged in.
 
 Skipped vs. the script: writer/output writing, W&B logging,
-visualization plots, sensitivity-analysis subgroup mappings (callers can
-pass ``subgroup_mappings`` if they want).
+visualization plots.
 """
 
 from __future__ import annotations
@@ -48,8 +47,6 @@ N_CHANNELS = 19
 def run_eval(
     config: ImputationEvalConfig,
     method: ImputationMethod,
-    *,
-    subgroup_mappings: dict | None = None,
 ) -> dict:
     """Run the imputation evaluation pipeline end-to-end.
 
@@ -62,8 +59,6 @@ def run_eval(
         method: An object implementing the :class:`ImputationMethod`
             protocol. The OpenMHC public API wraps user-supplied
             ``Imputer`` objects in an internal adapter to satisfy this.
-        subgroup_mappings: Optional pre-built subgroup mappings for
-            sensitivity analysis. Pass ``None`` to skip.
 
     Returns:
         The raw results dict (scenario → split → group → metric → value)
@@ -211,17 +206,14 @@ def run_eval(
     )
 
     # 8. Canonical producer: read pair files + fallback sidecars back into
-    # display metrics + a per-user errors frame. The producer owns both
-    # the user-macro reduction and the subgroup partitioning — the worker no
-    # longer accumulates subgroup metrics.
+    # display metrics + a per-user errors frame. The producer owns the
+    # user-macro reduction.
     per_user_df, display = build_per_user_errors(
         method_pairs_dir=pairs_dir,
         method_name=method.name,
         scenarios=scenario_names,
         splits=eval_splits,
-        subgroup_mappings=subgroup_mappings,
         include_auc=True,
-        exclude_unknown=False,
     )
 
     # Merge fallback sidecar (model-capability counts) with the producer's

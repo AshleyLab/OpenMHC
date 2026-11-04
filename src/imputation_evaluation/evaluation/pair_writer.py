@@ -283,7 +283,7 @@ def write_sample_manifest(
     """Write a sample manifest mapping split-local index to user_id and date.
 
     Saved as ``{pairs_dir}/manifest_{split_name}.parquet`` alongside
-    ``channel_stds.npy``.  Enables post-hoc sensitivity analysis from
+    ``channel_stds.npy``.  Enables post-hoc per-user reduction of
     saved pair files without replaying the data loading pipeline.
 
     Args:

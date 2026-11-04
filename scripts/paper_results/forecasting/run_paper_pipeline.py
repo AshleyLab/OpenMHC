@@ -12,10 +12,8 @@ forecasting. Stages (each skippable):
    ignore any extra model dirs that happen to be present.
 3. **Phase 2 (skill + rank)** — ``skill_score_summary`` + ``grouped_metric_rank_summary``
    (continuous=mae, binary=auprc, vs ``baseline``) → ``output_root``.
-4. **Phase 3 (bootstrap CIs + fairness)** — paired user-level bootstrap CIs for
-   skill score + mean rank; when ``bootstrap.fairness`` is set, also the
-   disparity-ratio fairness skill score (deterministic point CSV + bootstrap-CI
-   CSV). Gated on ``bootstrap.enabled``.
+4. **Phase 3 (bootstrap CIs)** — paired user-level bootstrap CIs for
+   skill score + mean rank. Gated on ``bootstrap.enabled``.
 
 Usage::
 
@@ -43,6 +41,10 @@ logger = logging.getLogger(__name__)
 
 # scripts/paper_results/forecasting/run_paper_pipeline.py -> parents[3] = repo root.
 REPO_ROOT = Path(__file__).resolve().parents[3]
+# Retired with S_fair. A file that still sets them fails rather than being half-honored.
+RETIRED_BOOTSTRAP_KEYS = frozenset(
+    {"fairness", "age_bins", "bca", "labels_path", "enrollment_path"}
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -272,9 +274,7 @@ def _phase_bootstrap(
 ) -> None:
     """Phase 3 — paired user-level bootstrap CIs for skill score + mean rank.
 
-    When ``bootstrap.fairness`` is set, also writes the disparity-ratio fairness
-    skill score as both a deterministic point CSV and a bootstrap-CI CSV. Writes
-    alongside the Phase-2 point summaries. When ``substrate_path`` is set, the
+    Writes alongside the Phase-2 point summaries. When ``substrate_path`` is set, the
     bootstrap reducers consume the canonical substrate instead of re-scanning trees.
     """
     sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -289,18 +289,15 @@ def _phase_bootstrap(
     n_boot = int(bs.get("n_boot", 1000))
     seed = int(bs.get("seed", 42))
     ci_level = float(bs.get("ci_level", 0.95))
-    bca_fairness = bool(bs.get("bca", True))
     bca_skill_rank = bool(bs.get("bca_skill_rank", False))
     within = cfg.get("within_user_aggregation", "micro")
     logger.info(
-        "Phase 3 bootstrap: B=%d seed=%d ci=%.2f over %d models (baseline=%s) "
-        "[fairness BCa=%s, skill/rank BCa=%s]",
+        "Phase 3 bootstrap: B=%d seed=%d ci=%.2f over %d models (baseline=%s) [skill/rank BCa=%s]",
         n_boot,
         seed,
         ci_level,
         len(models),
         cfg["baseline"],
-        bca_fairness,
         bca_skill_rank,
     )
     if dry_run:
@@ -333,61 +330,16 @@ def _phase_bootstrap(
     tables["avg_rankings"].to_csv(rank_path, index=False)
     logger.info("Wrote bootstrap CIs: %s , %s", skill_path, rank_path)
 
-    if not bs.get("fairness"):
-        return
-
-    from forecasting_evaluation.metrics.bootstrap_fair_skill_score import (
-        bootstrap_fair_skill_score,
-    )
-
-    # Demographics default to <dataset_root>/labels/ (resolved by LabelPaths
-    # via MHC_DATA_DIR); the sweep config may override either path explicitly.
-    from openmhc._label_paths import LabelPaths
-
-    paths = LabelPaths.resolve()
-
-    labels_path = bs.get("labels_path") or (str(paths.labels) if paths.labels else None)
-    enrollment_path = bs.get("enrollment_path") or (
-        str(paths.enrollment) if paths.enrollment else None
-    )
-    if labels_path is None or enrollment_path is None:
-        raise SystemExit(
-            "Fairness bootstrap needs demographics: set bootstrap.labels_path / "
-            "bootstrap.enrollment_path in the sweep, or MHC_DATA_DIR so "
-            "<dataset_root>/labels/{last_labels,enrollment_info}.json resolves."
-        )
-
-    logger.info("Phase 3 fairness: disparity-ratio fair skill score (point + bootstrap)")
-    ftables = bootstrap_fair_skill_score(
-        models=models,
-        baseline_model=cfg["baseline"],
-        continuous_metrics=cfg.get("continuous_metrics", ["mae"]),
-        binary_metrics=cfg.get("binary_metrics", ["auprc"]),
-        continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
-        binary_channel_indices=_spec.BINARY_CHANNELS,
-        labels_path=labels_path,
-        enrollment_path=enrollment_path,
-        age_bins=tuple(bs.get("age_bins", [18, 30, 40, 50, 60])),
-        n_boot=n_boot,
-        seed=seed,
-        ci_level=ci_level,
-        within_user_aggregation=within,
-        bca=bca_fairness,
-        per_user_metrics=per_user_metrics,
-    )
-    fair_point_path = out / "forecasting_fairness_skill_score.csv"
-    fair_boot_path = out / "forecasting_fairness_skill_score_bootstrap.csv"
-    ftables["fairness_skill_scores_point"].to_csv(fair_point_path, index=False)
-    ftables["fairness_skill_scores"].to_csv(fair_boot_path, index=False)
-    logger.info(
-        "Wrote fairness skill score (point + bootstrap): %s , %s", fair_point_path, fair_boot_path
-    )
-
 
 def main() -> int:
     """CLI entry point — see module docstring for usage."""
     args = _parse_args()
     cfg = yaml.safe_load(args.sweep_config.read_text())
+    retired = sorted(RETIRED_BOOTSTRAP_KEYS & set(cfg.get("bootstrap") or {}))
+    if retired:
+        raise SystemExit(
+            f"{args.sweep_config} has bootstrap keys retired with S_fair, remove them: {retired}"
+        )
 
     if args.run_label:
         cfg["run_label"] = args.run_label

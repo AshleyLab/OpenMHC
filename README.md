@@ -335,7 +335,7 @@ Public submissions must use the standard evaluation protocol for the selected
 track, including the canonical dataset version, split file, masking or
 forecasting configuration, and label-validity criterion.
 
-Maintainers compute leaderboard-level skill scores, fair skill scores, and
+Maintainers compute leaderboard-level skill scores and
 average ranks from the submitted substrate during ingestion. Track 1 is scored
 against the linear-probe baseline, Track 2 against LOCF, and Track 3 against
 Seasonal Naive. See

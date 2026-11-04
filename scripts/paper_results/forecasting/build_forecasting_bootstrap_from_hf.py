@@ -4,29 +4,18 @@
 The OpenMHC leaderboard HF dataset (``MyHeartCounts/OpenMHC-leaderboard-data``)
 is the single source of truth.
 
-* **Skill + rank** are reduced directly from the pre-computed per-draw reference
-  ``forecasting/bootstrap/draws.parquet`` (long frame
-  ``(reduction, model, scope, metric, draw, value)``) via the same ``_summarize``
-  helper the pipeline uses — this avoids the ``bootstrap_skill_rank`` rank kernel,
-  which requires pandas >= 2.1 (``DataFrame.stack(future_stack=...)``).
-* **Fairness** (deterministic point + BCa) is computed by
-  ``bootstrap_fair_skill_score`` over the per-method substrate
-  (``forecasting/<model>.parquet``), exactly as ``run_paper_pipeline.py`` does —
-  the BCa acceleration needs the leave-one-user-out jackknife, which is not in the
-  draws reference.
+Skill + rank are reduced directly from the pre-computed per-draw reference
+``forecasting/bootstrap/draws.parquet`` (long frame
+``(reduction, model, scope, metric, draw, value)``) via the same ``_summarize``
+helper the pipeline uses — this avoids the ``bootstrap_skill_rank`` rank kernel,
+which requires pandas >= 2.1 (``DataFrame.stack(future_stack=...)``).
 
-Writes the three CSVs the arXiv forecasting table generator consumes:
+Writes the two CSVs the arXiv forecasting table generator consumes:
     forecasting_skill_score_bootstrap.csv
     forecasting_grouped_metric_rank_bootstrap.csv
-    forecasting_fairness_skill_score_bootstrap.csv
-
-Demographics for the fairness BCa are resolved via the labels API; set
-``MHC_DATA_DIR`` (e.g. ``~/.cache/openmhc/data-full``) so
-``<root>/labels/{last_labels,enrollment_info}.json`` resolve.
 
 Usage:
-    MHC_DATA_DIR=~/.cache/openmhc/data-full python \
-        scripts/paper_results/forecasting/build_forecasting_bootstrap_from_hf.py \
+    python scripts/paper_results/forecasting/build_forecasting_bootstrap_from_hf.py \
         --out-dir /tmp/forecasting_hf_csvs
 """
 
@@ -46,9 +35,6 @@ import pandas as pd  # noqa: E402
 from huggingface_hub import hf_hub_download  # noqa: E402
 
 from forecasting_evaluation.metrics import metric_spec as _spec  # noqa: E402
-from forecasting_evaluation.metrics.bootstrap_fair_skill_score import (  # noqa: E402
-    bootstrap_fair_skill_score,
-)
 from forecasting_evaluation.metrics.bootstrap_skill_rank import _summarize  # noqa: E402
 from forecasting_evaluation.metrics.per_user_errors import (  # noqa: E402
     PER_USER_METRICS_PARQUET_COLUMNS,
@@ -56,8 +42,7 @@ from forecasting_evaluation.metrics.per_user_errors import (  # noqa: E402
 
 DEFAULT_REPO_ID = "MyHeartCounts/OpenMHC-leaderboard-data"
 DRAWS_PATH = "forecasting/bootstrap/draws.parquet"
-N_BOOT, SEED, CI_LEVEL = 1000, 42, 0.95
-AGE_BINS = (18, 30, 40, 50, 60)
+CI_LEVEL = 0.95
 
 
 def _reduce_draws(draws: pd.DataFrame, reduction: str, key_cols: list[str]) -> pd.DataFrame:
@@ -151,37 +136,8 @@ def main() -> int:
     _assert_point_coverage(rank_df, ["model", "scope", "metric"], _spec.PAPER_BASELINE)
     skill_df.to_csv(args.out_dir / "forecasting_skill_score_bootstrap.csv", index=False)
     rank_df.to_csv(args.out_dir / "forecasting_grouped_metric_rank_bootstrap.csv", index=False)
-    print(f"skill/rank reduced from draws + point ({time.time() - t0:.0f}s)")
-
-    from openmhc._label_paths import LabelPaths
-
-    paths = LabelPaths.resolve()
-    if not paths.labels or not paths.enrollment:
-        raise SystemExit("labels/enrollment unresolved — set MHC_DATA_DIR.")
-    ftables = bootstrap_fair_skill_score(
-        models=models,
-        baseline_model=_spec.PAPER_BASELINE,
-        continuous_metrics=list(_spec.PAPER_CONTINUOUS_METRICS),
-        binary_metrics=list(_spec.PAPER_BINARY_METRICS),
-        continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
-        binary_channel_indices=_spec.BINARY_CHANNELS,
-        labels_path=str(paths.labels),
-        enrollment_path=str(paths.enrollment),
-        age_bins=AGE_BINS,
-        n_boot=N_BOOT,
-        seed=SEED,
-        ci_level=CI_LEVEL,
-        within_user_aggregation="micro",
-        bca=True,
-        per_user_metrics=substrate,
-    )
-    ftables["fairness_skill_scores_point"].to_csv(
-        args.out_dir / "forecasting_fairness_skill_score.csv", index=False
-    )
-    ftables["fairness_skill_scores"].to_csv(
-        args.out_dir / "forecasting_fairness_skill_score_bootstrap.csv", index=False
-    )
-    print(f"fairness done ({time.time() - t0:.0f}s). Wrote CSVs -> {args.out_dir}")
+    print(f"skill/rank reduced from draws + point ({time.time() - t0:.0f}s). "
+          f"Wrote CSVs -> {args.out_dir}")
     return 0
 
 

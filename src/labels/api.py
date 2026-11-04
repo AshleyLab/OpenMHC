@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import statistics
 from bisect import bisect_left, bisect_right
@@ -15,6 +16,8 @@ from typing import Any
 import pandas as pd
 
 from openmhc._label_paths import LabelPaths
+
+logger = logging.getLogger(__name__)
 
 
 def _require_dataset_payload_path(
@@ -66,7 +69,13 @@ def _load_label_types(path: Path) -> tuple[dict[str, str], dict[str, dict[str, A
             meta[key] = value
         else:
             raise ValueError(f"Invalid label type metadata for {key!r}: {path}")
-        if types[key] not in ("binary", "ordinal", "categorical", "multi_categorical", "continuous"):
+        if types[key] not in (
+            "binary",
+            "ordinal",
+            "categorical",
+            "multi_categorical",
+            "continuous",
+        ):
             raise ValueError(f"Unknown label type for {key!r}: {path}")
     return types, meta
 
@@ -730,7 +739,9 @@ def _load_ordinal_dictionary(ordinal_dictionary_path: Path) -> dict[str, dict[st
         or any(not isinstance(value, (str, int)) for value in mapping.values())
         for mapping in raw.values()
     ):
-        raise ValueError(f"Ordinal dictionary must contain JSON mappings: {ordinal_dictionary_path}")
+        raise ValueError(
+            f"Ordinal dictionary must contain JSON mappings: {ordinal_dictionary_path}"
+        )
     return raw
 
 
@@ -802,12 +813,18 @@ def _load_schemas(resolved: LabelPaths) -> tuple[dict, dict]:
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid label schema {resolved.validity_config}: {exc}") from exc
     if not isinstance(validity, dict) or any(
-        value is not None and (
-            isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(value) or value < 0
-        ) for value in validity.values()
+        value is not None
+        and (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        )
+        for value in validity.values()
     ):
-        raise ValueError(f"Validity config must map labels to nonnegative days or null: {resolved.validity_config}")
+        raise ValueError(
+            f"Validity config must map labels to nonnegative days or null: {resolved.validity_config}"
+        )
     return types, meta
 
 
@@ -858,6 +875,84 @@ def age_at_enrollment(health_code: str) -> int:
     """
     _ensure_configured()
     return STORE.enrollment.age_at_enrollment(health_code)
+
+
+AGE_GROUP_EDGES = (18, 30, 40, 50, 60)
+
+
+def _age_group(age: int | None) -> str:
+    """Return the group for an age; missing and under-18 ages are unknown."""
+    if age is None or age < AGE_GROUP_EDGES[0]:
+        return "unknown"
+    for low, high in zip(AGE_GROUP_EDGES, AGE_GROUP_EDGES[1:]):
+        if age < high:
+            return f"{low}-{high - 1}"
+    return f"{AGE_GROUP_EDGES[-1]}+"
+
+
+def _sex_group(value: Any) -> str:
+    """Return male or female for a BiologicalSex value, otherwise unknown."""
+    if isinstance(value, bool):
+        return "male" if value else "female"
+    if isinstance(value, str) and value.strip().lower() in ("male", "female"):
+        return value.strip().lower()
+    return "unknown"
+
+
+def user_demographics(
+    user_ids: Iterable[str], *, paths: LabelPaths | None = None
+) -> dict[str, dict[str, str]]:
+    """Return ``{user_id: {"age_group": ..., "sex": ...}}``, one group per participant.
+
+    This is the single definition of the reporting groups for all tracks. Age
+    group uses calendar-year age at enrollment; sex is the latest BiologicalSex
+    label. Missing or invalid values, including malformed records, give ``unknown``
+    and keep the user. The unknown age count is logged, as is a cohort with no usable
+    sex label. Unreadable or malformed files raise.
+
+    Args:
+        user_ids: Users to look up.
+        paths: Read these files instead of the configured dataset, leaving the
+            configured dataset unchanged.
+    """
+    if paths is None:
+        _ensure_configured()
+        store = STORE
+    else:
+        store = LabelsStore(paths)
+    # Load outside the per-user tries: a broken file is not a missing value.
+    enrollment = store.enrollment
+    labels_index = store.labels_index
+
+    groups = {}
+    for user_id in sorted({str(user) for user in user_ids}):
+        try:
+            age = enrollment.age_at_enrollment(user_id)
+        except (KeyError, ValueError):
+            age = None
+        try:
+            sex_values = labels_index.get_series("BiologicalSex", user_id).values
+        except KeyError:
+            sex_values = []
+        groups[user_id] = {
+            "age_group": _age_group(age),
+            "sex": _sex_group(sex_values[-1] if sex_values else None),
+        }
+    unknown = sum(row["age_group"] == "unknown" for row in groups.values())
+    if unknown:
+        logger.warning(
+            "%d/%d users have unknown age groups. Check birth_year and createdOn "
+            "in enrollment_info.json; ages below 18 are also unknown.%s",
+            unknown,
+            len(groups),
+            " The cohort has no usable age groups." if unknown == len(groups) else "",
+        )
+    if groups and all(row["sex"] == "unknown" for row in groups.values()):
+        logger.warning(
+            "No user has a usable BiologicalSex label. Check last_labels.json; "
+            "sex cohorts will be empty."
+        )
+    return groups
 
 
 def get_labels(

@@ -2,9 +2,8 @@
 
 Centralizes the channel groupings, metric directionality, channel-name lookup,
 and the small parquet/error helpers that the Layer-2 summary scripts
-(``skill_score_summary``, ``grouped_metric_rank_summary``,
-``fairness_skill_score_summary``) used to each redeclare. Importing from here
-keeps the scoring definition consistent across all of them.
+(``skill_score_summary``, ``grouped_metric_rank_summary``) used to each redeclare.
+Importing from here keeps the scoring definition consistent across them.
 
 Channel groups (fixed by the benchmark):
     * continuous channels 0-6 (point-forecast targets),

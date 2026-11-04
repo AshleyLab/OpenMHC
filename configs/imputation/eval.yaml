@@ -12,7 +12,6 @@ defaults:
   - output: default
   - evaluation: default
   - visualization: "off"
-  - sensitivity: "off"
   - wandb: "off"
   - _self_
   # SLURM dispatch (Sherlock): add ``hydra/launcher=sherlock_submitit`` on the

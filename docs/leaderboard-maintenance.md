@@ -34,28 +34,9 @@ reducers:
 - **Skill** — `compute_per_task_paired_R(baseline_method="locf")` →
   `compute_skill_scores(mode="paired")`.
 - **Rank** — `compute_average_rankings` → `aggregate_task_ranks_to_scopes`.
-- **Fair skill** — `compute_fair_skill_scores` (disparity-ratio MAPD) at
-  `scope="overall"`.
 
-`HEADLINE_SCOPE="overall"`. Skill and rank filter to `subgroup_attr == "all"`;
-fairness uses the full frame (it needs the `age_group` / `sex` subgroup rows).
-
-### Fairness gotcha (load-bearing)
-
-`compute_fair_skill_scores` consumes **per-cell MEAN** errors, not raw per-user
-rows. Collapse first:
-
-```python
-per_cell = df.groupby(
-    ["method", "scenario", "channel", "channel_type",
-     "subgroup_attr", "subgroup_value"],
-    observed=True,
-)["E"].mean().reset_index()
-```
-
-Feeding raw per-user rows makes the inner merge blow up cartesian-style and
-OOM-kill the Space. Pass the full frame (including the `age_group` / `sex` rows);
-the reducer ignores `subgroup_attr == "all"` on its own.
+`HEADLINE_SCOPE="overall"`. Skill and rank filter to `subgroup_attr == "all"`. Cohort
+views keep those rows for the participants in the cohort, using `demographics.parquet`.
 
 ## Adding / updating a method (no Space rebuild)
 
@@ -72,7 +53,9 @@ the reducer ignores `subgroup_attr == "all"` on its own.
    `--fallback-rate` records `fallback_rate` in the sidecar (issue #39);
    omit it and the value is read from the substrate's `<m>.parquet.meta.json`
    provenance sidecar if present, else the row shows "n/a". The `method` column is
-   validated against `<m>` for `imputation` and `downstream`.
+   validated against `<m>` for `imputation` and `downstream`. The upload stops if the
+   file has users absent from `demographics.parquet`, because they would be left out
+   of every cohort view.
 2. The Space recomputes only on **restart** (in-process cache, no auto-refresh).
    Restart it to pick up the new/changed method. Uploading to the dataset does
    *not* trigger a Space rebuild; only pushing to the Space does.
@@ -80,10 +63,41 @@ the reducer ignores `subgroup_attr == "all"` on its own.
    > **Track 1 (downstream)** is wired the same way (since 2026-07). The Space's
    > `compute_downstream_rows` runs `reduce_substrate_to_point`
    > (`downstream_evaluation/evaluation/bootstrap_skill_rank.py`) on the per-user
-   > *pairs* — point skill / rank / disparity-ratio fairness vs the `linear`
+   > *pairs* — point skill / rank vs the `linear`
    > baseline — and reads `fallback_rate` from the sidecar. So a new downstream
    > substrate appears on the next restart, exactly like the other two tracks.
    > (It does not reuse the imputation per-cell-mean path.)
+
+## The demographics file
+
+`demographics.parquet` (`user_id`, `age_group`, `sex`) is the only source of cohort
+membership. `tools/build_leaderboard_demographics.py` builds it with
+`labels.user_demographics`, for the users already in published substrates, and stops
+if any of them has an unknown age group. Rebuild it when a substrate adds users or the
+age or sex rule changes, then upload both files in one commit. For a substrate with new
+users, do this first and pass the file with `--add-substrate`, since the substrate
+upload stops until the file covers them:
+
+```bash
+python tools/build_leaderboard_demographics.py --data-dir <dataset> --out-dir <dir> \
+    [--add-substrate <m>.parquet]
+```
+
+```python
+HfApi().upload_folder(
+    folder_path="<dir>",
+    repo_id="MyHeartCounts/OpenMHC-leaderboard-data",
+    repo_type="dataset",
+    allow_patterns=["demographics.parquet", "demographics.meta.json"],
+    commit_message=...,
+)
+```
+
+Restart the Space afterwards, as for a new method.
+
+A submission merged as a Hub pull request skips the upload check. The Space logs a
+warning at startup for users absent from the file. If it does, rebuild the file, which
+now picks up the merged substrate, and restart.
 
 Dataset visibility, if needed:
 `HfApi().update_repo_settings(repo_id, private=False, repo_type="dataset")`

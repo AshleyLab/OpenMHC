@@ -2,13 +2,13 @@
 r"""Phase 1 of the imputation paper-metrics bootstrap.
 
 Reads each method's saved imputation pairs/, runs a paired participant-level
-bootstrap **across methods** (shared resample matrix per (scenario, split,
-subgroup) cell so inter-method differences are paired), and writes a
-long-format Parquet of per-draw error values plus a sidecar metadata JSON.
+bootstrap **across methods** (shared resample matrix per split so inter-method
+differences are paired), and writes a long-format Parquet of per-draw error
+values plus a sidecar metadata JSON. Every row has ``subgroup_attr`` and
+``subgroup_value`` equal to ``"all"``.
 
 Phase 2 (``aggregate_imputation_paper_metrics.py``) reads that Parquet and
-produces summary CSVs (mean / SE / 95 % CI for skill score, average rank,
-per-subgroup S_g, and any registered disparity / fairness-combine).
+produces summary CSVs (mean / SE / 95 % CI for skill score and average rank).
 
 Example::
 
@@ -16,8 +16,7 @@ Example::
         --method-dirs configs/paper/bootstrap_method_dirs.json \
         --output results/paper/bootstrap_draws.parquet \
         --n-boot 1000 --seed 42 \
-        --splits test \
-        --include-fairness
+        --splits test
 
 The JSON manifest maps method -> pairs_dir, e.g.::
 
@@ -51,7 +50,6 @@ from imputation_evaluation.evaluation.bootstrap_skill_rank import (
     write_draws_parquet,
     write_per_user_errors_parquet,
 )
-from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
 
 logging.basicConfig(
     level=logging.INFO,
@@ -95,18 +93,14 @@ def _parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help=(
-            "Output Parquet for per-user E values, the substrate for the Phase 2 "
-            "BCa LOO jackknife (METRICS.md §S7). Default: sibling of --output "
+            "Output Parquet for per-user E values. Default: sibling of --output "
             "named 'per_user_errors.parquet'. Pass --no-per-user-errors to skip."
         ),
     )
     p.add_argument(
         "--no-per-user-errors",
         action="store_true",
-        help=(
-            "Skip per-user errors emission. Phase 2 BCa will fall back to the "
-            "percentile CI for any caller that requested --bca."
-        ),
+        help="Skip per-user errors emission.",
     )
     p.add_argument(
         "--per-user-errors-dir",
@@ -153,24 +147,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument(
         "--no-auc",
         action="store_true",
-        help="Skip AUC bootstrap for binary channels (faster, but no fairness for binary)",
-    )
-    p.add_argument(
-        "--no-fairness",
-        action="store_true",
-        help="Skip subgroup demographic mapping (fairness CIs cannot be computed in phase 2)",
-    )
-    p.add_argument(
-        "--age-bins",
-        type=int,
-        nargs="+",
-        default=[18, 30, 40, 50, 60],
-        help="Age-bin edges for the age_group attribute (default: 18 30 40 50 60)",
-    )
-    p.add_argument(
-        "--exclude-unknown",
-        action="store_true",
-        help="Skip subgroup_value=='unknown' cells",
+        help="Skip AUC bootstrap for binary channels (faster)",
     )
     p.add_argument(
         "--channel-stds-path",
@@ -183,7 +160,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Fail (non-zero exit) on any missing method dir or missing "
-            "per-split subgroup manifest instead of warning-and-skipping. "
+            "per-split manifest instead of warning-and-skipping. "
             "Required for runs whose numbers are published."
         ),
     )
@@ -201,41 +178,6 @@ def _discover_scenarios(method_dirs: dict[str, Path], split: str) -> list[str]:
             if child.is_dir() and (child / split).is_dir():
                 seen.add(child.name)
     return sorted(seen)
-
-
-def _build_subgroup_mapping(
-    pairs_dir: Path,
-    split: str,
-    age_bins: list[int],
-) -> dict[int, dict[str, str]] | None:
-    """Build {sample_idx: {age_group, sex}} mapping from a method's manifest.
-
-    Age groups use enrollment createdOn, matching the live sensitivity path.
-    """
-    manifest = load_sample_manifest(pairs_dir, split)
-    if manifest is None:
-        return None
-    from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE
-
-    sample_idxs = manifest.column("sample_idx").to_numpy()
-    user_ids = manifest.column("user_id").to_pylist()
-    unique_users = sorted(set(user_ids))
-    logger.info(
-        "[split=%s] looking up demographics for %d users …",
-        split,
-        len(unique_users),
-    )
-    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
-
-    out: dict[int, dict[str, str]] = {}
-    for sidx, uid in zip(sample_idxs, user_ids):
-        demo = user_demographics[uid]
-        age = demo["age_at_enrollment"]
-        age_group = bin_age(age, age_bins) if age is not None else "unknown"
-        out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
-
-    return out
 
 
 def main() -> int:
@@ -280,33 +222,16 @@ def main() -> int:
     logger.info("Scenarios: %s", scenarios)
     logger.info("Splits: %s", args.splits)
 
-    # Subgroup mapping: per-split, built from the first method's manifest
-    # (manifests are scenario-independent and shared across methods).
-    # The Phase B fast path doesn't need this — per_user_errors rows already
-    # carry subgroup_attr / subgroup_value labels, so the demographic lookup
-    # is redundant (and would require MHC_DATA_DIR + labels/enrollment_info).
-    subgroup_mappings: dict[str, dict[int, dict[str, str]]] = {}
-    if not args.no_fairness and args.per_user_errors_dir is None:
-        ref_method = next(iter(method_dirs))
-        ref_dir = method_dirs[ref_method]
+    if args.strict and args.per_user_errors_dir is None:
+        ref_dir = next(iter(method_dirs.values()))
         for split in args.splits:
-            sg = _build_subgroup_mapping(ref_dir, split, args.age_bins)
-            if sg is None:
-                if args.strict:
-                    logger.error(
-                        "[strict] No manifest_%s.parquet at %s — aborting",
-                        split,
-                        ref_dir,
-                    )
-                    return 2
-                logger.warning(
-                    "No manifest_%s.parquet at %s; skipping fairness for this split",
+            if not (ref_dir / f"manifest_{split}.parquet").exists():
+                logger.error(
+                    "[strict] No manifest_%s.parquet at %s — aborting",
                     split,
                     ref_dir,
                 )
-            else:
-                subgroup_mappings[split] = sg
-                logger.info("[split=%s] subgroup mapping built: %d samples", split, len(sg))
+                return 2
 
     # Channel stds
     channel_stds = None
@@ -314,7 +239,7 @@ def main() -> int:
         channel_stds = np.load(args.channel_stds_path)
         logger.info("Using channel_stds from %s", args.channel_stds_path)
 
-    # Build per-draw errors (and, unless skipped, per-user errors for BCa).
+    # Build per-draw errors (and, unless skipped, per-user errors).
     emit_per_user = not args.no_per_user_errors
     per_user_errors_path: Path | None = None
     if emit_per_user:
@@ -399,6 +324,8 @@ def main() -> int:
         per_user_input = per_user_input[per_user_input["split"].isin(args.splits)]
         if scenarios:
             per_user_input = per_user_input[per_user_input["scenario"].isin(scenarios)]
+        # Published substrates may still hold age and sex rows.
+        per_user_input = per_user_input[per_user_input["subgroup_attr"] == "all"]
 
         df = compute_per_draw_errors_from_per_user_errors(
             per_user_input,
@@ -407,7 +334,7 @@ def main() -> int:
             seed=args.seed,
         )
         # The new path doesn't re-emit per_user_errors (input == output).
-        per_user_df = per_user_input.copy() if emit_per_user else None
+        per_user_df = per_user_input.reset_index(drop=True) if emit_per_user else None
     else:
         # ---- Legacy from-pairs path ----
         result = compute_per_draw_errors(
@@ -416,10 +343,8 @@ def main() -> int:
             splits=args.splits,
             n_boot=args.n_boot,
             seed=args.seed,
-            subgroup_mappings=subgroup_mappings if subgroup_mappings else None,
             channel_stds=channel_stds,
             include_auc=not args.no_auc,
-            exclude_unknown=args.exclude_unknown,
             emit_per_user_errors=emit_per_user,
         )
         if emit_per_user:
@@ -444,9 +369,6 @@ def main() -> int:
         "methods": list(method_dirs.keys()),
         "method_dirs": {m: str(p) for m, p in method_dirs.items()},
         "include_auc": not args.no_auc,
-        "include_fairness": not args.no_fairness,
-        "age_bins": args.age_bins,
-        "exclude_unknown": args.exclude_unknown,
         "elapsed_seconds": t_elapsed,
         "n_rows": len(df),
         "n_per_user_rows": int(len(per_user_df)) if per_user_df is not None else None,

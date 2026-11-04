@@ -17,8 +17,8 @@ The substrate parquets are the canonical inputs for:
 
 - The OpenMHC HF Space (`MyHeartCounts/OpenMHC`) — it downloads these parquets +
   the sidecars and runs the canonical forecasting reducers to produce the live
-  leaderboard table (skill / fair-skill / mean-rank vs `seasonal_naive`).
-- Independent re-aggregation (skill / rank / fairness reducers in
+  leaderboard table (skill / mean-rank vs `seasonal_naive`).
+- Independent re-aggregation (skill / rank reducers in
   `src/forecasting_evaluation/metrics/`).
 - The cluster-bootstrap reference at `forecasting/bootstrap/` (per-draw CIs) is
   reduced from these substrates, so any change here must be matched by a
@@ -99,7 +99,7 @@ the OpenMHC code repo on Simurgh (SC); see
 LABEL=forecasting_full_20260622
 
 # (1) Eval + aggregate — fan out all 10 model jobs under one label, then chain
-#     the paper pipeline (substrate + skill/rank + bootstrap CIs + fairness).
+#     the paper pipeline (substrate + skill/rank + bootstrap CIs).
 #     Each run writes results.json with the top-level overall_fallback_rate.
 MHC_FORECAST_RUN_LABEL=$LABEL jobs/sc-cluster/forecasting_eval/submit_pipeline.sh
 #   re-aggregate only (metrics already on disk):
@@ -107,8 +107,7 @@ MHC_FORECAST_RUN_LABEL=$LABEL jobs/sc-cluster/forecasting_eval/submit_pipeline.s
 #     jobs/sc-cluster/forecasting_eval/run_paper_pipeline.sbatch
 # -> results/forecasting_eval/simurgh/summary/$LABEL/
 #      {forecasting_per_user_errors.parquet, skill_rank_models.json,
-#       forecasting_skill_score*.csv, forecasting_grouped_metric_rank*.csv,
-#       forecasting_fairness_skill_score*.csv}
+#       forecasting_skill_score*.csv, forecasting_grouped_metric_rank*.csv}
 
 # (2) Bootstrap-draws reference for the leaderboard CIs (n_boot=1000; CPU ~30 min).
 sbatch scripts/paper_results/forecasting/produce_forecasting_bootstrap_draws.sbatch \

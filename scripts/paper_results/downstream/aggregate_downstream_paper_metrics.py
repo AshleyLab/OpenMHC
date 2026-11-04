@@ -2,17 +2,13 @@
 r"""Phase 2 of the downstream paper-metrics bootstrap.
 
 Reads ``bootstrap_draws.parquet`` produced by phase 1
-(``bootstrap_downstream_draws.py``) and emits the four sidecar CSVs that carry
+(``bootstrap_downstream_draws.py``) and emits the three sidecar CSVs that carry
 mean / SE / 95 % CI for the headline metrics:
 
 * ``skill_scores_bootstrap.csv``            — per method × scope (Overall + per-domain)
 * ``avg_rankings_bootstrap.csv``            — per method × scope
-* ``fairness_subgroup_scores_bootstrap.csv``— per method × demographic_attr × subgroup
 * ``task_metrics_bootstrap.csv``            — per method × task: the headline metric
   (auprc / spearman_r / pearson_r) with full-cohort point + SE + percentile CI
-
-The headline fairness metric (the disparity-ratio Fairness Skill Score) is
-produced separately by ``aggregate_fairness_skill_score.py``.
 
 Phase 2 is **fast** — re-run with different clip bounds or CI level without
 re-resampling.
@@ -37,7 +33,7 @@ import pandas as pd
 from downstream_evaluation.evaluation.bootstrap_skill_rank import (
     POINT_DRAW,
     _summarise,
-    aggregate_skill_rank_fairness,
+    aggregate_skill_rank,
     read_draws_parquet,
 )
 
@@ -59,7 +55,7 @@ def summarise_task_metrics(draws: pd.DataFrame, ci_level: float) -> pd.DataFrame
 
     Reuses the phase-1 per-draw errors (``E = 1 - metric`` at global scope,
     ``subgroup_attr == "all"``) and the shared ``_summarise`` helper, so the per-task CI
-    uses the same convention as the skill / rank / fairness tables. The ``POINT_DRAW`` row
+    uses the same convention as the skill / rank tables. The ``POINT_DRAW`` row
     is the full-cohort estimate reported as ``value``; the ``draw >= 0`` rows give the
     SE / CI around it. Returns one row per (method, task).
     """
@@ -97,13 +93,13 @@ def summarise_task_metrics(draws: pd.DataFrame, ci_level: float) -> pd.DataFrame
 
 
 def main() -> int:
-    """Summarise ``bootstrap_draws.parquet`` into the four paper sidecar CSVs."""
+    """Summarise ``bootstrap_draws.parquet`` into the three paper sidecar CSVs."""
     p = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--draws", type=Path, required=True, help="bootstrap_draws.parquet from phase 1")
-    p.add_argument("--output-dir", type=Path, required=True, help="Dir for the four sidecar CSVs")
+    p.add_argument("--output-dir", type=Path, required=True, help="Dir for the three sidecar CSVs")
     p.add_argument(
         "--baseline-method",
         default="linear",
@@ -129,7 +125,7 @@ def main() -> int:
         df = df[df["method"].isin(args.method_filter)].copy()
         log.info("After --method-filter: %d rows", len(df))
 
-    tables = aggregate_skill_rank_fairness(
+    tables = aggregate_skill_rank(
         df,
         baseline=args.baseline_method,
         clip_lower=args.clip_lower,
@@ -141,7 +137,6 @@ def main() -> int:
     paths = {
         "skill_scores": args.output_dir / "skill_scores_bootstrap.csv",
         "avg_rankings": args.output_dir / "avg_rankings_bootstrap.csv",
-        "fairness_subgroup_scores": args.output_dir / "fairness_subgroup_scores_bootstrap.csv",
         "task_metrics": args.output_dir / "task_metrics_bootstrap.csv",
     }
     for key, path in paths.items():

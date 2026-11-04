@@ -2,10 +2,9 @@
 
 Pools the per-(method, task) ``test.parquet`` files the eval pipeline writes
 (``--output.save_predictions`` / ``PREDICTIONS_DIR``) into one per-user
-prediction-pair parquet per method, subgroup-expanded over ``all`` / ``age_group``
-/ ``sex`` (the fairness axes from ``_subgroups.json``). This is the substrate the
-leaderboard ingests and recomputes paired skill / rank / fairness from server-side
-against the ``linear`` baseline — see ``tools/leaderboard_docs/downstream/SCHEMA.md``.
+prediction-pair parquet per method. This is the substrate the leaderboard ingests and
+recomputes paired skill / rank from server-side against the ``linear`` baseline — see
+``tools/leaderboard_docs/downstream/SCHEMA.md``.
 
 Mirrors the other tracks' substrate producers
 (``imputation/parity/produce_per_method_per_user_errors.py``,
@@ -52,7 +51,7 @@ from downstream_evaluation.evaluation.predictions_io import (  # noqa: E402
 from openmhc._constants import BENCHMARK_TASKS  # noqa: E402
 
 # csv key -> (display_name, type), matching the registry in ``build_leaderboard_json.py``.
-# ``linear`` is the skill / fairness baseline (scored against, not a competitor); it is
+# ``linear`` is the skill baseline (scored against, not a competitor); it is
 # built here for completeness and for the parity gate, but uploading it is the
 # maintainer's call (SCHEMA: "do not submit it").
 METHODS: dict[str, tuple[str, str]] = {
@@ -100,7 +99,7 @@ def main() -> int:
         "--predictions-dir",
         type=Path,
         default=REPO_ROOT / "results/eval/final/predictions",
-        help="Dir with <method>/<task>/test.parquet + _subgroups.json.",
+        help="Dir with <method>/<task>/test.parquet.",
     )
     p.add_argument(
         "--out-dir",
@@ -134,9 +133,6 @@ def main() -> int:
         overrides[name] = float(value)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    subgroups = args.predictions_dir / "_subgroups.json"
-    if not subgroups.exists():
-        raise SystemExit(f"missing {subgroups} — fairness rows need the subgroup map")
 
     print(f"predictions-dir={args.predictions_dir}")
     print(f"out-dir={args.out_dir}\n")

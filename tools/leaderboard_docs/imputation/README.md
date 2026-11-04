@@ -4,7 +4,7 @@ This directory holds the **per-method substrate** for the OpenMHC Track-2
 (imputation) leaderboard. Each method ships two files:
 
 ```
-imputation/<method>.parquet         # per-(user × scenario × channel × subgroup) errors
+imputation/<method>.parquet         # per-(user × scenario × channel) errors
 imputation/<method>.meta.json       # display + diagnostic sidecar
 ```
 
@@ -19,10 +19,14 @@ The substrate parquets are the canonical inputs for:
   there downloads these parquets + the sidecars and runs the canonical
   reducers from `imputation_evaluation` to produce the live leaderboard
   table.
-- Independent re-aggregation (skill / rank / fairness reducers in
+- Independent re-aggregation (skill / rank reducers in
   `src/imputation_evaluation/evaluation/`)
 - The cluster-bootstrap reference at `imputation/bootstrap*/` is reduced
   from these substrates, so any change here propagates downstream.
+
+A cohort view is a membership filter of the `subgroup_attr == "all"` rows by
+`demographics.parquet` at the repo root. Files built before `S_fair` was retired also hold `age_group` and `sex` rows; no reducer
+in the code repo reads them.
 
 ## Loading
 
@@ -51,7 +55,7 @@ print(meta)
 #     "fallback_rate": 0.0}
 ```
 
-## Pooled substrate (BCa LOO)
+## Pooled substrate
 
 The pooled per-user errors frame across all methods is NOT stored here — it
 is exactly the concatenation of the per-method parquets:
@@ -62,7 +66,8 @@ pooled = pd.concat(
     [pd.read_parquet(p) for p in glob.glob("imputation/*.parquet")],
     ignore_index=True,
 )
-# ~2.5M rows = 148,510 rows/method × 17 methods (or × 16 for the legacy pool)
+# One row per (method, scenario, split, channel, subgroup, user); read
+# subgroup_attr == "all" (older files also hold age and sex rows).
 ```
 
 The bootstrap reference under `imputation/bootstrap/` was computed against

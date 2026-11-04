@@ -5,12 +5,12 @@ The OpenMHC leaderboard HF dataset
 (``MyHeartCounts/OpenMHC-leaderboard-data``) is the single source of truth.
 This script pulls the bootstrap **substrate** from there —
 ``imputation/bootstrap/draws.parquet`` (per-draw E/R/rank) plus the 16
-per-method ``imputation/<method>.parquet`` files (the BCa leave-one-user-out
-jackknife substrate) — runs the canonical Phase-2 reducers, and renders the
-table. The local ``imputation_results_paper/`` directory is no longer read.
+per-method ``imputation/<method>.parquet`` files (the deterministic point
+estimates) — runs the canonical Phase-2 reducers on their ``"all"`` rows, and
+renders the table. The local ``imputation_results_paper/`` directory is no
+longer read.
 
-Because the Phase-2 reduction is expensive (~25-30 min, dominated by the
-fairness BCa jackknife over ~1.8k users), the three reduced CSVs are cached
+Because the Phase-2 reduction takes minutes, the two reduced CSVs are cached
 locally keyed by an **md5 fingerprint of the HF source files**. Each cache
 entry records the per-file ``sha256`` it was built from; when the live HF
 files differ from the cached fingerprint, the cache is rebuilt automatically.
@@ -21,12 +21,9 @@ table (booktabs rules, per-section ``customblue!N`` blue gradient, bold best
 cell).
 
 Uncertainty is reported as a 95% bootstrap confidence interval rendered as an
-asymmetric ``value^{+upper}_{-lower}`` super/subscript (not the SE). For every
-column except ``S_fair`` the center is the bootstrap ``mean`` and the interval is
-the percentile CI (``ci_lo``/``ci_hi``). ``S_fair`` (from
-``fairness_skill_score_bootstrap.csv``, scope ``overall``) uses the
-deterministic ``point`` estimate and the BCa interval (``bca_lo``/``bca_hi``),
-matching ``build_leaderboard_json.py`` / the leaderboard.
+asymmetric ``value^{+upper}_{-lower}`` super/subscript (not the SE). The center
+is the deterministic ``point`` estimate and the interval is the percentile CI
+(``ci_lo``/``ci_hi``).
 
 Only the main table is generated; the skill-by-scenario appendix table is out of
 scope (it includes a dense "LSM2 (7-day)" row that is not in the bootstrap CSVs).
@@ -51,7 +48,6 @@ import csv
 import hashlib
 import json
 import logging
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -63,12 +59,11 @@ DRAWS_PATH = "imputation/bootstrap/draws.parquet"
 DRAWS_META_PATH = "imputation/bootstrap/draws.meta.json"
 DEFAULT_CACHE_ROOT = Path.home() / ".cache" / "openmhc" / "imputation_paper_tables"
 
-# The three reduced CSVs the renderer consumes (filenames match the canonical
+# The two reduced CSVs the renderer consumes (filenames match the canonical
 # Phase-2 sidecars so the cache is drop-in compatible with load_columns()).
 REDUCED_CSVS = (
     "skill_scores_bootstrap.csv",
     "avg_rankings_bootstrap.csv",
-    "fairness_skill_score_bootstrap.csv",
 )
 CACHE_MANIFEST = "manifest.json"
 # Bump when the reduced-CSV schema changes so stale caches auto-rebuild.
@@ -113,7 +108,6 @@ METHODS: dict[str, tuple[str, str, str]] = {
 COLUMNS: list[tuple[str, str, str, str, str, str, bool, bool, bool]] = [
     (r"$R\downarrow$",            "avg_rankings_bootstrap.csv",          "overall",        "point", "ci_lo",  "ci_hi",  False, True,  False),
     (r"$S\uparrow$",              "skill_scores_bootstrap.csv",          "overall",        "point", "ci_lo",  "ci_hi",  True,  False, True),
-    (r"$S_{\text{fair}}\uparrow$","fairness_skill_score_bootstrap.csv",  "overall",        "point", "bca_lo", "bca_hi", True,  False, True),
     (r"Activity\,$\uparrow$",     "skill_scores_bootstrap.csv",          "cat:activity",   "point", "ci_lo",  "ci_hi",  True,  False, True),
     (r"Physio.\,$\uparrow$",      "skill_scores_bootstrap.csv",          "cat:physiology", "point", "ci_lo",  "ci_hi",  True,  False, True),
     (r"Sleep\,$\uparrow$",        "skill_scores_bootstrap.csv",          "cat:sleep",      "point", "ci_lo",  "ci_hi",  True,  False, True),
@@ -137,16 +131,16 @@ HEADER = r"""\begin{table}[t!]
     \renewcommand{\arraystretch}{1.05}
     \centering
     \captionsetup{width=\textwidth}
-    \caption{\textbf{Imputation Results.} We report Average Rank $R$, Aggregate Skill Score $S$ (in \%; $0=\TN{LOCF}$ reference), Fairness Skill Score $S_{\text{fair}}$, and Channel-Specific Skill Scores for the following channels: \textit{Activity, Physiology, Sleep, Workout}. Finally, we also report performance on all \textit{Semantic} masking approaches (see Appendix \ref{sec:imputation}). Single-day imputation method results are in the upper section of the table; long-context imputation method results ($\geq 7\times 1440$ time steps) are below. %
-    Values are point estimates on the held-out test split; sub/superscripts give the $95\%$ bootstrap confidence interval ($1000$ resamples): the percentile interval for every column except $S_{\text{fair}}$, which uses the bias-corrected and accelerated (BCa) interval. \kwz{CAPTION}
+    \caption{\textbf{Imputation Results.} We report Average Rank $R$, Aggregate Skill Score $S$ (in \%; $0=\TN{LOCF}$ reference), and Channel-Specific Skill Scores for the following channels: \textit{Activity, Physiology, Sleep, Workout}. Finally, we also report performance on all \textit{Semantic} masking approaches (see Appendix \ref{sec:imputation}). Single-day imputation method results are in the upper section of the table; long-context imputation method results ($\geq 7\times 1440$ time steps) are below. %
+    Values are point estimates on the held-out test split; sub/superscripts give the $95\%$ bootstrap percentile confidence interval ($1000$ resamples). \kwz{CAPTION}
     }
     \label{tab:imputation_main_results}
     \small
     \setlength{\tabcolsep}{1.5pt}
     \resizebox{\linewidth}{!}{%
-    \begin{tabular}{l cccccccc}
+    \begin{tabular}{l ccccccc}
     \toprule[1.5pt]
-    \textbf{Method} & $R\downarrow$ & $S\uparrow$ & $S_{\text{fair}}\uparrow$ & Activity\,$\uparrow$ & Physio.\,$\uparrow$ & Sleep\,$\uparrow$ & Workout\,$\uparrow$ & Semantic\,$\uparrow$ \\
+    \textbf{Method} & $R\downarrow$ & $S\uparrow$ & Activity\,$\uparrow$ & Physio.\,$\uparrow$ & Sleep\,$\uparrow$ & Workout\,$\uparrow$ & Semantic\,$\uparrow$ \\
     \midrule
 """
 
@@ -286,7 +280,7 @@ def _remote_fingerprint(repo_id: str, revision: str | None) -> dict[str, str]:
     """Map each substrate parquet to its content hash on HF (no full download).
 
     Returns ``{repo_path: sha256}`` for ``draws.parquet`` and every per-method
-    ``imputation/<method>.parquet`` (the BCa jackknife substrate). Parquet
+    ``imputation/<method>.parquet`` (the point-estimate substrate). Parquet
     files are LFS-tracked, so ``lfs.sha256`` is the content identity; the git
     ``blob_id`` is a fallback for any non-LFS entry.
     """
@@ -370,7 +364,7 @@ def attach_skill_rank_point(tables, per_user_df, *, baseline):
     Shared by the main and skill-by-scenario table generators. The point is computed
     by :func:`compute_point_skill_rank` over:
 
-    * the **test** split only — matching the bootstrap draws and the fairness point;
+    * the **test** split only — matching the bootstrap draws;
     * the **same method pool** as the draws — average rank is a cross-method
       statistic, so an extra method in the per-method substrate (e.g. the dense
       ``lsm2_weekly`` absent from the main table's draws) would shift every rank.
@@ -411,17 +405,8 @@ def _build_reduced_csvs(
     from huggingface_hub import hf_hub_download
 
     from imputation_evaluation.evaluation.bootstrap_skill_rank import (
-        aggregate_skill_rank_fairness,
+        aggregate_skill_rank,
         read_draws_parquet,
-    )
-
-    # compute_fairness_skill_scores lives in scripts/paper_results/, which is
-    # not an importable package — add it to the path the same way the pipeline
-    # driver shells out to it.
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-    from aggregate_fairness_skill_score import (  # noqa: E402
-        SENSITIVE_ATTRS,
-        compute_fairness_skill_scores,
     )
 
     def _dl(path: str) -> str:
@@ -440,36 +425,14 @@ def _build_reduced_csvs(
 
     draws_df, _ = read_draws_parquet(Path(draws_path))
     logger.info("Loaded %d draw rows; reducing skill + rank …", len(draws_df))
-    # Skill + rank only ever use the ``subgroup_attr == "all"`` rows. Handing
-    # the full frame to aggregate_skill_rank_fairness would additionally fire
-    # its deprecated (and here unused) S-λD fairness subgroup loop — the
-    # dominant cost. Restricting to the "all" rows yields identical skill /
-    # rank tables and skips that loop entirely. The leaderboard fairness score
-    # is produced by compute_fairness_skill_scores below (which does need the
-    # subgroup rows).
+    # Skill + rank only use the ``subgroup_attr == "all"`` rows.
     all_rows = draws_df[draws_df["subgroup_attr"] == "all"]
-    tables = aggregate_skill_rank_fairness(all_rows)
+    tables = aggregate_skill_rank(all_rows)
 
-    logger.info(
-        "Concatenating %d per-method parquets for the BCa jackknife …",
-        len(local_per_method),
-    )
+    logger.info("Concatenating %d per-method parquets …", len(local_per_method))
     per_user_df = pd.concat(
         [pd.read_parquet(p) for p in local_per_method], ignore_index=True
     )
-    logger.info(
-        "Reducing fairness skill score with BCa over %d users "
-        "(this is the slow step, ~25 min) …",
-        per_user_df["user_id"].nunique(),
-    )
-    fairness = compute_fairness_skill_scores(
-        draws_df,
-        attrs=list(SENSITIVE_ATTRS),
-        baseline_method="locf",
-        bca=True,
-        per_user_df=per_user_df,
-    )
-
     # Deterministic point estimate for skill / rank (the reported center), attached
     # as a ``point`` column alongside the bootstrap percentile CI. See
     # ``attach_skill_rank_point`` for the test-split + method-pool invariants.
@@ -484,9 +447,6 @@ def _build_reduced_csvs(
     )
     tables["avg_rankings"].to_csv(
         cache_dir / "avg_rankings_bootstrap.csv", index=False, float_format="%.6f"
-    )
-    fairness.to_csv(
-        cache_dir / "fairness_skill_score_bootstrap.csv", index=False, float_format="%.6f"
     )
     # Manifest written LAST — its presence marks the cache entry complete.
     (cache_dir / CACHE_MANIFEST).write_text(
@@ -510,7 +470,7 @@ def _build_reduced_csvs(
 def ensure_reduced_csvs(
     repo_id: str, revision: str | None, cache_root: Path, force: bool
 ) -> Path:
-    """Return a dir holding the three reduced CSVs, rebuilding if HF changed.
+    """Return a dir holding the two reduced CSVs, rebuilding if HF changed.
 
     The cache dir is keyed by the md5 of the live HF source-file fingerprint,
     so a changed substrate naturally resolves to a fresh (empty) dir and

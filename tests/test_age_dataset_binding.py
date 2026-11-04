@@ -1,4 +1,4 @@
-"""Keep lookup ages and prediction-export metadata on the selected dataset."""
+"""Keep lookup ages on the selected dataset."""
 
 import json
 import shutil
@@ -19,6 +19,7 @@ def bound_datasets(label_schema_environment, tmp_path):
     root = folder.parent
     (folder / "last_labels.json").write_text(json.dumps({
         "age": {"u": {"timestamps": ["2025-06-01"], "values": [99]}},
+        "BiologicalSex": {"u": {"timestamps": ["2025-06-01"], "values": ["Male"]}},
     }))
     (folder / "enrollment_info.json").write_text(json.dumps({
         "u": {"birth_year": 1980, "createdOn": "2015-01-01"},
@@ -94,40 +95,16 @@ def test_provider_detects_payload_reconfiguration(bound_datasets, field):
         provider.task_data("age", "test")
 
 
-@pytest.mark.parametrize("fault", ["missing", "truncated", "non_object", "wrong_dataset"])
-def test_export_preflight_fails_before_loading_or_evaluating(bound_datasets, tmp_path, monkeypatch, fault):
-    """Broken enrollment is reported before model work or prediction output starts."""
-    from downstream_evaluation import runner
-
-    root, other, _ = bound_datasets
-    enrollment = root / "labels/enrollment_info.json"
-    error = ValueError
-    if fault == "missing":
-        enrollment.unlink()
-        error = FileNotFoundError
-    elif fault == "truncated":
-        enrollment.write_text("{")
-    elif fault == "non_object":
-        enrollment.write_text("[]")
-    else:
-        api.configure(other)
-    output = tmp_path / "predictions"
-    config = EvalConfig(str(root), {"test": ["u"]}, tasks=["BiologicalSex"], predictions_dir=str(output))
-    monkeypatch.setattr(runner, "DataLoader", lambda *a, **k: pytest.fail("Preflight must precede sensor loading"))
-    monkeypatch.setattr(runner, "DownstreamEvaluator", lambda *a, **k: pytest.fail("Preflight must precede evaluation"))
-    with pytest.raises(error):
-        runner.run_eval(config, SimpleNamespace())
-    assert not output.exists()
-
-
 @pytest.mark.parametrize("export", [False, True])
-def test_runner_preflight_only_requires_enrollment_for_export(bound_datasets, tmp_path, monkeypatch, export):
-    """Valid export writes the group map; lookup-only evaluation needs no enrollment."""
+def test_lookup_only_evaluation_reads_no_label_payloads(
+    bound_datasets, tmp_path, monkeypatch, export
+):
+    """Lookup-only tasks need neither enrollment nor labels, with or without export."""
     from downstream_evaluation import runner
 
     root, _, _ = bound_datasets
-    if not export:
-        (root / "labels/enrollment_info.json").unlink()
+    (root / "labels/enrollment_info.json").unlink()
+    (root / "labels/last_labels.json").unlink()
     output = tmp_path / "predictions"
     config = EvalConfig(
         str(root), {"test": ["u"]}, tasks=["BiologicalSex"],
@@ -137,18 +114,17 @@ def test_runner_preflight_only_requires_enrollment_for_export(bound_datasets, tm
 
     def run(provider, loader, model, tasks, **kwargs):
         calls.append(tasks)
-        if export:
-            assert api.STORE._enrollment is not None
         assert provider.task_data("BiologicalSex", "test").labels.tolist() == [1]
-        return {"BiologicalSex": {"n_test": 1}}
+        return {"BiologicalSex": {"n_test": 1, "n_fallback": 0}}
 
     monkeypatch.setattr(runner, "DownstreamEvaluator", lambda **k: SimpleNamespace(run=run))
     results = runner.run_eval(config, SimpleNamespace(needs_segments=False, name="dummy"))
     assert calls == [["BiologicalSex"]]
     assert results["BiologicalSex"]["n_test"] == 1
     if export:
-        assert json.loads((output / "_subgroups.json").read_text()) == {
-            "u": {"age_group": "30-39", "sex": "male"},
+        assert json.loads((output / "dummy/fallback.json").read_text()) == {
+            "BiologicalSex": {"n_fallback": 0, "n_test": 1},
         }
+        assert not (output / "_subgroups.json").exists()
     else:
         assert not output.exists()

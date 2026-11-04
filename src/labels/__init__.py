@@ -21,6 +21,7 @@ from .api import (
     get_labels_statistics,
     get_labels_windowed,
     print_labels_statistics,
+    user_demographics,
     years_between_birth_year,
 )
 
@@ -47,6 +48,7 @@ __all__ = [
     "get_labels_statistics",
     "get_labels_windowed",
     "print_labels_statistics",
+    "user_demographics",
     "years_between_birth_year",
 ]
 

@@ -2,19 +2,17 @@
 r"""Deterministic point estimates for the imputation paper's headline metrics.
 
 Reads each method's saved ``pairs/`` directories (same input as
-``bootstrap_imputation_draws.py``) and emits the three deterministic
+``bootstrap_imputation_draws.py``) and emits the two deterministic
 sidecar CSVs that the bootstrap pipeline summarises with mean / SE / CI:
 
 * ``skill_scores.csv``         — :func:`paper_metrics_core.compute_skill_scores`
 * ``avg_rankings.csv``         — :func:`paper_metrics_core.compute_average_rankings`
-* ``fairness_skill_scores.csv` — :func:`paper_metrics_core.compute_fair_skill_scores`
 
 These are the *point estimates* the leaderboard and paper quote.
 ``aggregate_imputation_paper_metrics.py`` (Phase 2 of the bootstrap)
 shares the same kernels and produces the corresponding ``*_bootstrap.csv``
 files; the bootstrap mean should match the point estimate up to resample
-noise (the parity is enforced in
-``tests/imputation_evaluation/test_paper_metrics_core.py``).
+noise.
 
 Example::
 
@@ -39,19 +37,13 @@ from data.processing.hf_config import CONTINUOUS_CHANNEL_INDICES, N_CHANNELS
 from imputation_evaluation.evaluation.bootstrap_skill_rank import (
     compute_per_task_paired_R,
 )
-from imputation_evaluation.evaluation.pair_aggregator import (
-    aggregate_pairs,
-    aggregate_pairs_by_subgroup,
-)
-from imputation_evaluation.evaluation.pair_writer import load_sample_manifest
+from imputation_evaluation.evaluation.pair_aggregator import aggregate_pairs
 from imputation_evaluation.evaluation.paper_metrics_core import (
     BASELINE_CONTINUOUS,
     CLIP_LOWER,
     CLIP_UPPER,
-    DEFAULT_FAIRNESS_ATTRS,
     build_baseline_errors,
     compute_average_rankings,
-    compute_fair_skill_scores,
     compute_skill_scores,
     extract_errors,
 )
@@ -66,8 +58,8 @@ logger = logging.getLogger(__name__)
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Compute deterministic point estimates (skill score, average rank, "
-            "fair skill score) from saved pairs/ directories."
+            "Compute deterministic point estimates (skill score, average rank) "
+            "from saved pairs/ directories."
         ),
     )
     p.add_argument(
@@ -89,7 +81,7 @@ def _parse_args() -> argparse.Namespace:
             "Directory of per-method per_user_errors.parquet files (one per "
             "method, file stem = method name). When set, the script bypasses "
             "_gather_registry's pairs scan and derives (per_user_long, "
-            "errors_all, errors_sg) directly from these files — the canonical "
+            "errors_all) directly from these files — the canonical "
             "Phase-B fast path. See B3 of the imputation-metrics refactor "
             "plan for the parity contract."
         ),
@@ -98,7 +90,7 @@ def _parse_args() -> argparse.Namespace:
         "--output-dir",
         type=Path,
         required=True,
-        help="Directory for skill_scores.csv / avg_rankings.csv / fairness_skill_scores.csv",
+        help="Directory for skill_scores.csv / avg_rankings.csv",
     )
     p.add_argument(
         "--splits",
@@ -136,24 +128,6 @@ def _parse_args() -> argparse.Namespace:
         help=f"Upper clip bound for error ratios (default: {CLIP_UPPER})",
     )
     p.add_argument(
-        "--attrs",
-        nargs="+",
-        default=list(DEFAULT_FAIRNESS_ATTRS),
-        help=f"Sensitive attributes for the fair skill score (default: {' '.join(DEFAULT_FAIRNESS_ATTRS)})",
-    )
-    p.add_argument(
-        "--age-bins",
-        type=int,
-        nargs="+",
-        default=[18, 30, 40, 50, 60],
-        help="Age-bin edges for the age_group attribute (default: 18 30 40 50 60)",
-    )
-    p.add_argument(
-        "--exclude-unknown",
-        action="store_true",
-        help="Skip subgroup_value=='unknown' cells (default: include, matches bootstrap)",
-    )
-    p.add_argument(
         "--channel-stds-path",
         type=Path,
         default=None,
@@ -163,10 +137,9 @@ def _parse_args() -> argparse.Namespace:
         "--strict",
         action="store_true",
         help=(
-            "Fail (non-zero exit) on any missing method dir, missing per-split "
-            "subgroup manifest, or missing method/scenario/split directory "
-            "instead of warning-and-skipping. Required for runs whose numbers "
-            "are published."
+            "Fail (non-zero exit) on any missing method dir or missing "
+            "method/scenario/split directory instead of warning-and-skipping. "
+            "Required for runs whose numbers are published."
         ),
     )
     p.add_argument(
@@ -194,42 +167,6 @@ def _discover_scenarios(method_dirs: dict[str, Path], split: str) -> list[str]:
             if child.is_dir() and (child / split).is_dir():
                 seen.add(child.name)
     return sorted(seen)
-
-
-def _build_subgroup_mapping(
-    pairs_dir: Path,
-    split: str,
-    age_bins: list[int],
-) -> dict[int, dict[str, str]] | None:
-    """Build {sample_idx: {age_group, sex}} mapping from a method's manifest.
-
-    Mirrors ``bootstrap_imputation_draws.py::_build_subgroup_mapping`` so the
-    deterministic and bootstrap pipelines see the same demographic bucketing.
-    """
-    manifest = load_sample_manifest(pairs_dir, split)
-    if manifest is None:
-        return None
-    from imputation_evaluation.sensitivity import bin_age, get_user_demographics
-    from labels.api import STORE
-
-    sample_idxs = manifest.column("sample_idx").to_numpy()
-    user_ids = manifest.column("user_id").to_pylist()
-    unique_users = sorted(set(user_ids))
-    logger.info(
-        "[split=%s] looking up demographics for %d users …",
-        split,
-        len(unique_users),
-    )
-    user_demographics = get_user_demographics(STORE, unique_users, age_bins=age_bins)
-
-    out: dict[int, dict[str, str]] = {}
-    for sidx, uid in zip(sample_idxs, user_ids):
-        demo = user_demographics[uid]
-        age = demo["age_at_enrollment"]
-        age_group = bin_age(age, age_bins) if age is not None else "unknown"
-        out[int(sidx)] = {"age_group": age_group, "sex": demo["sex"]}
-
-    return out
 
 
 def _channel_type(ch_idx: int) -> str:
@@ -318,17 +255,14 @@ def _gather_registry(
     *,
     scenarios: list[str],
     splits: list[str],
-    age_bins: list[int],
-    exclude_unknown: bool,
     channel_stds_path: Path | None,
     strict: bool = False,
     return_per_user: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Build the long-format errors registry for every (method, scenario, split, subgroup) cell.
+    """Build the long-format errors registry for every (method, scenario, split) cell.
 
     When ``return_per_user=True``, also calls ``aggregate_pairs`` with
-    ``return_per_user=True`` for the global ``(all, all)`` cell and
-    returns a parallel per-user long frame
+    ``return_per_user=True`` and returns a parallel per-user long frame
     ``[method, scenario, split, channel, channel_type, user_id, E]``
     used by the aligned rank/skill modes.
     """
@@ -344,31 +278,9 @@ def _gather_registry(
     rows: list[dict] = []
     per_user_rows: list[dict] = []
 
-    # Subgroup mapping is per-split, scenario-independent; build once per split
-    # from the first method's manifest (mirrors bootstrap_imputation_draws.py).
-    subgroup_mappings: dict[str, dict[int, dict[str, str]]] = {}
-    for split in splits:
-        ref_root = Path(method_dirs[methods[0]])
-        mapping = _build_subgroup_mapping(ref_root, split, age_bins)
-        if mapping is None:
-            if strict:
-                raise RuntimeError(
-                    f"[strict] [split={split}] could not load manifest from "
-                    f"{ref_root} — fairness rows would be empty"
-                )
-            logger.warning(
-                "[split=%s] could not load manifest from %s — fairness rows will be empty",
-                split,
-                ref_root,
-            )
-            subgroup_mappings[split] = {}
-        else:
-            subgroup_mappings[split] = mapping
-
     for method, root in method_dirs.items():
         root = Path(root)
         for split in splits:
-            mapping = subgroup_mappings.get(split, {})
             for scenario in scenarios:
                 ssd = root / scenario / split
                 if not ssd.exists():
@@ -386,7 +298,7 @@ def _gather_registry(
                     )
                     continue
 
-                # "all / all" cell — deterministic per-channel metrics.
+                # Deterministic per-channel metrics.
                 metrics_all = aggregate_pairs(
                     ssd,
                     channel_stds,
@@ -412,24 +324,6 @@ def _gather_registry(
                         )
                     )
 
-                # Per-subgroup cells — keyed by (attr, subgroup_value).
-                if mapping:
-                    per_sg = aggregate_pairs_by_subgroup(ssd, channel_stds, mapping)
-                    for attr, groups in per_sg.items():
-                        for group_name, metrics_g in groups.items():
-                            if exclude_unknown and group_name == "unknown":
-                                continue
-                            rows.extend(
-                                _per_channel_to_rows(
-                                    metrics_g.get("per_channel", {}),
-                                    method=method,
-                                    scenario=scenario,
-                                    split=split,
-                                    subgroup_attr=attr,
-                                    subgroup_value=group_name,
-                                )
-                            )
-
     per_user_cols = [
         "method",
         "scenario",
@@ -449,15 +343,9 @@ def _build_errors_long(
     registry: pd.DataFrame,
     *,
     splits: list[str],
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (errors_all, errors_by_subgroup) from the registry.
-
-    ``errors_all`` covers the global ``("all", "all")`` cell and feeds the
-    skill-score / average-rank kernels. ``errors_by_subgroup`` carries the
-    demographic cells and feeds the fair-skill kernel.
-    """
+) -> pd.DataFrame:
+    """Return errors_all from the registry; it feeds the skill-score kernel."""
     errors_all_frames: list[pd.DataFrame] = []
-    errors_sg_frames: list[pd.DataFrame] = []
     for split in splits:
         df = registry[registry["split"] == split]
         if df.empty:
@@ -467,47 +355,11 @@ def _build_errors_long(
             all_cell["split"] = split
             errors_all_frames.append(all_cell)
 
-        # Build the long-format subgroup frame manually (extract_errors only
-        # filters one (attr, value) pair at a time; we want every demographic
-        # cell stacked together with its subgroup columns preserved).
-        sg = df[df["subgroup_attr"] != "all"].copy()
-        if not sg.empty:
-            sg_long = []
-            for (attr, value), grp in sg.groupby(
-                ["subgroup_attr", "subgroup_value"], observed=True
-            ):
-                sub = extract_errors(grp, split=split, subgroup_attr=attr, subgroup_value=value)
-                if sub.empty:
-                    continue
-                sub["subgroup_attr"] = attr
-                sub["subgroup_value"] = value
-                sub["split"] = split
-                sg_long.append(sub)
-            if sg_long:
-                errors_sg_frames.append(pd.concat(sg_long, ignore_index=True))
-
-    errors_all = (
+    return (
         pd.concat(errors_all_frames, ignore_index=True)
         if errors_all_frames
         else pd.DataFrame(columns=["method", "scenario", "channel", "channel_type", "E", "split"])
     )
-    errors_sg = (
-        pd.concat(errors_sg_frames, ignore_index=True)
-        if errors_sg_frames
-        else pd.DataFrame(
-            columns=[
-                "method",
-                "scenario",
-                "channel",
-                "channel_type",
-                "E",
-                "subgroup_attr",
-                "subgroup_value",
-                "split",
-            ]
-        )
-    )
-    return errors_all, errors_sg
 
 
 def _gather_from_per_user_errors_dir(
@@ -516,10 +368,13 @@ def _gather_from_per_user_errors_dir(
     methods: list[str] | None,
     scenarios: list[str] | None,
     splits: list[str],
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, list[str]]:
     """B3 fast path: load per-method ``per_user_errors.parquet`` files.
 
-    Returns ``(per_user_long, errors_all, errors_sg, discovered_methods)``
+    Only ``"all"`` rows are read; published substrates may still hold age and
+    sex rows.
+
+    Returns ``(per_user_long, errors_all, discovered_methods)``
     matching the schemas of ``_gather_registry`` + ``_build_errors_long``
     so the kernel calls in ``main`` need no further plumbing.
 
@@ -585,7 +440,7 @@ def _gather_from_per_user_errors_dir(
         .reset_index(drop=True)
     )
 
-    # errors_all / errors_sg drop ``cat_collapsed:*`` rows to match the
+    # errors_all drops ``cat_collapsed:*`` rows to match the
     # schema _build_errors_long emits (which only iterates the raw 19
     # channels). Collapsed-binary scopes are reduced separately at the
     # skill-aggregation stage.
@@ -600,38 +455,7 @@ def _gather_from_per_user_errors_dir(
         .rename(columns={"E_per_user": "E"})
     )
 
-    # Fairness B.2 row-strip — matches aggregate_fairness_skill_score.py:387-396:
-    # drop per-channel binary rows (ch_7..ch_18 with channel_type=="binary") and
-    # KEEP cat_collapsed:{sleep,workouts}. The sleep / workouts buckets reach
-    # the fairness headline only via the collapsed rows; per-channel binary
-    # would double-count. This is the same rule the bootstrap fairness CSV's
-    # ``point`` column applies before computing the disparity score, so B3's
-    # output matches it byte-for-byte (modulo bootstrap resample noise on
-    # ``mean``).
-    is_per_channel_binary = (
-        per_user["channel"].astype(str).str.match(r"^ch_(?:[7-9]|1[0-8])$")
-        & (per_user["channel_type"].astype(str) == "binary")
-    )
-    pu_sg = per_user[(per_user["subgroup_attr"] != "all") & (~is_per_channel_binary)]
-    errors_sg = (
-        pu_sg.groupby(
-            [
-                "method",
-                "scenario",
-                "split",
-                "channel",
-                "channel_type",
-                "subgroup_attr",
-                "subgroup_value",
-            ],
-            observed=True,
-        )["E_per_user"]
-        .mean()
-        .reset_index()
-        .rename(columns={"E_per_user": "E"})
-    )
-
-    return per_user_long, errors_all, errors_sg, discovered
+    return per_user_long, errors_all, discovered
 
 
 def main() -> int:
@@ -650,7 +474,7 @@ def main() -> int:
             scenarios = None  # the producer files already pinned the scenario set
         logger.info("Source: %s", args.per_user_errors)
         try:
-            per_user_long, errors_all, errors_sg, discovered = _gather_from_per_user_errors_dir(
+            per_user_long, errors_all, discovered = _gather_from_per_user_errors_dir(
                 args.per_user_errors,
                 methods=args.methods,
                 scenarios=scenarios,
@@ -665,10 +489,9 @@ def main() -> int:
         logger.info("Scenarios: %s", scenarios)
         logger.info("Splits: %s", args.splits)
         logger.info(
-            "Per-user rows: %d | errors_all rows: %d | errors_sg rows: %d",
+            "Per-user rows: %d | errors_all rows: %d",
             len(per_user_long),
             len(errors_all),
-            len(errors_sg),
         )
     else:
         # ---- Legacy from-pairs path (default — recomputes via aggregate_pairs) ----
@@ -716,8 +539,6 @@ def main() -> int:
             method_dirs,
             scenarios=scenarios,
             splits=args.splits,
-            age_bins=args.age_bins,
-            exclude_unknown=args.exclude_unknown,
             channel_stds_path=args.channel_stds_path,
             strict=args.strict,
             return_per_user=True,
@@ -736,7 +557,7 @@ def main() -> int:
             )
             return 2
 
-        errors_all, errors_sg = _build_errors_long(registry, splits=args.splits)
+        errors_all = _build_errors_long(registry, splits=args.splits)
 
     # ------------------------------------------------------------------
     # Skill score + average rank — per split, on the "all/all" cell.
@@ -807,33 +628,13 @@ def main() -> int:
             rank["split"] = split
             rank_frames.append(rank)
 
-    # ------------------------------------------------------------------
-    # Fair skill score — per split, on the per-subgroup cells.
-    # ------------------------------------------------------------------
-    fair_frames: list[pd.DataFrame] = []
-    for split in args.splits:
-        es = errors_sg[errors_sg["split"] == split].drop(columns=["split"], errors="ignore")
-        if es.empty:
-            continue
-        fair = compute_fair_skill_scores(
-            es,
-            attrs=args.attrs,
-            baseline_method=args.baseline_method,
-            clip_lower=args.clip_lower,
-            clip_upper=args.clip_upper,
-        )
-        fair["split"] = split
-        fair_frames.append(fair)
-
     out_paths = {
         "skill_scores": args.output_dir / "skill_scores.csv",
         "avg_rankings": args.output_dir / "avg_rankings.csv",
-        "fairness_skill_scores": args.output_dir / "fairness_skill_scores.csv",
     }
     frames = {
         "skill_scores": skill_frames,
         "avg_rankings": rank_frames,
-        "fairness_skill_scores": fair_frames,
     }
     for key, path in out_paths.items():
         tbl = pd.concat(frames[key], ignore_index=True) if frames[key] else pd.DataFrame()

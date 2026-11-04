@@ -38,7 +38,7 @@ class PredictionResults:
             y_proba]``. Unlike Tracks 2/3 (which ship a precomputed
             ``E_per_user``), Track 1 ships raw pairs because its
             ranking/correlation metrics don't decompose per user; the
-            leaderboard recomputes skill / rank / fairness server-side vs. the
+            leaderboard recomputes skill / rank server-side vs. the
             Linear baseline. Populated by ``evaluate_prediction`` when
             ``output_dir`` is set (also written to ``<output_dir>/<method>.parquet``).
     """
@@ -117,7 +117,7 @@ class PredictionResults:
         Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``; the maintainers compute
-        skill / fair-skill / rank from the substrate during ingestion.
+        skill / rank from the substrate during ingestion.
         ``paper_url`` is optional — leave empty for independent submissions
         without a write-up.
         """
@@ -163,9 +163,8 @@ class ImputationResults:
             (:func:`imputation_evaluation.evaluation.per_user_errors.build_per_user_errors`).
             Schema: ``[method, scenario, split, channel, channel_type,
             subgroup_attr, subgroup_value, user_id, E_per_user]`` — the
-            same long format consumed by the paper Phase 2 aggregators
-            and the BCa LOO jackknife. Populated by
-            ``evaluate_imputation``; when ``output_dir`` is set this frame
+            same long format consumed by the paper Phase 2 aggregators.
+            Populated by ``evaluate_imputation``; when ``output_dir`` is set this frame
             is also written to
             ``<output_dir>/per_user_errors.parquet``.
         skill_scores: Optional ``DataFrame`` of paired-R skill scores
@@ -299,7 +298,7 @@ class ImputationResults:
         ``MyHeartCounts/OpenMHC-leaderboard-data``. The per-user substrate
         parquet (``per_user_errors.parquet``, written when you pass
         ``output_dir=`` to ``evaluate_imputation``) is the second PR file; the
-        maintainers compute skill / fair-skill / rank from it vs. LOCF.
+        maintainers compute skill / rank from it vs. LOCF.
         ``paper_url`` is optional.
         """
         from openmhc._submission import imputation_to_submission_yaml
@@ -421,7 +420,7 @@ class ForecastingResults:
         Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``; the maintainers compute
-        skill / fair-skill / rank vs. the Seasonal Naive baseline from the
+        skill / rank vs. the Seasonal Naive baseline from the
         substrate during ingestion. The Track 3 subdir name and substrate
         format are still being finalized (the packet flags this).
         """

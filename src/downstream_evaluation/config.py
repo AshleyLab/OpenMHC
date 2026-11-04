@@ -67,8 +67,8 @@ class EvalConfig:
             probe runs inside each method via ``openmhc.LinearProbe``).
         temporal: the per-task forward-window policy (handed to from-raw models).
         predictions_dir: when set, the evaluator writes per-(method, task) test
-            predictions + a shared ``_subgroups.json`` here (input to the
-            paper-metrics bootstrap); ``None`` disables prediction export.
+            predictions here (input to the paper-metrics bootstrap); ``None``
+            disables prediction export.
     """
 
     data_dir: str
@@ -123,8 +123,8 @@ class EvaluationConfig:
 class OutputConfig:
     """Where results land.
 
-    ``predictions_dir`` (when set) enables the per-task prediction parquets +
-    ``_subgroups.json`` for the paper-metrics bootstrap.
+    ``predictions_dir`` (when set) enables the per-task prediction parquets for
+    the paper-metrics bootstrap.
     """
 
     results_dir: str = "results/eval"

@@ -299,16 +299,15 @@ def evaluate_prediction(
         seed: Random seed for the per-task bootstrap standard errors and the Linear
             fallback baseline. The bundled models pin their own classifier seed, so this
             does not change their point predictions.
-        predictions_dir: when set, write per-(method, task) test predictions +
-            a shared ``_subgroups.json`` here — the input the paper-metrics
-            bootstrap paired-resamples for skill / rank / fairness CIs.
+        predictions_dir: when set, write per-(method, task) test predictions
+            here — the input the paper-metrics bootstrap paired-resamples for
+            skill / rank CIs.
         output_dir: when set, write the per-method leaderboard substrate
-            ``<output_dir>/<method>.parquet`` (the raw per-user prediction pairs,
-            subgroup-expanded) + a ``.meta.json`` provenance sidecar, and populate
+            ``<output_dir>/<method>.parquet`` (the raw per-user prediction pairs)
+            + a ``.meta.json`` provenance sidecar, and populate
             ``PredictionResults.per_user_pairs``. The per-(method, task)
-            predictions + ``_subgroups.json`` are written here too (unless
-            ``predictions_dir`` points elsewhere), since the substrate is pooled
-            from them.
+            predictions are written here too (unless ``predictions_dir`` points
+            elsewhere), since the substrate is pooled from them.
         method_name: value for the substrate's ``method`` column and the
             ``<method>.parquet`` filename — the leaderboard groups by it and the
             upload filename must match. Defaults to ``model.name``.
@@ -410,7 +409,7 @@ def evaluate_prediction(
     overall_fallback_rate = total_fallback / total_test if total_test else 0.0
 
     # Leaderboard substrate: pool the per-(method, task) prediction pairs into one
-    # <method>.parquet (subgroup-expanded) for upload. Track 1 ships raw pairs (not a
+    # <method>.parquet for upload. Track 1 ships raw pairs (not a
     # precomputed per-user error) because its ranking/correlation metrics don't
     # decompose per user — the leaderboard recomputes skill server-side vs. Linear.
     per_user_pairs = None
@@ -609,7 +608,6 @@ def evaluate_imputation(
         ImputationEvalConfig,
         MaskingConfig,
         OutputConfig,
-        SensitivityConfig,
         VisualizationConfig,
         WandbConfig,
     )
@@ -684,7 +682,6 @@ def evaluate_imputation(
             output=OutputConfig(results_dir=output_dir),
             evaluation=eval_cfg,
             visualization=VisualizationConfig(),
-            sensitivity=SensitivityConfig(),
             wandb=WandbConfig(),
         )
 

@@ -1,8 +1,8 @@
 # Forecasting bootstrap reference
 
 This subdir holds the **bootstrap reference** for the Track-3 (forecasting)
-leaderboard recompute — the long-format per-draw frame that the skill / rank /
-fairness CIs reduce from.
+leaderboard recompute — the long-format per-draw frame that the skill / rank
+CIs reduce from.
 
 ## Layout
 
@@ -15,25 +15,19 @@ forecasting/bootstrap/
 ## What's it for
 
 Each row of `draws.parquet` is one bootstrap draw of one headline scope for one
-method, for one of three reductions (`reduction` column):
+method, for one of two reductions (`reduction` column):
 
 - **skill** — paired skill score `S = 1 − exp(mean_task log R)` vs `seasonal_naive`,
   per `(model, scope)` (scope = `channel_<i>_score`, `sleep_score`,
   `workout_score`, `activity_score`, `physiology_score`, `overall_score`).
 - **rank** — cross-method average rank, per `(model, scope, metric)`.
-- **fairness** — mean-absolute-pairwise-difference (MAPD) disparity-ratio fair
-  skill score, per `(model, scope)` (scope = `age_group`, `sex`, `overall`, the
-  4 sensor categories, and per-channel rows).
 
-Reducing each draw group to mean / SE / percentile-CI (and BCa for the headline
-scopes) reproduces the published `forecasting_*_bootstrap.csv` tables.
+Reducing each draw group to mean / SE / percentile-CI reproduces the published
+`forecasting_*_bootstrap.csv` tables.
 
-> **Fairness reducers: read `SCHEMA.md` first.** This file holds draws only, no
-> point estimate. The draw mean is **not** the published `S_fair` (the disparity
-> ratio is downward-biased), and the published intervals are **BCa**, not
-> percentile — the two disagree on whether `DLinear`'s fairness advantage
-> excludes zero. The fairness rows were regenerated 2026-07-25 under MAPD
-> (previously max-min); `skill` and `rank` were unchanged.
+> **Older snapshots.** Files built before `S_fair` was retired also hold
+> `fairness` rows, and their `draws.meta.json` has an `age_bins` key. No reducer
+> in the code repo reads either; filter on `reduction` as usual.
 
 > **Note — scope-level, not task-level.** Unlike the imputation track (whose
 > `draws.parquet` is per-task `E`/`R`/`rank`, reducible to any scope), forecasting
@@ -51,8 +45,7 @@ in the code repo. The current snapshot was built with:
 - `split = test` (canonical `sharable_users_seed42_2026`)
 - 10 methods (see `draws.meta.json:methods`)
 - Baseline: `seasonal_naive`; scored metrics: `mae` (continuous), `auroc` (binary)
-- Within-user aggregation: micro; `age_bins = [18, 30, 40, 50, 60]`
-- Fairness disparity: MAPD (mean absolute pairwise difference)
+- Within-user aggregation: micro
 
 See `draws.meta.json` for the exact git commit and runtime metadata.
 

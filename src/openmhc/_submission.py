@@ -8,7 +8,7 @@ track's subdirectory:
 - ``<track>/<method>.meta.json`` — the display sidecar the leaderboard reads
   (``display_name``, ``type``, ``submitter``, ``subtrack``)
 
-The maintainers recompute the paired skill score, fair skill score, and average
+The maintainers recompute the paired skill score and average
 rank from the substrate during ingestion (LOCF baseline for Track 2, Linear for
 Track 1, Seasonal Naive for Track 3). The reducer is the same paired
 user-bootstrap formula implemented in
@@ -49,7 +49,7 @@ def imputation_to_submission_yaml(
     checklist for ``MyHeartCounts/OpenMHC-leaderboard-data``. The per-user
     substrate parquet itself comes from the evaluation run — pass ``output_dir=``
     to ``evaluate_imputation`` to write ``per_user_errors.parquet`` — and the
-    maintainers compute the paired skill / fair-skill / rank from it vs. LOCF.
+    maintainers compute the paired skill / rank from it vs. LOCF.
 
     Args:
         method_name: Short, citation-ready name (e.g. "MeanImputer"). Used as
@@ -103,7 +103,7 @@ def prediction_to_submission_yaml(
     Same shape as :func:`imputation_to_submission_yaml`. The Track-1 substrate is
     the per-user prediction-pair frame (``<method>.parquet`` from
     ``evaluate_prediction(output_dir=...)``); maintainers recompute skill /
-    fair-skill / rank vs. the Linear baseline from it during ingestion.
+    rank vs. the Linear baseline from it during ingestion.
 
     Args, Returns: see :func:`imputation_to_submission_yaml`. ``track`` selects
     the Static vs. Longitudinal sub-track label.
@@ -140,7 +140,7 @@ def forecasting_to_submission_yaml(
 
     Same shape as :func:`imputation_to_submission_yaml`. The Track 3 subdir
     name and substrate format are still being finalized, so the rendered packet
-    carries a NOTE flagging that; maintainers compute skill / fair-skill / rank
+    carries a NOTE flagging that; maintainers compute skill / rank
     vs. the Seasonal Naive baseline during ingestion.
 
     Args, Returns: see :func:`imputation_to_submission_yaml`.
