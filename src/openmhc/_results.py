@@ -421,7 +421,7 @@ class ForecastingResults:
         Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``; the maintainers compute
-        skill / fair-skill / rank vs. the Seasonal Naive baseline from the
+        skill / rank vs. the Seasonal Naive baseline from the
         substrate during ingestion. The Track 3 subdir name and substrate
         format are still being finalized (the packet flags this).
         """

@@ -140,7 +140,7 @@ def forecasting_to_submission_yaml(
 
     Same shape as :func:`imputation_to_submission_yaml`. The Track 3 subdir
     name and substrate format are still being finalized, so the rendered packet
-    carries a NOTE flagging that; maintainers compute skill / fair-skill / rank
+    carries a NOTE flagging that; maintainers compute skill / rank
     vs. the Seasonal Naive baseline during ingestion.
 
     Args, Returns: see :func:`imputation_to_submission_yaml`.

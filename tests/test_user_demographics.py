@@ -132,7 +132,7 @@ def test_explicit_paths_leave_the_configured_dataset_alone(
 def test_all_tracks_return_the_same_groups(label_schema_environment, tmp_path):
     """Track-specific entry points are thin callers of the one definition."""
     from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from forecasting_evaluation.metrics.fairness_skill_score_summary import load_user_demographics
+    from openmhc._label_paths import LabelPaths
 
     _write(
         label_schema_environment,
@@ -147,11 +147,5 @@ def test_all_tracks_return_the_same_groups(label_schema_environment, tmp_path):
     expected = labels.user_demographics(users)
     write_subgroup_map(tmp_path / "predictions", users)
     assert json.loads((tmp_path / "predictions/_subgroups.json").read_text()) == expected
-    assert (
-        load_user_demographics(
-            user_ids=set(users),
-            labels_path=label_schema_environment / "last_labels.json",
-            enrollment_path=label_schema_environment / "enrollment_info.json",
-        )
-        == expected
-    )
+    paths = LabelPaths.resolve(label_schema_environment.parent)
+    assert labels.user_demographics(users, paths=paths) == expected

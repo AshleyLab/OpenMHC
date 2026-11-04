@@ -11,7 +11,7 @@ This organized as follows:
 `openmhc.evaluate_forecasting`. Most users only need this.
 - **Part 2** — the `mhc-forecast-eval` Hydra CLI for reproducible runs, and how
 to add your own model to it.
-- **Part 3** — reproduce the paper leaderboard (skill / rank / fairness) from
+- **Part 3** — reproduce the paper leaderboard (skill / rank) from
 scratch.
 
 How the pipeline works internally — the preprocessing chain,
@@ -295,11 +295,11 @@ baseline: seasonal_naive
 continuous_metrics: [mae]
 binary_metrics: [auroc]            # scored binary metric: auroc | auprc | f1
 within_user_aggregation: micro     # micro (default) | macro
-bootstrap: { enabled: true, n_boot: 1000, seed: 42, fairness: true }
+bootstrap: { enabled: true, n_boot: 1000, seed: 42 }
 ```
 
 **Step 4 — run the whole pipeline** (Phase 0 inference → 1 discover → 2
-skill/rank → 3 bootstrap/fairness):
+skill/rank → 3 bootstrap):
 
 ```bash
 python scripts/paper_results/forecasting/run_paper_pipeline.py \
@@ -314,8 +314,8 @@ add `--skip-eval` to run only Phases 1–3 once the metric trees exist.
 
 **Step 5 — read the leaderboard** in `output_root`:
 `forecasting_skill_score_{long,model_summary,wide}.csv`,
-`forecasting_grouped_metric_rank_{long,user_level_long,wide}.csv`,
-`forecasting_fairness_skill_score.csv`, and the matching `*_bootstrap.csv`.
+`forecasting_grouped_metric_rank_{long,user_level_long,wide}.csv`, and the matching
+`*_bootstrap.csv`.
 
 ### Scoring semantics (brief)
 
@@ -329,7 +329,7 @@ individually, then grouped into 4 sensor categories — **activity** (0–4),
 **physiology** (5–6), **sleep** (7–8), **workout** (9–18) — and a single
 **`overall`** that is *category-balanced*: it averages the 4 categories with equal
 weight (each as one within-category geometric mean of log-ratios), so the 10
-workout channels can't dominate the headline. Skill, rank, and fairness all share
+workout channels can't dominate the headline. Skill and rank both share
 this per-channel → category → overall shape. See [METRICS.md](METRICS.md).
 - **Within-user aggregation** (default `micro`): continuous metrics pool all
 finite horizon cells across a user's windows; binary metrics are already
@@ -338,9 +338,6 @@ pooled per user by the producer (so the toggle is a no-op for them).
 users (mean-of-ranks, users-first); each sensor category and the `overall` headline
 average those per-channel task ranks (overall = the 4 categories equally). Mirrors the
 imputation track and the skill score's user-first collapse.
-- **Fairness**: disparity-ratio fairness skill score across demographic subgroups,
-macro-averaged over `age_group` + `sex`, and reported per channel, per category,
-and as the category-balanced `overall`.
 - **Bootstrap**: resample users (the cluster unit) with replacement and recompute
 via the same readers → `mean / se / 95% CI`.
 
@@ -350,17 +347,12 @@ Main scores treat every channel **per task**: each channel (including the paired
 phone/watch signals — steps `0,3`, distance `1,4`) keeps its own skill ratio, and
 the category scopes combine their channels with a geometric mean — the same way
 the imputation track aggregates channels. All 19 channels get their own
-skill/rank/fairness cell; the 4 category scopes and the category-balanced
+skill/rank cell; the 4 category scopes and the category-balanced
 `overall` sit on top. Pass `--combine-channels` (legacy) to instead nan-mean the
 paired signals before scoring, as used for some appendix tables. Binary-channel
 metrics (sleep, workout) are AUROC/AUPRC/F1 pooled within each user. The math is
 in [METRICS.md](METRICS.md) and
 [INTERNALS.md](INTERNALS.md#7-offline-metric-computation).
-
-> **Sparse per-channel fairness:** a per-channel or per-category fairness cell can
-> be undefined or noisy when a binary channel has too few users in a subgroup — the
-> disparity guards (≥2 common subgroups, baseline gap > 0) drop such tasks, so read
-> single-channel fairness cells with their `n_boot` / CI width in mind.
 
 > **Memory:** the binary-metric pass and the bootstrap load all users' contexts
 > into RAM — run on a real allocation (~64–96 GB), not a small interactive

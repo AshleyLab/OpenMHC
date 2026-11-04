@@ -204,30 +204,26 @@ def test_linear_age_covariate_keeps_reference_missingness_and_exclusions(caller_
 def test_all_tracks_use_enrollment_and_keep_unknown_users(caller_dataset, tmp_path):
     """Survey/sample/fixed dates cannot change enrollment subgroups in any track."""
     from downstream_evaluation.evaluation.predictions_io import write_subgroup_map
-    from forecasting_evaluation.metrics.fairness_skill_score_summary import load_user_demographics
     from imputation_evaluation.sensitivity import build_subgroup_mapping
+    from openmhc._label_paths import LabelPaths
 
     folder, _ = caller_dataset
     users = ["known", "no_target", "missing_year", "no_date", "bad_date", "bad_year", "absent"]
     out = tmp_path / "predictions"
     write_subgroup_map(out, users)
     prediction = json.loads((out / "_subgroups.json").read_text())
-    forecast = load_user_demographics(
-        user_ids=set(users),
-        labels_path=folder / "last_labels.json",
-        enrollment_path=folder / "enrollment_info.json",
-    )
+    explicit = api.user_demographics(users, paths=LabelPaths.resolve(folder.parent))
     hf = {"user_id": users + ["known"], "date": ["1900-01-01"] * len(users) + ["2099-01-01"]}
     impute = build_subgroup_mapping(hf, {"test": list(range(len(users) + 1))})["test"]
     expected = {u: "unknown" for u in users}
     expected.update(known="30-39", no_target="40-49")
     assert {u: prediction[u]["age_group"] for u in users} == expected
-    assert {u: forecast[u]["age_group"] for u in users} == expected
+    assert {u: explicit[u]["age_group"] for u in users} == expected
     assert {u: impute[i]["age_group"] for i, u in enumerate(users)} == expected
     assert impute[len(users)]["age_group"] == "30-39"
     assert (
         prediction["known"]["sex"]
-        == forecast["known"]["sex"]
+        == explicit["known"]["sex"]
         == impute[users.index("known")]["sex"]
         == "male"
     )

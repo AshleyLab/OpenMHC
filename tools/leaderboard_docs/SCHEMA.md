@@ -65,7 +65,7 @@ One row per `(model, group, metric, channel_idx, channel_name, user_id)`. Unlike
 
 ### From `metric_value` to error
 
-The skill/fairness reducers convert on load: continuous error = `metric_value` (MAE, lower=better); binary error = `max(1 − auroc, 0.005)`. Rank uses `metric_value` directly. Stored at **float64** (vs Track 2's float32) for byte-exact reproduction of the published aggregates.
+The skill reducer converts on load: continuous error = `metric_value` (MAE, lower=better); binary error = `max(1 − auroc, 0.005)`. Rank uses `metric_value` directly. Stored at **float64** (vs Track 2's float32) for byte-exact reproduction of the published aggregates.
 
 ## Conventions
 

@@ -29,7 +29,7 @@ See [`SCHEMA.md`](SCHEMA.md) for the full column spec per track (and each `<trac
 
 - **Track 1 (downstream / predictive tasks)** stores the raw per-user prediction **pairs** (`y_true`, `y_pred`, `y_proba`) — its cohort-level metrics (AUPRC / Spearman / Pearson) don't decompose into a per-user error.
 - **Track 2 (imputation)** stores the per-user error `E_per_user` (MAE / `1 − AUC`).
-- **Track 3 (forecasting)** stores the **raw** per-user `metric_value` (so one file serves skill, rank, and fairness — each reducer converts/uses it on load).
+- **Track 3 (forecasting)** stores the **raw** per-user `metric_value` (so one file serves skill and rank — each reducer converts/uses it on load).
 
 ## Why per-user (not aggregate)
 

@@ -45,7 +45,7 @@ bootstrap count/seed, baseline, and fairness knobs.
   if any expected model's metrics are missing; ignore extras.
 - **Phase 2 (skill + rank)** — `skill_score_summary` + `grouped_metric_rank_summary`
   (continuous=`mae`, binary=`auprc`, vs `seasonal_naive`).
-- **Phase 3 (bootstrap CIs + fairness)** — config hook present; not yet implemented.
+- **Phase 3 (bootstrap CIs)** — config hook present; not yet implemented.
 
 SLURM one-command: `jobs/sc-cluster/forecasting_eval/submit_pipeline.sh` (fan out eval
 jobs → chain `run_paper_pipeline.sbatch --skip-eval` via `afterok`).

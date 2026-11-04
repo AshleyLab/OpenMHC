@@ -24,7 +24,7 @@ aggregation_unit: user
 within_user_aggregation: micro
 
 # Build the canonical per-user substrate once (output_root/forecasting_per_user_errors.parquet)
-# and drive skill/rank/bootstrap/fairness from it instead of re-scanning the metric trees ~5x.
+# and drive skill/rank/bootstrap from it instead of re-scanning the metric trees ~5x.
 # Requires micro/user (the modes the substrate represents). Set false to score straight from
 # the trees (e.g. a macro run).
 use_substrate: true
@@ -32,27 +32,17 @@ use_substrate: true
 # Phase 0 (mhc-forecast-eval) overrides applied to every model.
 common_overrides: []
 
-# Phase 3 — paired user-level bootstrap CIs for skill score + mean rank, and
-# (when fairness: true) the disparity-ratio fairness skill score (point + CIs).
+# Phase 3 — paired user-level bootstrap CIs for skill score + mean rank.
 bootstrap:
   enabled: true
   n_boot: 1000
   seed: 42
   ci_level: 0.95
   splits: [test]
-  fairness: true
   # Point estimate + BCa (bias-corrected & accelerated) 95% CI on the headline
-  # scopes (overall + 4 categories + 2 attributes). The fairness disparity ratio
-  # is skewed/downward-biased (bootstrap mean < point, percentile CI biased low),
-  # so BCa re-anchors the interval near the reported point. Skill/rank are
-  # near-unbiased (mean ≈ point), so their BCa is opt-in for sanity-checking only.
-  bca: true                 # fairness: point + BCa columns (adds point/bca_lo/bca_hi)
+  # scopes (overall + 4 categories). Skill/rank are near-unbiased (mean ≈ point),
+  # so their BCa is opt-in for sanity-checking only.
   bca_skill_rank: false     # also emit point + BCa for skill score + mean rank
-  # Demographics (calendar-year age at enrollment, sex via BiologicalSex) default to
-  # <dataset_root>/labels/{last_labels,enrollment_info}.json, resolved from
-  # MHC_DATA_DIR. Uncomment to override:
-  # labels_path: /path/to/last_labels.json
-  # enrollment_path: /path/to/enrollment_info.json
 
 models:
   - {name: seasonal_naive, type: seasonal_naive}

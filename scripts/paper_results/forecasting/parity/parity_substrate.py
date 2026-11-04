@@ -2,24 +2,20 @@
 
 Proves the canonical per-user-metrics substrate refactor is numerically inert:
 the substrate-driven reducers reproduce the committed ``forecasting_bca_20260618``
-CSVs (skill + rank + their bootstraps + fairness — the latter still under the
-*current* max-min disparity). Run this BEFORE switching fairness to MAPD; a green
-run means any later fairness delta is attributable to MAPD alone.
+CSVs (skill + rank + their bootstraps).
 
 Checks
 ------
 * **Gate B** — ``to_error_df``/``to_rank_user_df`` over the substrate equal the
   direct from-trees builds (``skill._build_error_table``,
-  ``fair._build_error_table``, ``rank._build_{continuous,binary}_user_rows``),
-  float64-exact.
+  ``rank._build_{continuous,binary}_user_rows``), float64-exact.
 * **Inert** — the substrate-path point reducers equal the from-trees point
   reducers (the refactor changes nothing), AND the from-trees reducers equal the
   committed CSVs (sanity pre-check: no code drift independent of the substrate).
 * **Gate C-pre** — substrate-path reducers vs the committed CSVs:
   skill point (``compute_skill_score_tables``), rank point
   (``build_grouped_metric_rank_tables``), skill/rank bootstrap
-  (``bootstrap_skill_rank``), fairness point + bootstrap
-  (``bootstrap_fair_skill_score``).
+  (``bootstrap_skill_rank``).
 
 The skill/rank bootstrap is a deterministic function of the per-user tables +
 seed, so Gate B (identical tables) already implies identical draws; we still
@@ -45,13 +41,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from forecasting_evaluation.metrics import fairness_skill_score_summary as fair  # noqa: E402
 from forecasting_evaluation.metrics import grouped_metric_rank_summary as rank  # noqa: E402
 from forecasting_evaluation.metrics import metric_spec as _spec  # noqa: E402
 from forecasting_evaluation.metrics import skill_score_summary as skill  # noqa: E402
-from forecasting_evaluation.metrics.bootstrap_fair_skill_score import (  # noqa: E402
-    bootstrap_fair_skill_score,
-)
 from forecasting_evaluation.metrics.bootstrap_skill_rank import bootstrap_skill_rank  # noqa: E402
 from forecasting_evaluation.metrics.per_user_errors import (  # noqa: E402
     build_per_user_metrics,
@@ -146,7 +138,7 @@ def _metric_groups() -> dict:
     }
 
 
-def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap, do_fairness) -> Report:
+def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap) -> Report:
     """Execute all parity checks; return the Report."""
     import json
 
@@ -179,16 +171,6 @@ def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap, do_
     )
     rep.check("GateB.skill_error_df", *_frames_equal(
         err_sub, err_trees, keys=["model", "group", "metric", "channel_idx", "unit_id"],
-        value_cols=["error", "n_values"], atol=atol, rtol=rtol,
-    ))
-    fair_sub = to_error_df(substrate, user_col="user_id")
-    fair_trees = fair._build_error_table(
-        models=models, continuous_metrics=CONTINUOUS_METRICS, binary_metrics=BINARY_METRICS,
-        continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
-        binary_channel_indices=_spec.BINARY_CHANNELS, within_user_aggregation="micro",
-    )
-    rep.check("GateB.fairness_error_df", *_frames_equal(
-        fair_sub, fair_trees, keys=["model", "group", "metric", "channel_idx", "user_id"],
         value_cols=["error", "n_values"], atol=atol, rtol=rtol,
     ))
     rank_sub = to_rank_user_df(substrate, binary_groups=BINARY_GROUPS)
@@ -284,35 +266,6 @@ def run(summary_dir: Path, substrate_out: Path, *, atol, rtol, do_bootstrap, do_
             value_cols=["mean", "se", "ci_lo", "ci_hi", "n_boot"], atol=atol, rtol=rtol,
         ))
 
-    # ---- Gate C-pre fairness: point + bootstrap (still max-min) ----
-    if do_fairness:
-        from openmhc._label_paths import LabelPaths
-
-        paths = LabelPaths.resolve()
-        if not paths.labels or not paths.enrollment:
-            rep.check("GateC.fairness", False, "labels/enrollment unresolved (set MHC_DATA_DIR)")
-        else:
-            ft = bootstrap_fair_skill_score(
-                models=models, baseline_model=BASELINE,
-                continuous_metrics=CONTINUOUS_METRICS, binary_metrics=BINARY_METRICS,
-                continuous_channel_indices=_spec.CONTINUOUS_CHANNELS,
-                binary_channel_indices=_spec.BINARY_CHANNELS,
-                labels_path=str(paths.labels), enrollment_path=str(paths.enrollment),
-                n_boot=N_BOOT, seed=SEED, ci_level=CI_LEVEL,
-                within_user_aggregation="micro", bca=True, per_user_metrics=substrate,
-            )
-            exp_fp = pd.read_csv(summary_dir / "forecasting_fairness_skill_score.csv")
-            rep.check("GateC.fairness_point(sub==committed)", *_frames_equal(
-                ft["fairness_skill_scores_point"], exp_fp, keys=["model", "scope"],
-                value_cols=["fair_skill_score", "n_tasks"], atol=atol, rtol=rtol,
-            ))
-            exp_fb = pd.read_csv(summary_dir / "forecasting_fairness_skill_score_bootstrap.csv")
-            rep.check("GateC.fairness_bootstrap(sub==committed)", *_frames_equal(
-                ft["fairness_skill_scores"], exp_fb, keys=["model", "scope"],
-                value_cols=["mean", "se", "ci_lo", "ci_hi", "n_boot", "point", "bca_lo", "bca_hi"],
-                atol=atol, rtol=rtol,
-            ))
-
     return rep
 
 
@@ -329,14 +282,13 @@ def main() -> int:
     p.add_argument("--atol", type=float, default=1e-9)
     p.add_argument("--rtol", type=float, default=1e-9)
     p.add_argument("--skip-bootstrap", action="store_true")
-    p.add_argument("--skip-fairness", action="store_true")
     args = p.parse_args()
 
     substrate_out = args.substrate_out or (args.summary_dir / "forecasting_per_user_errors.parquet")
     rep = run(
         args.summary_dir, substrate_out,
         atol=args.atol, rtol=args.rtol,
-        do_bootstrap=not args.skip_bootstrap, do_fairness=not args.skip_fairness,
+        do_bootstrap=not args.skip_bootstrap,
     )
     print(rep.summary())
     return 0 if rep.ok() else 1
