@@ -104,8 +104,8 @@ Precomputed imputation masks belong to the selected dataset root:
 | XS | `imputation/masks/sharable_users_seed42_2026_xs/` |
 
 Each directory contains `val/` and `test/`, with one `.npz` file per masking
-scenario (six per split). Obtain masks from the same release and date variant
-as the dataset. The download helper installs the bundle's `data/imputation/`
+scenario (six per split). Use the imputation masks included with the dataset
+release. The download helper installs the bundle's `data/imputation/`
 directory as `<dataset_root>/imputation/`; manual setup follows the same layout.
 The repository does not contain mask files.
 
