@@ -11,7 +11,7 @@ existing root, see [migration guidance](../DATASET.md#existing-dataset-roots).
 
 Include the release's precomputed imputation masks. Copying `data/imputation/`
 below installs them at `<dataset_root>/imputation/masks/`, alongside `processed/`,
-`labels/`, and `splits/`. Use the masks for the same release and date variant;
+`labels/`, and `splits/`. Use the imputation masks included with the dataset release;
 see [mask paths and requirements](../DATASET.md#bundled-vs-dataset-root-files).
 
 Recommended layout for keeping both side by side:
