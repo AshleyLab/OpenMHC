@@ -42,7 +42,7 @@ def main() -> int:
         model, version="full", method_name="seasonal_naive_selfcheck"
     )
 
-    print(f"n_samples={res.n_samples}  overall_fallback_rate={res.overall_fallback_rate:.4f}")
+    print(f"n_samples={res.n_samples}  overall_fallback_rate={res.overall_fallback_rate}")
     if res.per_user_errors is None or res.per_user_errors.empty:
         print("GATE D: FAIL — empty per_user_errors substrate")
         return 1

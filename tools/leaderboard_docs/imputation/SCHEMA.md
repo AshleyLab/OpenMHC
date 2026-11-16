@@ -69,12 +69,16 @@ Scalar in `[0, 1]`. The worst-case `overall_fallback_rate` across all
   ~5%` since the metric is inflated with baseline performance on the
   substituted positions.
 
-The field is added to the sidecar by `tools/upload_leaderboard_substrate.py`
-in one of two ways:
+The uploader reads the measured rate from the adjacent
+`<method>.parquet.meta.json`, or from `--results-json PATH` pointing to the same
+evaluation. If both are supplied, their rates must agree. Missing or invalid
+measurements stop the upload before any remote write. `--fallback-rate FLOAT`
+is only an optional consistency check; it cannot supply or override a rate.
+Predictions and metadata are published together in one commit.
 
-1. Explicit: `--fallback-rate FLOAT`
-2. Auto: `--results-json PATH` — the tool reads the method's
-   `results.json` and extracts `max(scenarios[*][*].overall_fallback_rate)`.
+`results.to_submission_yaml(...)` also includes the measured rate automatically
+in the generated metadata. Keep this metadata paired with that evaluation's
+prediction file.
 
 Existing sidecar fields are preserved on update (the tool fetches the
 current sidecar from HF and merges only the provided fields).
@@ -95,3 +99,8 @@ current sidecar from HF and merges only the provided fields).
 | `imputation/bootstrap_with_dense_weekly/` | Sibling 17-method variant (includes `lsm2_weekly` dense) | live |
 | `forecasting/` | Track 3 — Forecasting per-method substrate | live |
 | `downstream/` | Track 1 — Outcome Prediction | added later |
+
+A measured zero means explicit zero substitutions over a positive evaluation
+count. Missing measurements or an empty evaluation are not zero: new result
+objects expose `None` (JSON `null`), and submission helpers/uploader reject that
+value. Do not replace it with `0.0`; recover recorded counts or rerun evaluation.

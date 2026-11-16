@@ -25,12 +25,12 @@ class PredictionResults:
             with the Linear baseline before scoring. A high value means the
             model could not produce a usable prediction for much of the cohort;
             metrics should be read alongside this number. Mirrors
-            ``ForecastingResults``/``ImputationResults``.
+            ``ForecastingResults``/``ImputationResults``. None means unmeasured
+            or no scored predictions, not zero fallback.
         fallback_rate: Per-task substitution fractions, keyed by task name —
-            only tasks with a non-zero rate are included. Empty for any model
-            whose predictions were all finite (every current baseline except
-            WBM, which routes participants without a weekly embedding to the
-            Linear baseline). Deliberately not surfaced in ``to_dataframe`` /
+            only tasks with a non-zero rate are included. Empty when there are
+            no recorded substitutions; check ``overall_fallback_rate`` to
+            distinguish a measured zero from missing measurements. Not surfaced in ``to_dataframe`` /
             ``to_csv`` so ``eval_<method>.csv`` stays a pure metrics table.
         per_user_pairs: Optional ``DataFrame`` of the per-user prediction-pair
             substrate (the leaderboard upload file). Schema: ``[method, task,
@@ -44,9 +44,9 @@ class PredictionResults:
     """
 
     records: list[dict] = field(repr=False)
-    # Additive fallback fields (default 0.0 / empty): populated by
-    # evaluate_prediction from the harness substitution counts.
-    overall_fallback_rate: float = 0.0
+    # None means no measured rate; evaluation supplies a float, including zero,
+    # only when there are scored predictions and recorded substitution counts.
+    overall_fallback_rate: float | None = None
     fallback_rate: dict = field(default_factory=dict, repr=False)
     # The per-user pairs substrate (the leaderboard upload file); populated when
     # evaluate_prediction is given output_dir=.
@@ -114,7 +114,8 @@ class PredictionResults:
     ) -> str:
         """Render the Track 1 leaderboard submission packet.
 
-        Returns the ``meta.json`` sidecar block plus the pull-request checklist
+        Includes the measured ``fallback_rate`` in the metadata and rejects
+        invalid rates. Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``; the maintainers compute
         skill / rank from the substrate during ingestion.
@@ -133,13 +134,15 @@ class PredictionResults:
             foundation_variant=foundation_variant,
             feature_dim=feature_dim,
             notes=notes,
+            fallback_rate=self.overall_fallback_rate,
         )
 
     def __repr__(self) -> str:
         n = len(self.records)
+        rate = "unknown" if self.overall_fallback_rate is None else f"{self.overall_fallback_rate:.4f}"
         return (
             f"PredictionResults({n} records, "
-            f"overall_fallback_rate={self.overall_fallback_rate:.4f})"
+            f"overall_fallback_rate={rate})"
         )
 
 
@@ -181,25 +184,11 @@ class ImputationResults:
     skill_scores: pd.DataFrame | None = field(default=None, repr=False)
 
     @property
-    def overall_fallback_rate(self) -> float:
-        """Max ``overall_fallback_rate`` across all (scenario, split) entries.
+    def overall_fallback_rate(self) -> float | None:
+        """Return the maximum measured cell rate, or None if any measurement is absent."""
+        from openmhc._submission import _imputation_fallback_rate
 
-        Returns 0.0 when no scenario/split reports a fallback rate (e.g. the
-        harness was run with no fallback fill, or every model output was
-        finite at target cells). Mirrors ``ForecastingResults`` in surfacing
-        the worst-case substitution rate at the top level.
-        """
-        worst = 0.0
-        for split_map in self.scenarios.values():
-            if not isinstance(split_map, dict):
-                continue
-            for metrics in split_map.values():
-                if not isinstance(metrics, dict):
-                    continue
-                rate = metrics.get("overall_fallback_rate")
-                if isinstance(rate, (int, float)) and rate > worst:
-                    worst = float(rate)
-        return worst
+        return _imputation_fallback_rate(self.scenarios, allow_missing=True)
 
     def to_dataframe(self) -> pd.DataFrame:
         """Flatten scenario results into a DataFrame.
@@ -293,7 +282,8 @@ class ImputationResults:
     ) -> str:
         """Render the Track 2 leaderboard submission packet.
 
-        Returns the ``meta.json`` sidecar block plus the pull-request checklist
+        Includes the measured ``fallback_rate`` in the metadata and rejects
+        invalid rates. Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``. The per-user substrate
         parquet (``per_user_errors.parquet``, written when you pass
@@ -301,7 +291,7 @@ class ImputationResults:
         maintainers compute skill / rank from it vs. LOCF.
         ``paper_url`` is optional.
         """
-        from openmhc._submission import imputation_to_submission_yaml
+        from openmhc._submission import _imputation_fallback_rate, imputation_to_submission_yaml
 
         return imputation_to_submission_yaml(
             method_name=method_name,
@@ -312,6 +302,7 @@ class ImputationResults:
             foundation_variant=foundation_variant,
             feature_dim=feature_dim,
             notes=notes,
+            fallback_rate=_imputation_fallback_rate(self.scenarios),
         )
 
     def __repr__(self) -> str:
@@ -334,6 +325,7 @@ class ForecastingResults:
             returned NaN and the Seasonal-Naive baseline was substituted before
             scoring. A high value means the model could not predict much of the
             in-scope window set; metrics should be read alongside this number.
+            None means unmeasured or no forecast cells.
         fallback_rate: Per-channel Seasonal-Naive substitution fractions, keyed
             like ``per_channel`` (``ch_<i>``).
         per_user_errors: Optional canonical per-(model, user, channel, metric)
@@ -349,7 +341,7 @@ class ForecastingResults:
     per_channel: dict = field(repr=False)
     run_dir: str = ""
     n_samples: int = 0
-    overall_fallback_rate: float = 0.0
+    overall_fallback_rate: float | None = None
     fallback_rate: dict = field(default_factory=dict, repr=False)
     per_user_errors: pd.DataFrame | None = field(default=None, repr=False)
     skill_scores: pd.DataFrame | None = field(default=None, repr=False)
@@ -417,7 +409,8 @@ class ForecastingResults:
     ) -> str:
         """Render the Track 3 leaderboard submission packet.
 
-        Returns the ``meta.json`` sidecar block plus the pull-request checklist
+        Includes the measured ``fallback_rate`` in the metadata and rejects
+        invalid rates. Returns the ``meta.json`` sidecar block plus the pull-request checklist
         for the Hugging Face dataset repo
         ``MyHeartCounts/OpenMHC-leaderboard-data``; the maintainers compute
         skill / rank vs. the Seasonal Naive baseline from the
@@ -435,13 +428,15 @@ class ForecastingResults:
             foundation_variant=foundation_variant,
             feature_dim=feature_dim,
             notes=notes,
+            fallback_rate=self.overall_fallback_rate,
         )
 
     def __repr__(self) -> str:
         n = len(self.per_channel)
+        rate = "unknown" if self.overall_fallback_rate is None else f"{self.overall_fallback_rate:.4f}"
         return (
             f"ForecastingResults({n} channels, n_samples={self.n_samples}, "
-            f"overall_fallback_rate={self.overall_fallback_rate:.4f})"
+            f"overall_fallback_rate={rate})"
         )
 
 

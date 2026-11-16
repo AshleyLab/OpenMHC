@@ -1,103 +1,130 @@
-"""Upload one method's per-user substrate parquet to the OpenMHC leaderboard dataset.
+"""Upload a method's predictions and measured fallback rate in one Hub commit.
 
-Creates the HF dataset repo if it doesn't exist (private by default), then
-uploads the method's substrate to ``<track>/<method>.parquet``. The sidecar
-``<track>/<method>.meta.json`` is updated when any of
-``--name`` / ``--type`` / ``--submitter`` / ``--subtrack`` /
-``--fallback-rate`` is provided, or when ``--results-json`` discovers a
-fallback rate to attach (see below). Existing sidecar fields are preserved —
-the tool fetches the current sidecar from HF (if any) and merges only the
-fields you provide.
+Reads ``overall_fallback_rate`` from the adjacent ``<method>.parquet.meta.json``
+provenance file, or from an explicitly supplied ``--results-json``. Track 1 uses
+its pooled participant-task rate; imputation uses the maximum over scenario/split
+cells. Missing or invalid measurements stop the upload. Existing display fields
+are preserved unless replaced on the command line.
 
-Sidecar schema (renderer reads these fields):
+Requires ``pip install -e ".[hf]"`` and Hugging Face authentication.
 
-| key | type | source |
-|---|---|---|
-| ``display_name`` | str | ``--name`` |
-| ``type`` | str | ``--type`` (``Statistical`` / ``Neural`` / etc.) |
-| ``submitter`` | str | ``--submitter`` |
-| ``subtrack`` | str | ``--subtrack`` (``single-day`` / ``long-context`` / ...) |
-| ``fallback_rate`` | float | ``--fallback-rate`` OR auto-extracted from ``--results-json`` |
+Usage::
 
-The ``fallback_rate`` is the worst-case ``overall_fallback_rate`` across all
-``(scenario, split)`` cells in the method's ``results.json`` (mirrors
-``openmhc._results.ImputationResults.overall_fallback_rate``). It surfaces
-the fraction of target cells the model could not predict and the harness
-had to substitute with a channel-aware baseline.
-
-Requires the ``[hf]`` extra (``pip install -e ".[hf]"``) for the
-``huggingface_hub`` dependency. Authentication uses the standard
-``huggingface_hub`` discovery (``HF_TOKEN`` env or a prior
-``huggingface-cli login``).
-
-Usage:
-    # Canonical: point at runs/<method>/ and the tool auto-extracts fallback_rate
     python tools/upload_leaderboard_substrate.py \
-        --dir paper-verification/per_user \
-        --method locf \
-        --track imputation \
-        --results-json /scratch/.../runs/locf/results.json \
-        --name "LOCF (baseline)" --type Statistical --submitter "OpenMHC team"
+        --dir results/leaderboard_downstream --method wbm --track downstream
 
-    # Re-uploading just the fallback rate (other sidecar fields preserved):
     python tools/upload_leaderboard_substrate.py \
-        --dir paper-verification/per_user \
-        --method locf \
-        --track imputation \
-        --fallback-rate 0.0
+        --dir results/leaderboard_imputation --method locf --track imputation \
+        --results-json runs/locf/results.json --name "LOCF" --type Statistical
 """
 
 from __future__ import annotations
 
 import argparse
-import io
+import hashlib
 import json
+import math
+import shutil
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download
+from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
 from huggingface_hub.errors import EntryNotFoundError, RepositoryNotFoundError
 
 DEFAULT_REPO_ID = "MyHeartCounts/OpenMHC-leaderboard-data"
 
 
-def _worst_case_fallback_rate(results_json: Path) -> float | None:
-    """Return the worst-case ``overall_fallback_rate`` from a ``results.json``.
+def _validate_rate(value: object, source: object) -> float:
+    """Require a measured fraction, including a genuine zero."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{source}: fallback rate must be a number in [0, 1]")
+    if not math.isfinite(value) or not 0 <= value <= 1:
+        raise ValueError(f"{source}: fallback rate must be finite and in [0, 1]")
+    return float(value)
 
-    Handles both result shapes:
 
-    - **Forecasting / downstream** — a single top-level ``overall_fallback_rate``
-      scalar (the harness pools one rate over the whole run).
-    - **Imputation** — nested ``scenarios[*][*].overall_fallback_rate``; the
-      worst case is the max across every ``(scenario, split)`` cell (mirrors
-      :attr:`openmhc._results.ImputationResults.overall_fallback_rate`).
+def _check_identity(data: dict, method: str | None, track: str | None, source: Path) -> None:
+    """Reject an explicitly identified result from a different method or track."""
+    for key, expected in (("method", method), ("track", track)):
+        if expected is not None and key in data and data[key] != expected:
+            raise ValueError(f"{source}: {key} does not match {expected!r}")
 
-    Returns ``None`` when the field is absent everywhere (legacy runs that
-    predate the fallback-tracking feature); ``0.0`` when present and every
-    measured cell reports 0 (the harness never had to substitute a fallback).
+
+def _worst_case_fallback_rate(
+    results_json: Path, *, method: str | None = None, track: str | None = None
+) -> float | None:
+    """Read a pooled rate or the maximum over measured imputation cells.
+
+    Missing measurements return None, never zero. Partially measured scenario
+    maps are rejected because their maximum could understate fallback.
     """
-    d = json.loads(results_json.read_text())
-    # Forecasting / downstream: a single top-level scalar. Imputation's
-    # results.json has scenario names at the top level (no such key), so this
-    # only fires for the flat shape.
-    top = d.get("overall_fallback_rate")
-    if isinstance(top, (int, float)):
-        return float(top)
-    # Imputation: max across nested scenarios[*][*].
-    scenarios = d.get("scenarios", d)
-    worst = 0.0
-    found = False
-    for split_map in scenarios.values():
-        if not isinstance(split_map, dict):
-            continue
-        for metrics in split_map.values():
-            if not isinstance(metrics, dict):
-                continue
-            r = metrics.get("overall_fallback_rate")
-            if isinstance(r, (int, float)):
-                found = True
-                if r > worst:
-                    worst = float(r)
-    return worst if found else None
+    data = json.loads(results_json.read_text())
+    if not isinstance(data, dict):
+        raise ValueError(f"{results_json}: expected a result object with fallback metadata")
+    _check_identity(data, method, track, results_json)
+    config = data.get("config")
+    if isinstance(config, dict):
+        _check_identity(config, method, track, results_json)
+    if "overall_fallback_rate" in data:
+        return _validate_rate(data["overall_fallback_rate"], results_json)
+    scenarios = data.get("scenarios", data)
+    if not isinstance(scenarios, dict):
+        raise ValueError(f"{results_json}: scenarios must be an object")
+    cells = [
+        metrics
+        for splits in scenarios.values() if isinstance(splits, dict)
+        for metrics in splits.values() if isinstance(metrics, dict)
+    ]
+    if not any("overall_fallback_rate" in cell for cell in cells):
+        return None
+    if any(
+        not isinstance(splits, dict) or not splits
+        or any(not isinstance(metrics, dict) for metrics in splits.values())
+        for splits in scenarios.values()
+    ):
+        raise ValueError(f"{results_json}: incomplete scenario/split fallback measurements")
+    return max(_validate_rate(cell.get("overall_fallback_rate"), results_json) for cell in cells)
+
+
+def resolve_fallback_rate(
+    src: Path, method: str, track: str, results_json: Path | None, expected_rate: float | None
+) -> float:
+    """Resolve measured metadata and reject contradictory sources or stale pairs."""
+    rates = []
+    provenance = Path(f"{src}.meta.json")
+    if provenance.exists():
+        meta = json.loads(provenance.read_text())
+        if not isinstance(meta, dict):
+            raise ValueError(f"{provenance}: expected a metadata object")
+        _check_identity(meta, method, track, provenance)
+        if "substrate_sha256" in meta:
+            digest = hashlib.sha256()
+            with src.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            if meta["substrate_sha256"] != digest.hexdigest():
+                raise ValueError(f"{provenance}: substrate checksum mismatch; regenerate the pair")
+        if "overall_fallback_rate" in meta:
+            rates.append(_validate_rate(meta["overall_fallback_rate"], provenance))
+    if results_json is not None:
+        if results_json.is_dir():
+            results_json = results_json / "results.json"
+        rate = _worst_case_fallback_rate(results_json, method=method, track=track)
+        if rate is None:
+            raise ValueError(f"{results_json}: missing measured fallback rate")
+        rates.append(rate)
+    if not rates:
+        raise ValueError(
+            "Missing measured fallback rate. Export the substrate with its .parquet.meta.json "
+            "sidecar, or supply --results-json from the same evaluation. A manual rate alone "
+            "is insufficient."
+        )
+    if expected_rate is not None:
+        rates.append(_validate_rate(expected_rate, "--fallback-rate"))
+    if any(not math.isclose(rate, rates[0], rel_tol=0, abs_tol=1e-12) for rate in rates[1:]):
+        raise ValueError("Conflicting fallback rates; use files from the same evaluation")
+    return rates[0]
 
 
 def find_parquet(dir_path: Path, method: str) -> Path:
@@ -128,8 +155,8 @@ def find_parquet(dir_path: Path, method: str) -> Path:
     )
 
 
-def validate_method_column(parquet_path: Path, method: str) -> None:
-    """Fail loudly unless the parquet's ``method`` column is exactly ``method``.
+def validate_method_column(parquet_path: Path, method: str, *, column: str = "method") -> None:
+    """Require the track's method identifier to match the upload name.
 
     The leaderboard concatenates every ``imputation/*.parquet`` and groups by the
     ``method`` column, so a substrate whose column disagrees with its upload name
@@ -139,16 +166,18 @@ def validate_method_column(parquet_path: Path, method: str) -> None:
     """
     import pandas as pd
 
-    values = sorted(pd.read_parquet(parquet_path, columns=["method"])["method"].astype(str).unique())
+    values = sorted(pd.read_parquet(parquet_path, columns=[column])[column].astype(str).unique())
     if values != [method]:
         raise SystemExit(
-            f"{parquet_path} has method column {values}, expected ['{method}']. "
-            f"Re-run evaluate_imputation(..., method_name='{method}') so the parquet's "
-            f"`method` column matches the upload name; the leaderboard groups by that column."
+            f"{parquet_path} has {column} column {values}, expected ['{method}']. "
+            f"Re-run the track's evaluation with method_name='{method}' so the "
+            f"`{column}` column matches the upload name; the leaderboard groups by that column."
         )
 
 
-def validate_users_have_demographics(parquet_path: Path, repo_id: str) -> None:
+def validate_users_have_demographics(
+    parquet_path: Path, repo_id: str, revision: str | None = None
+) -> None:
     """Fail loudly if the parquet holds users absent from the demographics file.
 
     Cohort views filter by ``demographics.parquet``, so any other user would still
@@ -157,8 +186,10 @@ def validate_users_have_demographics(parquet_path: Path, repo_id: str) -> None:
     import pandas as pd
 
     try:
-        path = hf_hub_download(repo_id, "demographics.parquet", repo_type="dataset")
+        path = hf_hub_download(repo_id, "demographics.parquet", repo_type="dataset", revision=revision)
     except RepositoryNotFoundError:
+        if revision is not None:
+            raise
         print(f"{repo_id} does not exist yet, so it has no cohort views to check against.")
         return
     except EntryNotFoundError as exc:
@@ -178,6 +209,18 @@ def validate_users_have_demographics(parquet_path: Path, repo_id: str) -> None:
         )
 
 
+@contextmanager
+def _stage_substrate(src: Path):
+    """Keep a private copy unchanged between validation and the Hub commit."""
+    with tempfile.TemporaryDirectory(prefix="openmhc-upload-") as folder:
+        staged = Path(folder) / src.name
+        shutil.copyfile(src, staged)
+        meta = Path(f"{src}.meta.json")
+        if meta.exists():
+            shutil.copyfile(meta, Path(f"{staged}.meta.json"))
+        yield staged
+
+
 def main() -> None:
     """Upload one method substrate parquet to the leaderboard dataset."""
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -185,7 +228,7 @@ def main() -> None:
         "--dir", required=True, type=Path, help="Directory containing the method's substrate parquet."
     )
     p.add_argument("--method", required=True, help="Method name (used as the destination filename).")
-    p.add_argument("--track", default="imputation", help="Track subdir in the repo (default: imputation).")
+    p.add_argument("--track", default="imputation", choices=("imputation", "downstream", "forecasting"))
     p.add_argument("--repo-id", default=DEFAULT_REPO_ID, help="HF dataset repo id.")
     p.add_argument(
         "--private",
@@ -202,107 +245,86 @@ def main() -> None:
         help="Sub-track for grouping: 'single-day' or 'long-context' (sidecar).",
     )
     p.add_argument(
-        "--fallback-rate",
-        type=float,
-        default=None,
-        help=(
-            "Worst-case overall_fallback_rate across (scenario, split) for "
-            "this method (sidecar). 0.0 means the harness never had to "
-            "substitute a fallback for any predicted cell; >0 means the "
-            "model failed to predict that fraction of cells. Mirrors "
-            "openmhc._results.ImputationResults.overall_fallback_rate. "
-            "Takes precedence over --results-json."
-        ),
+        "--fallback-rate", type=float, default=None,
+        help="Optional consistency check against the measured rate; cannot supply or override it.",
     )
     p.add_argument(
-        "--results-json",
-        type=Path,
-        default=None,
-        help=(
-            "Path to the method's results.json (typically "
-            "runs/<method>/results.json). When --fallback-rate is not "
-            "explicitly set, the worst-case overall_fallback_rate across "
-            "all (scenario, split) is auto-extracted from this file and "
-            "added to the sidecar. Pass a directory and the tool looks "
-            "for results.json inside it."
-        ),
+        "--results-json", type=Path, default=None,
+        help="Results from the same evaluation (a JSON file or directory containing results.json).",
     )
     args = p.parse_args()
 
-    src = find_parquet(args.dir, args.method)
-    if args.track in ("imputation", "downstream"):
-        validate_method_column(src, args.method)
-    validate_users_have_demographics(src, args.repo_id)
-    dest = f"{args.track}/{args.method}.parquet"
+    if not args.method or args.method in (".", "..") or any(
+        c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for c in args.method
+    ):
+        p.error("--method must be a filename identifier using letters, digits, '.', '_' or '-'")
+    original = find_parquet(args.dir, args.method)
+    with _stage_substrate(original) as src:
+        _upload(args, src, p)
+
+
+def _upload(args: argparse.Namespace, src: Path, parser: argparse.ArgumentParser) -> None:
+    """Validate a staged substrate and publish it with the measured rate."""
+    column = "model" if args.track == "forecasting" else "method"
+    validate_method_column(src, args.method, column=column)
+    try:
+        fallback_rate = resolve_fallback_rate(
+            src, args.method, args.track, args.results_json, args.fallback_rate
+        )
+    except (ValueError, OSError) as exc:
+        parser.error(str(exc))
 
     api = HfApi()
-    api.create_repo(repo_id=args.repo_id, repo_type="dataset", private=args.private, exist_ok=True)
-    api.upload_file(
-        path_or_fileobj=str(src),
-        path_in_repo=dest,
-        repo_id=args.repo_id,
-        repo_type="dataset",
-        commit_message=f"Add/update {args.track} substrate: {args.method}",
-    )
-    print(f"Uploaded {src}  ->  {args.repo_id}:{dest}")
-    print(f"  https://huggingface.co/datasets/{args.repo_id}/blob/main/{dest}")
+    try:
+        revision = api.repo_info(args.repo_id, repo_type="dataset").sha
+    except RepositoryNotFoundError:
+        revision = None
+    if revision is not None:
+        validate_users_have_demographics(src, args.repo_id, revision=revision)
 
-    # Auto-extract fallback_rate from results.json if not given explicitly.
-    fallback_rate = args.fallback_rate
-    if fallback_rate is None and args.results_json is not None:
-        rj_path = args.results_json
-        if rj_path.is_dir():
-            rj_path = rj_path / "results.json"
-        if rj_path.exists():
-            fallback_rate = _worst_case_fallback_rate(rj_path)
-            if fallback_rate is not None:
-                print(
-                    f"[auto] fallback_rate={fallback_rate:.6f} extracted from {rj_path}"
-                )
-        else:
-            print(f"[auto] --results-json={rj_path} not found; skipping fallback_rate")
-
-    sidecar_provided = {
-        "display_name": args.name,
-        "type": args.mtype,
-        "submitter": args.submitter,
-        "subtrack": args.subtrack,
-        "fallback_rate": fallback_rate,
-    }
-    if any(v is not None for v in sidecar_provided.values()):
-        # Merge into existing sidecar (if any) so a single-field update like
-        # `--fallback-rate` doesn't clobber display_name/type/submitter/subtrack.
-        meta_dest = f"{args.track}/{args.method}.meta.json"
+    dest = f"{args.track}/{args.method}.parquet"
+    meta_dest = f"{args.track}/{args.method}.meta.json"
+    meta = {"display_name": args.method, "type": "—", "submitter": "—", "subtrack": "other"}
+    if revision is not None:
         try:
             existing_path = hf_hub_download(
-                args.repo_id, meta_dest, repo_type="dataset", force_download=True
+                args.repo_id, meta_dest, repo_type="dataset", revision=revision
             )
-            meta = json.loads(Path(existing_path).read_text())
-        except (EntryNotFoundError, FileNotFoundError):
-            # Brand-new method: build from defaults
-            meta = {
-                "display_name": args.method,
-                "type": "—",
-                "submitter": "—",
-                "subtrack": "other",
-            }
-        if args.track == "imputation":
-            # `overall_fallback_rate` was renamed to `fallback_rate` (PR #43);
-            # drop the legacy key so re-uploads don't carry both with divergent
-            # values. Downstream sidecars still use the long name, so this is
-            # gated to the imputation track.
-            meta.pop("overall_fallback_rate", None)
-        for key, val in sidecar_provided.items():
-            if val is not None:
-                meta[key] = val
-        api.upload_file(
-            path_or_fileobj=io.BytesIO(json.dumps(meta, indent=2).encode("utf-8")),
+        except EntryNotFoundError:
+            pass
+        else:
+            existing = json.loads(Path(existing_path).read_text())
+            if not isinstance(existing, dict):
+                parser.error(f"{meta_dest}: existing metadata must be an object")
+            meta.update(existing)
+    meta.pop("overall_fallback_rate", None)
+    meta.update({
+        key: value for key, value in {
+            "display_name": args.name, "type": args.mtype,
+            "submitter": args.submitter, "subtrack": args.subtrack,
+            "fallback_rate": fallback_rate,
+        }.items() if value is not None
+    })
+    operations = [
+        CommitOperationAdd(path_in_repo=dest, path_or_fileobj=str(src)),
+        CommitOperationAdd(
             path_in_repo=meta_dest,
-            repo_id=args.repo_id,
-            repo_type="dataset",
-            commit_message=f"Add/update {args.track} metadata: {args.method}",
-        )
-        print(f"Uploaded sidecar  ->  {args.repo_id}:{meta_dest}")
+            path_or_fileobj=json.dumps(meta, indent=2, allow_nan=False).encode("utf-8"),
+        ),
+    ]
+    # Validate and prepare both files before any remote write. Pin the commit
+    # to the revision used for demographics and display metadata checks.
+    if revision is None:
+        api.create_repo(repo_id=args.repo_id, repo_type="dataset", private=args.private, exist_ok=False)
+        revision = api.repo_info(args.repo_id, repo_type="dataset").sha
+    commit = api.create_commit(
+        repo_id=args.repo_id, repo_type="dataset", operations=operations,
+        parent_commit=revision,
+        commit_message=f"Add/update {args.track} predictions and fallback metadata: {args.method}",
+    )
+    print(f"Uploaded {dest} and {meta_dest} with fallback_rate={fallback_rate:.12g}")
+    print(commit.commit_url)
 
 
 if __name__ == "__main__":

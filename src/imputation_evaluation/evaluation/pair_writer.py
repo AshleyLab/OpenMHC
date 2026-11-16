@@ -402,8 +402,7 @@ def read_fallback_sidecar(
     """Read the fallback sidecar for a split.
 
     Returns ``None`` when the sidecar is missing (e.g. an older
-    pre-Phase-A pairs dir). Callers populate fallback fields as
-    ``0.0`` / ``None`` in that case to preserve the historical contract.
+    pre-Phase-A pairs dir). An absent measurement must not be reported as zero.
     """
     import json
 
@@ -425,28 +424,39 @@ def merge_counts_and_fallback(
     :class:`ImputationResults.scenarios` exposes today, ready to merge
     with the producer's display-metrics dict.
 
-    Missing-sidecar fallback: zero counts, zero rates — matches what the
-    legacy path emitted when ``fallback_fill`` was ``None``.
+    Missing/incomplete counter arrays or a zero denominator yield an unknown
+    rate (None). This also covers the internal substitution opt-out, which does
+    not collect target counts. Prediction and metric computation are unchanged.
     """
     if sidecar is None:
         return {
             "n_applicable": 0,
             "n_total": 0,
-            "overall_fallback_rate": 0.0,
-            "fallback_rate": {f"ch_{ch}": 0.0 for ch in range(n_channels)},
+            "overall_fallback_rate": None,
+            "fallback_rate": {},
         }
     n_applicable = int(sidecar.get("n_applicable", 0))
     n_total = int(sidecar.get("n_total", 0))
     sub = list(sidecar.get("fallback_substituted") or [])
     asked = list(sidecar.get("fallback_asked") or [])
+    if len(sub) != n_channels or len(asked) != n_channels:
+        return {
+            "n_applicable": n_applicable, "n_total": n_total,
+            "overall_fallback_rate": None, "fallback_rate": {},
+        }
+    if any(
+        isinstance(x, bool) or not isinstance(x, (int, np.integer)) or x < 0
+        for x in [*sub, *asked]
+    ) or any(s > a for s, a in zip(sub, asked)):
+        raise ValueError("Invalid imputation fallback counts")
     asked_total = sum(int(x) for x in asked)
     sub_total = sum(int(x) for x in sub)
-    overall = (sub_total / asked_total) if asked_total > 0 else 0.0
-    per_ch: dict[str, float] = {}
+    overall = (sub_total / asked_total) if asked_total > 0 else None
+    per_ch: dict[str, float | None] = {}
     for ch in range(n_channels):
         a = int(asked[ch]) if ch < len(asked) else 0
         s = int(sub[ch]) if ch < len(sub) else 0
-        per_ch[f"ch_{ch}"] = (s / a) if a > 0 else 0.0
+        per_ch[f"ch_{ch}"] = (s / a) if a > 0 else None
     return {
         "n_applicable": n_applicable,
         "n_total": n_total,

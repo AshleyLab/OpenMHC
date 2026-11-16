@@ -17,7 +17,7 @@ standard `huggingface_hub` token discovery (`HF_TOKEN` env or
 - **Dataset** `MyHeartCounts/OpenMHC-leaderboard-data` (`repo_type="dataset"`,
   public) — the per-method substrate: `<track>/<method>.parquet` plus display
   sidecars `<track>/<method>.meta.json`
-  (`{display_name, type, submitter, subtrack[, fallback_rate]}`). Track 2
+  (`{display_name, type, submitter, subtrack, fallback_rate}`). Track 2
   ships `imputation/<method>.parquet` (per-user errors); Track 1 ships
   `downstream/<method>.parquet` (per-user **prediction pairs** — its
   ranking/correlation metrics don't decompose per user, see
@@ -46,16 +46,65 @@ views keep those rows for the participants in the cohort, using `demographics.pa
    python tools/upload_leaderboard_substrate.py \
        --dir <dir> --method <m> --track imputation \
        --name "<Display>" --type "<Type>" --submitter "<Team>" \
-       --fallback-rate <Results.overall_fallback_rate>
+       --results-json <evaluation-dir>/results.json
    ```
 
-   This writes both `<m>.parquet` and the `<m>.meta.json` sidecar.
-   `--fallback-rate` records `fallback_rate` in the sidecar (issue #39);
-   omit it and the value is read from the substrate's `<m>.parquet.meta.json`
-   provenance sidecar if present, else the row shows "n/a". The `method` column is
-   validated against `<m>` for `imputation` and `downstream`. The upload stops if the
-   file has users absent from `demographics.parquet`, because they would be left out
-   of every cohort view.
+   The uploader stages a private temporary copy of the prediction file and its
+   provenance sidecar, validates that copy before any remote write, then publishes `<m>.parquet` and `<m>.meta.json` together in one commit. Existing
+   display fields are preserved unless supplied on the command line. The commit
+   is pinned to the revision used for the cohort and metadata checks; if another
+   upload changes that revision, rerun the command to validate the new state.
+   Temporary staging needs space for one prediction file and is removed after
+   success or failure.
+
+   For Track 1, omit `--results-json`: `evaluate_prediction(..., output_dir=...)`
+   and the offline prediction-pair exporter write `<m>.parquet.meta.json` beside
+   the predictions. The uploader reads its `overall_fallback_rate` and writes the
+   leaderboard's `fallback_rate` field. This is the pooled count of substituted
+   participant-task pairs divided by the total test pairs, using the same rule
+   for every method. The offline exporter requires measured `fallback.json`
+   counts matching the exported tasks and cohort sizes; it never substitutes
+   zero for missing measurements.
+
+   Imputation and forecasting can use `--results-json` from the same evaluation.
+   Imputation reports the maximum across scenario/split cells; forecasting uses
+   its pooled rate. A directory argument resolves to `results.json` inside it.
+   Missing, nonnumeric, nonfinite, out-of-range or conflicting rates stop the
+   upload. A measured zero is valid. `--fallback-rate` is retained only as an
+   optional consistency check: it cannot supply or override a measurement.
+   A measured zero requires explicit substitution counts and a positive
+   denominator. Missing measurements or an empty cohort/target group have an
+   unknown rate (`None` in Python, `null` in JSON), which cannot be submitted.
+   Result objects constructed without measurements also default to `None`.
+
+   Track 2's internal substitution opt-out remains supported. It does not collect
+   target counts, so its rate is unknown; the public API's adapter supplies a
+   fallback fill and records counts normally. Predictions and scoring are unchanged.
+   Track 3's existing-file skip policy also remains unchanged. A resumed run's
+   counters cover only newly generated predictions, so its full-run fallback rate
+   is unknown. Use a complete recorded evaluation's metadata or a fresh run before
+   publication; do not replace an unknown rate with zero.
+   Explicit method or track identifiers in either metadata source must match
+   the upload; older results without identifiers still require manual pairing.
+
+   New Track-1 provenance sidecars include a prediction-file checksum, which the
+   uploader verifies to detect replaced files. Older sidecars and explicit result
+   files remain supported but do not prove file identity; keep them paired with
+   their original evaluation output. A zero already emitted by older code from
+   missing measurements cannot be authenticated by this uploader; recover the
+   original recorded counts or rerun the evaluation before publishing it.
+   In particular, Track-1 `to_json()` exports
+   a metrics list, so use the adjacent provenance sidecar for uploading.
+
+   Submitters using `results.to_submission_yaml(...)` also receive the measured
+   rate in their generated metadata. Imputation packets require measurements for
+   every scenario/split. Direct calls to the lower-level submission renderers now
+   require a `fallback_rate` argument from the evaluation results.
+
+   The `method` column is validated against `<m>` for `imputation` and
+   `downstream`; forecasting's `model` column is checked against the same name.
+   The upload stops if the file has users absent from
+   `demographics.parquet`, because they would be left out of every cohort view.
 2. The Space recomputes only on **restart** (in-process cache, no auto-refresh).
    Restart it to pick up the new/changed method. Uploading to the dataset does
    *not* trigger a Space rebuild; only pushing to the Space does.

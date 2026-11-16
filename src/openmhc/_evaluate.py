@@ -334,6 +334,9 @@ def evaluate_prediction(
 
     from downstream_evaluation.data.splits import load_split_file
     from downstream_evaluation.evaluation.metrics import get_task_type
+    from downstream_evaluation.evaluation.predictions_io import (
+        overall_fallback_rate as pool_fallback,
+    )
     from downstream_evaluation.runner import EvalConfig, run_eval
     from openmhc._constants import BENCHMARK_TASKS
 
@@ -381,19 +384,17 @@ def evaluate_prediction(
     # participants the model left non-finite (substituted with the Linear
     # baseline before scoring). Pool them into an overall rate + a per-task map.
     fallback_rate: dict[str, float] = {}
-    total_fallback = 0
-    total_test = 0
+    overall_fallback_rate = pool_fallback({
+        task: metrics for task, metrics in results.items() if task != "config"
+    })
     for task_name, task_metrics in results.items():
         if task_name == "config":
             continue
         task_type = get_task_type(task_name)
         n_test = task_metrics.get("n_test")
-        n_fallback = task_metrics.get("n_fallback", 0)
-        if n_test:
-            total_test += int(n_test)
-            total_fallback += int(n_fallback)
-            if n_fallback:
-                fallback_rate[task_name] = n_fallback / n_test
+        n_fallback = task_metrics["n_fallback"]
+        if n_test and n_fallback:
+            fallback_rate[task_name] = n_fallback / n_test
         for metric_name, value in task_metrics.items():
             if metric_name in ("n_test", "n_fallback"):
                 continue
@@ -407,7 +408,6 @@ def evaluate_prediction(
                     "n_test": n_test,
                 }
             )
-    overall_fallback_rate = total_fallback / total_test if total_test else 0.0
 
     # Leaderboard substrate: pool the per-(method, task) prediction pairs into one
     # <method>.parquet for upload. Track 1 ships raw pairs (not a
@@ -1105,7 +1105,7 @@ def evaluate_forecasting(
                     # Carry the invalid-prediction rate in the substrate meta too
                     # (mirrors the downstream track), so the rate travels with the
                     # parquet even when results.json isn't alongside it.
-                    "overall_fallback_rate": float(result.get("overall_fallback_rate", 0.0)),
+                    "overall_fallback_rate": result.get("overall_fallback_rate"),
                 },
             )
             if skill_df is not None:
@@ -1115,7 +1115,7 @@ def evaluate_forecasting(
             per_channel=result.get("per_channel", {}),
             run_dir=str(result.get("run_dir", "")),
             n_samples=int(result.get("n_samples", 0)),
-            overall_fallback_rate=float(result.get("overall_fallback_rate", 0.0)),
+            overall_fallback_rate=result.get("overall_fallback_rate"),
             fallback_rate=dict(result.get("fallback_rate", {})),
             per_user_errors=per_user_df,
             skill_scores=skill_df,

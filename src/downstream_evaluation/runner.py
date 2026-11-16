@@ -97,7 +97,6 @@ def run_eval(config: EvalConfig, model) -> dict[str, dict]:
         per_task_counts = {
             task: {"n_fallback": r["n_fallback"], "n_test": r["n_test"]}
             for task, r in results.items()
-            if isinstance(r, dict) and "n_fallback" in r
         }
         write_fallback_sidecar(config.predictions_dir, method_name, per_task_counts)
 

@@ -203,11 +203,17 @@ def test_upload_checks_users_before_writing_to_the_hub(track, tmp_path, monkeypa
     file = _demographics(tmp_path, ["a"])
     monkeypatch.setattr(uploader, "hf_hub_download", lambda *a, **k: str(file))
     monkeypatch.setattr(
-        uploader, "HfApi", lambda: pytest.fail("the Hub was touched before the check")
+        uploader, "HfApi", lambda: SimpleNamespace(
+            repo_info=lambda *a, **k: SimpleNamespace(sha="checked-revision"),
+            create_repo=lambda **k: pytest.fail("a repo was created before validation"),
+            create_commit=lambda **k: pytest.fail("a commit was created before validation"),
+            upload_file=lambda **k: pytest.fail("a file was uploaded before validation"),
+        )
     )
-    monkeypatch.setattr(uploader, "validate_method_column", lambda *a: None)
+    monkeypatch.setattr(uploader, "validate_method_column", lambda *a, **k: None)
     source = tmp_path / "source"
     _substrate(source / "m.parquet", ["a", "new"])
+    (source / "m.parquet.meta.json").write_text(json.dumps({"overall_fallback_rate": 0.0}))
     monkeypatch.setattr(
         sys, "argv", ["upload", "--dir", str(source), "--method", "m", "--track", track]
     )

@@ -35,6 +35,8 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 REPO_ROOT = Path(__file__).resolve().parents[4]
 SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
@@ -68,28 +70,26 @@ SUBMITTER = "OpenMHC team"
 SUBTRACK = "static"  # SCHEMA: static | longitudinal; all 8 score from one weekly embedding
 
 def resolve_fallback_rate(
-    predictions_dir: Path, method: str, overrides: dict[str, float]
+    predictions_dir: Path, method: str, task_sizes: dict[str, int]
 ) -> float:
-    """The method's overall fallback rate (fraction substituted with the Linear baseline).
-
-    Preference order: an explicit ``--fallback-rate`` override, else the measured
-    ``fallback.json`` sidecar the eval writes next to the predictions
-    (``Σ n_fallback / Σ n_test``), else ``0.0``. A prediction dir written before the
-    sidecar existed has neither, so a legacy method with real fallback (e.g. ``wbm``)
-    must be given an explicit override — otherwise it is reported as ``0.0`` with a
-    warning rather than silently.
-    """
-    if method in overrides:
-        return overrides[method]
+    """Pool measured fallback counts after checking the exported task cohorts."""
     sidecar = read_fallback_sidecar(predictions_dir, method)
-    if sidecar is not None:
-        return overall_fallback_rate(sidecar)
-    print(
-        f"  [warn] {method}: no fallback.json sidecar and no --fallback-rate override; "
-        "reporting fallback rate as 0.0",
-        file=sys.stderr,
-    )
-    return 0.0
+    if not isinstance(sidecar, dict) or not sidecar:
+        raise ValueError(f"{method}: missing measured fallback.json; rerun the evaluation")
+    if set(sidecar) != set(task_sizes):
+        raise ValueError(f"{method}: fallback task set does not match the exported predictions")
+    for task, counts in sidecar.items():
+        if not isinstance(counts, dict):
+            raise ValueError(f"{method}/{task}: invalid fallback counts")
+        n_test, n_fallback = counts.get("n_test"), counts.get("n_fallback")
+        if (
+            type(n_test) is not int or type(n_fallback) is not int
+            or n_test <= 0 or not 0 <= n_fallback <= n_test
+        ):
+            raise ValueError(f"{method}/{task}: invalid fallback counts")
+        if n_test != task_sizes[task]:
+            raise ValueError(f"{method}/{task}: fallback cohort size does not match prediction rows")
+    return overall_fallback_rate(sidecar)
 
 
 def main() -> int:
@@ -113,24 +113,7 @@ def main() -> int:
         default=list(METHODS),
         help="Methods to build (default: all 8 canonical methods).",
     )
-    p.add_argument(
-        "--fallback-rate",
-        nargs="*",
-        default=[],
-        metavar="METHOD=RATE",
-        help=(
-            "Override a method's fallback rate for legacy prediction dirs that predate the "
-            "fallback.json sidecar (e.g. wbm=0.6276). Fresh runs read the measured sidecar."
-        ),
-    )
     args = p.parse_args()
-
-    overrides: dict[str, float] = {}
-    for item in args.fallback_rate:
-        name, sep, value = item.partition("=")
-        if not sep:
-            raise SystemExit(f"--fallback-rate expects METHOD=RATE, got {item!r}")
-        overrides[name] = float(value)
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -149,16 +132,20 @@ def main() -> int:
         )
         if df.empty:
             raise SystemExit(f"empty substrate for {method!r} — no task predictions found")
-        if df[["y_true", "y_pred", "y_proba"]].isna().any().any():
-            raise SystemExit(f"{method}: NaN pair values — fallback should already be applied")
+        if not np.isfinite(df[["y_true", "y_pred", "y_proba"]].to_numpy()).all():
+            raise SystemExit(f"{method}: non-finite pair values — fallback should already be applied")
 
-        rate = resolve_fallback_rate(args.predictions_dir, method, overrides)
+        if df.duplicated(["task", "user_id"]).any():
+            raise SystemExit(f"{method}: duplicate participant-task prediction pairs")
+        task_sizes = df.groupby("task", observed=True).size().to_dict()
+        rate = resolve_fallback_rate(args.predictions_dir, method, task_sizes)
         out = args.out_dir / f"{method}.parquet"
         write_per_user_pairs_parquet(
             df,
             out,
             meta={
                 "method": method,
+                "track": "downstream",
                 "baseline": "linear",
                 "overall_fallback_rate": rate,
                 "n_pairs": int(len(df)),

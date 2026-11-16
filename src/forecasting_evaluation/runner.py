@@ -136,7 +136,7 @@ def run_eval(
         "metrics_dir": str(metrics_output_dir),
         "per_channel": per_channel,
         "n_samples": int(eval_summary["prediction_samples"]),
-        "overall_fallback_rate": float(eval_summary.get("overall_fallback_rate", 0.0)),
+        "overall_fallback_rate": eval_summary.get("overall_fallback_rate"),
         "fallback_rate": dict(eval_summary.get("fallback_rate", {})),
     }
 
