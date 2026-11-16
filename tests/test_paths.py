@@ -282,10 +282,12 @@ class TestDownloadDatasetSurface:
         with pytest.raises(ValueError, match="version must be one of"):
             download_dataset(version="bogus")
 
-    def test_unpublished_version_raises(self):
-        """Requesting the not-yet-published ``full`` version raises ``ValueError``."""
+    def test_unpublished_version_raises(self, monkeypatch):
+        """A deliberately disabled release fails before resolving a destination."""
         from openmhc import download_dataset
+        from openmhc._dataset import _VERSION_DOIS
 
+        monkeypatch.setitem(_VERSION_DOIS, "full", None)
         with pytest.raises(ValueError, match="not yet published"):
             download_dataset(version="full")
 
@@ -322,3 +324,104 @@ class TestPublicApisRequireDatasetRoot:
 
         with pytest.raises(ValueError, match="MHC_DATA_DIR"):
             openmhc.evaluate_forecasting(DummyForecaster(), version="xs")
+
+
+class TestDatasetRevision:
+    """Canonical revision timestamps survive writes, downloads and derivatives."""
+
+    @pytest.mark.parametrize("revision", ["2026-10-31T14:32:07Z", "2026-10-31T14:32:07.123456Z"])
+    def test_roundtrip_and_preservation(self, tmp_path, revision):
+        """Omitting a revision preserves it and unrelated marker metadata."""
+        from openmhc._dataset import read_dataset_marker
+
+        marker = write_dataset_marker(tmp_path, "full", dataset_revision=revision, daily_hf_rows=10)
+        payload = json.loads(marker.read_text())
+        payload["custom_metadata"] = "retain me"
+        marker.write_text(json.dumps(payload))
+        write_dataset_marker(tmp_path, "full")
+        assert read_dataset_marker(tmp_path) == payload
+
+    @pytest.mark.parametrize(
+        "revision",
+        [
+            "2026-10-31",
+            "2026-10-31T14:32:07",
+            "2026-10-31T14:32:07+01:00",
+            "2026-10-31T14:32:07+00:00",
+            "2026-02-30T14:32:07Z",
+            "2026-10-31T25:00:00Z",
+            "2026-10-31T14:32:07Z ",
+            "",
+            123,
+            None,
+        ],
+    )
+    def test_invalid_stored_revision_rejected(self, tmp_path, revision):
+        """A present revision must be a real UTC timestamp with explicit Z suffix."""
+        from openmhc._dataset import read_dataset_marker
+
+        marker = tmp_path / DATASET_VERSION_FILENAME
+        marker.write_text(
+            json.dumps({"version": "full", "n_users": 11894, "dataset_revision": revision})
+        )
+        with pytest.raises(ValueError, match="dataset_revision"):
+            read_dataset_marker(tmp_path)
+
+    def test_invalid_write_preserves_existing_marker(self, tmp_path):
+        """Validate before replacing the user's existing marker."""
+        marker = write_dataset_marker(tmp_path, "full", dataset_revision="2026-10-31T14:32:07Z")
+        before = marker.read_bytes()
+        with pytest.raises(ValueError, match="dataset_revision"):
+            write_dataset_marker(tmp_path, "full", dataset_revision="not a timestamp")
+        assert marker.read_bytes() == before
+
+    def test_derivatives_keep_revision_while_size_changes(self, tmp_path):
+        """Full and XS can carry the same data revision with different sizes."""
+        from openmhc._dataset import read_dataset_marker
+
+        revision = "2026-10-31T14:32:07Z"
+        for size in ("full", "xs"):
+            root = tmp_path / size
+            _write_minimal_split(root, size)
+            write_dataset_marker(root, size, dataset_revision=revision)
+            assert _DatasetPaths.resolve(root, version=size).version == size
+        a, b = (read_dataset_marker(tmp_path / size) for size in ("full", "xs"))
+        assert a["dataset_revision"] == b["dataset_revision"] == revision
+        assert a["n_users"] == 11894 and b["n_users"] == 593
+
+    def test_second_revision_same_day_is_distinct(self, tmp_path):
+        """Explicit updates distinguish changes within a day without a numbered version."""
+        from openmhc._dataset import read_dataset_marker
+
+        first, second = "2026-10-31T14:32:07Z", "2026-10-31T14:32:07.000001Z"
+        write_dataset_marker(tmp_path, "full", dataset_revision=first)
+        write_dataset_marker(tmp_path, "full", dataset_revision=second)
+        assert read_dataset_marker(tmp_path)["dataset_revision"] == second
+
+    @pytest.mark.parametrize("prefix", ["", "data/"])
+    def test_download_preserves_packaged_revision(self, tmp_path, monkeypatch, dataverse_response, prefix):
+        """Exercise real archive extraction with a synthetic network response."""
+        import io
+        import zipfile
+
+        import openmhc._dataset as dataset
+
+        payload = {"version": "xs", "n_users": 593, "dataset_revision": "2026-10-31T14:32:07Z"}
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr(prefix + DATASET_VERSION_FILENAME, json.dumps(payload))
+        dataverse_response(archive.getvalue(), "xs")
+        root = dataset.download_dataset("xs", dest=tmp_path)
+        assert dataset.read_dataset_marker(root) == payload
+
+    def test_switching_size_drops_previous_row_count(self, tmp_path):
+        """Deriving XS keeps the revision but must not retain Full's sensor-row count."""
+        from openmhc._dataset import read_dataset_marker
+
+        revision = "2026-10-31T14:32:07Z"
+        write_dataset_marker(tmp_path, "full", dataset_revision=revision, daily_hf_rows=1000)
+        write_dataset_marker(tmp_path, "xs")
+        payload = read_dataset_marker(tmp_path)
+        assert payload["dataset_revision"] == revision
+        assert payload["version"] == "xs" and payload["n_users"] == 593
+        assert "daily_hf_rows" not in payload

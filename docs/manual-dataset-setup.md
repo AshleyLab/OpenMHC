@@ -2,7 +2,23 @@
 
 Use this guide if you cannot use `openmhc.download_dataset()` — for example, on air-gapped clusters, behind a corporate proxy, or when you already have the raw Dataverse bundle on disk.
 
-The OpenMHC dataset is distributed through Harvard Dataverse and will be made available to all qualified researchers free of charge upon acceptance of the paper. The DOI and access instructions are published here at that point.
+The OpenMHC dataset is distributed through Harvard Dataverse. Use the [XS deposit](https://doi.org/10.7910/DVN/RIKSK4) or [Full deposit](https://doi.org/10.7910/DVN/XNBITM), subject to its terms and file permissions.
+
+For an air-gapped machine, the simplest route is to run `openmhc.download_dataset` on a connected machine, then transfer the complete installed root and verify the transferred files. The steps below are for manual assembly from original release files.
+
+## Obtain a complete release inventory
+
+Dataverse's dataset-ZIP endpoint can omit restricted files or files exceeding the server's ZIP size limit. A successful ZIP request does not establish completeness. Use the latest published inventory, never an editable draft:
+
+```bash
+curl -f -H "X-Dataverse-key: <your-token>" \
+  "https://dataverse.harvard.edu/api/datasets/:persistentId/versions/:latest-published?persistentId=doi:10.7910/DVN/RIKSK4" \
+  -o release-inventory.json
+```
+
+For Full, replace `RIKSK4` with `XNBITM`. Omit the token header when no authentication is needed. For every entry in `data.files`, download `/api/access/datafile/<dataFile.id>?format=original` into its `directoryLabel/label` path. Check its byte count against `dataFile.filesize` and its checksum against `dataFile.checksum`. All entries must be present and verified, including every multipart segment. Request access if a file is restricted; do not continue with only accessible files.
+
+Keep this inventory for the entire installation. If you already have a ZIP bundle, compare its complete extracted file inventory, sizes and checksums with that same release inventory before unpacking inner archives. Do not forward API tokens to another host when following download redirects.
 
 **One root per version.** Every OpenMHC dataset root must contain a `dataset_version.json` marker declaring which release lives there (`xs` or `full`), and the public eval API cross-checks that marker against the `version=` you pass. The two therefore cannot share a directory — put each under its own root and point `MHC_DATA_DIR` (or `data_dir=`) at whichever one you want to use.
 
@@ -11,7 +27,7 @@ existing root, see [migration guidance](../DATASET.md#existing-dataset-roots).
 
 Include the release's precomputed imputation masks. Copying `data/imputation/`
 below installs them at `<dataset_root>/imputation/masks/`, alongside `processed/`,
-`labels/`, and `splits/`. Use the masks for the same release and date variant;
+`labels/`, and `splits/`. Use the imputation masks included with the dataset release;
 see [mask paths and requirements](../DATASET.md#bundled-vs-dataset-root-files).
 
 Recommended layout for keeping both side by side:
@@ -26,25 +42,22 @@ Recommended layout for keeping both side by side:
 
 ## Development subset (~1.9 GB, 593 users)
 
-**Source:** Dataverse deposit (DOI published upon paper acceptance)
+**Source:** [10.7910/DVN/RIKSK4](https://doi.org/10.7910/DVN/RIKSK4)
 
-### Step 1 — Download the bundle
+### Step 1 — Download and verify every release file
 
-```bash
-curl -L -o openmhc-xs.zip \
-  -H "X-Dataverse-key: <your-token>" \
-  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=<doi>"
-```
+Follow the inventory procedure above, preserving directory labels. Keep the packaged `dataset_version.json` with the files.
 
-### Step 2 — Extract the outer ZIP
+### Step 2 — Prepare the release tree
 
 ```bash
 CACHE="$HOME/.cache/openmhc/data-xs"
 mkdir -p "$CACHE"
-unzip openmhc-xs.zip -d "$CACHE"
 ```
 
-The ZIP contains an `archives/` directory with five tar.gz files and a `data/` tree with metadata.
+Place the verified release files under `$CACHE`, keeping `archives/` and `data/`. If using a previously downloaded and independently verified ZIP, extract it here first. Do not mix releases or overwrite an existing installation.
+
+The release tree contains an `archives/` directory with five tar.gz files and a `data/` tree with metadata.
 
 ### Step 3 — Copy metadata into the cache root
 
@@ -82,7 +95,7 @@ tar -xzf "$CACHE/archives/minute_trajectory_xs.tar.gz" -C "$CACHE/"
 
 ```bash
 mkdir -p "$CACHE/hdf5"
-tar -xzf "$CACHE/archives/hdf5_sharable_2026_xs.tar.gz" -C "$CACHE/hdf5/"
+tar -xzf "$CACHE/archives/hdf5_sharable_2026_xs.tar.gz" -C "$CACHE/"
 ```
 
 ### Step 6 — Move normalization stats
@@ -94,37 +107,34 @@ If `normalization_stats.json` landed at the cache root rather than in `processed
   mv "$CACHE/normalization_stats.json" "$CACHE/processed/"
 ```
 
-### Step 7 — Write the dataset version marker
+### Step 7 — Check the packaged dataset marker
 
 ```bash
-python -c "import openmhc; openmhc.write_dataset_marker('$CACHE', version='xs')"
+python -c "import openmhc; print(openmhc.read_dataset_marker('$CACHE'))"
 ```
 
-This drops `dataset_version.json` at the root. Without it the eval API will refuse to resolve this root.
+The marker must declare `version="xs"`, `n_users=593` and retain its supplied revision. If packaged under `data/`, move it to the root first; reject conflicting root and nested markers. Do not replace a missing release marker with a guessed identity.
 
 ---
 
 ## Full version (~38 GB, 11,894 users)
 
-**Source:** Dataverse deposit (DOI published upon paper acceptance)
+**Source:** [10.7910/DVN/XNBITM](https://doi.org/10.7910/DVN/XNBITM)
 
 The full bundle splits large archives into numbered parts (`*.tar.gz.part-NN`) that must be concatenated before extraction. All directories extract to canonical names — no renaming required.
 
-### Step 1 — Download the bundle
+### Step 1 — Download and verify every release file
 
-```bash
-curl -L -o openmhc-full.zip \
-  -H "X-Dataverse-key: <your-token>" \
-  "https://dataverse.harvard.edu/api/access/dataset/:persistentId/?persistentId=<doi>"
-```
+Follow the inventory procedure above, preserving directory labels. Keep the packaged `dataset_version.json` with the files.
 
-### Step 2 — Extract the outer ZIP
+### Step 2 — Prepare the release tree
 
 ```bash
 CACHE="$HOME/.cache/openmhc/data-full"
 mkdir -p "$CACHE"
-unzip openmhc-full.zip -d "$CACHE"
 ```
+
+Place the verified release files under `$CACHE`, keeping `archives/` and `data/`. If using a previously downloaded and independently verified ZIP, extract it here first. Do not mix releases or overwrite an existing installation.
 
 ### Step 3 — Copy metadata into the cache root
 
@@ -163,11 +173,13 @@ cat "$CACHE/archives/minute_trajectory_full.tar.gz.part-"* | tar -xz -C "$CACHE/
 
 Extracted footprint is roughly 100–500 GB depending on whether you include `minute_trajectory/`. Only `daily_hf/`, `daily_hourly_hf/`, and `hourly_trajectory/` are read by the public eval API; the others mirror the canonical Dataverse layout.
 
-### Step 5 — Write the dataset version marker
+### Step 5 — Check the packaged dataset marker
 
 ```bash
-python -c "import openmhc; openmhc.write_dataset_marker('$CACHE', version='full')"
+python -c "import openmhc; print(openmhc.read_dataset_marker('$CACHE'))"
 ```
+
+The marker must declare `version="full"`, `n_users=11894` and retain its supplied revision. Promote a marker under `data/` only after checking that it does not conflict with a root marker.
 
 If you want the marker to also pin the row count of `processed/daily_hf` (cheap extra check the resolver will validate):
 

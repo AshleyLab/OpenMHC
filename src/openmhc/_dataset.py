@@ -7,7 +7,7 @@ the DOI or directory layout.
 Two versions are available:
 
 - ``"xs"`` — 593-user subset suitable for quickstarts and smoke tests (~1.9 GB)
-- ``"full"`` — full 11,894-user release (~38 GB, not yet published)
+- ``"full"`` — full 11,894-user release (~38 GB)
 
 Large benchmark payloads are always resolved from one explicit dataset root:
 
@@ -17,7 +17,7 @@ Large benchmark payloads are always resolved from one explicit dataset root:
 If neither is provided, OpenMHC raises instead of silently falling back to a
 cache directory.
 
-Every dataset root carries a ``dataset_version.json`` marker file written by
+Every dataset root carries a ``dataset_version.json`` marker file preserved by
 :func:`download_dataset`. The marker pins the version and expected user count
 so the resolver can fail loudly if a directory ever ends up holding mismatched
 contents (e.g. an XS bundle whose split file got renamed to the canonical
@@ -27,27 +27,32 @@ contents (e.g. an XS bundle whose split file got renamed to the canonical
 
 from __future__ import annotations
 
+import gzip
+import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import tarfile
 import tempfile
+import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
-from pathlib import Path
+from datetime import datetime
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 _DATAVERSE_BASE = "https://dataverse.harvard.edu"
 
-# Harvard Dataverse's zip-download service (rserve) rejects the default
-# ``Python-urllib/x.y`` User-Agent with HTTP 403, so send an explicit one.
+# Identify the client explicitly for Dataverse access requests.
 _USER_AGENT = "openmhc/0.1.0 (+https://github.com/AshleyLab/myheartcounts-dataset)"
 
 # DOIs per version. Set to None for versions that haven't been published yet.
 _VERSION_DOIS: dict[str, str | None] = {
-    "xs": "doi:10.7910/DVN/ZYMJF6",
-    "full": None,  # doi:10.7910/DVN/XNBITM — set once the Dataverse deposit is public
+    "xs": "doi:10.7910/DVN/RIKSK4",
+    "full": "doi:10.7910/DVN/XNBITM",
 }
 
 # Expected user count per version (sum across train/validation/test in the
@@ -98,6 +103,7 @@ def write_dataset_marker(
     *,
     n_users: int | None = None,
     daily_hf_rows: int | None = None,
+    dataset_revision: str | None = None,
 ) -> Path:
     """Write a ``dataset_version.json`` marker to an existing dataset root.
 
@@ -113,25 +119,52 @@ def write_dataset_marker(
         n_users: Expected user count across all splits. Defaults to the
             canonical count for ``version``.
         daily_hf_rows: Expected row count of ``processed/daily_hf/``.
-            Optional; if omitted the resolver skips that check.
+            Preserved if omitted for the same dataset size; cleared when
+            switching between Full and XS unless explicitly supplied.
+        dataset_revision: Canonical data revision as a UTC timestamp ending in Z,
+            for example ``2026-10-31T14:32:07Z``. Omission preserves an existing
+            revision. Legacy markers without a revision remain readable.
 
     Returns:
         Path to the written marker file.
     """
-    if version not in EXPECTED_N_USERS:
+    if not isinstance(version, str) or version not in EXPECTED_N_USERS:
         raise ValueError(f"version must be one of {sorted(EXPECTED_N_USERS)}, got {version!r}")
     root_path = Path(root).expanduser().resolve()
     if not root_path.exists():
         raise FileNotFoundError(f"dataset root does not exist: {root_path}")
-    payload: dict = {
-        "version": version,
-        "n_users": int(n_users) if n_users is not None else EXPECTED_N_USERS[version],
-    }
-    if daily_hf_rows is not None:
-        payload["daily_hf_rows"] = int(daily_hf_rows)
     marker = root_path / DATASET_VERSION_FILENAME
+    payload = read_dataset_marker(root_path) if marker.exists() else {}
+    if payload.get("version") != version:
+        payload.pop("daily_hf_rows", None)
+    payload.update(
+        version=version,
+        n_users=n_users if n_users is not None else EXPECTED_N_USERS[version],
+    )
+    if dataset_revision is not None:
+        payload["dataset_revision"] = dataset_revision
+    if daily_hf_rows is not None:
+        payload["daily_hf_rows"] = daily_hf_rows
+    _validate_marker_counts(payload)
+    _validate_dataset_revision(payload)
     marker.write_text(json.dumps(payload, indent=2) + "\n")
     return marker
+
+
+def _validate_dataset_revision(payload: dict) -> None:
+    """Accept legacy markers and validate any supplied UTC revision timestamp."""
+    if "dataset_revision" not in payload:
+        return
+    revision = payload["dataset_revision"]
+    if not isinstance(revision, str) or not re.fullmatch(
+        r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,6})?Z",
+        revision,
+    ):
+        raise ValueError("dataset_revision must be a UTC timestamp ending in Z")
+    try:
+        datetime.fromisoformat(revision[:-1] + "+00:00")
+    except ValueError as exc:
+        raise ValueError("dataset_revision must be a valid UTC timestamp") from exc
 
 
 def read_dataset_marker(root: str | Path) -> dict:
@@ -156,7 +189,7 @@ def read_dataset_marker(root: str | Path) -> dict:
             f"Missing dataset version marker: {marker}\n\n"
             "Every OpenMHC dataset root must contain a `dataset_version.json` "
             "file declaring which release ('xs' or 'full') lives there. "
-            "`download_dataset` writes this automatically; for a pre-existing "
+            "`download_dataset` preserves the packaged marker; for a pre-existing "
             "root, run:\n"
             "    openmhc.write_dataset_marker(root, version='xs')  # or 'full'\n"
         )
@@ -166,12 +199,21 @@ def read_dataset_marker(root: str | Path) -> dict:
         raise ValueError(f"malformed dataset marker {marker}: {exc}") from exc
     if not isinstance(payload, dict) or "version" not in payload:
         raise ValueError(f"dataset marker {marker} is missing required 'version' field")
-    if payload["version"] not in EXPECTED_N_USERS:
+    if not isinstance(payload["version"], str) or payload["version"] not in EXPECTED_N_USERS:
         raise ValueError(
             f"dataset marker {marker} has unknown version "
             f"{payload['version']!r}; expected one of {sorted(EXPECTED_N_USERS)}"
         )
+    _validate_marker_counts(payload)
+    _validate_dataset_revision(payload)
     return payload
+
+
+def _validate_marker_counts(payload: dict) -> None:
+    """Reject invalid counts consistently on marker reads and writes."""
+    for field, minimum in (("n_users", 1), ("daily_hf_rows", 0)):
+        if field in payload and (type(payload[field]) is not int or payload[field] < minimum):
+            raise ValueError(f"dataset marker {field} must be an integer >= {minimum}")
 
 
 def download_dataset(
@@ -181,8 +223,11 @@ def download_dataset(
 ) -> Path:
     """Download the OpenMHC dataset from Harvard Dataverse.
 
-    Fetches the dataset's ZIP bundle from the Dataverse access API, extracts
-    it into the local cache, and returns the path. If the dataset is
+    Fetches the latest published file inventory, downloads each original file
+    with size/checksum verification, and extracts into a staging directory on
+    the destination filesystem. Only a successful installation is moved into
+    place. This avoids the dataset-ZIP service, which can omit restricted files
+    or exceed the server's bundle size limit. If the dataset is
     restricted, supply your Dataverse API token via ``api_token=`` or the
     ``DATAVERSE_API_TOKEN`` environment variable.
 
@@ -198,11 +243,12 @@ def download_dataset(
         Path to the downloaded dataset directory.
 
     Raises:
-        ValueError: If ``version`` is unknown or not yet published.
+        ValueError: If the version, release metadata, checksum or layout is invalid.
+        PermissionError: If restricted files require a token or access is denied.
         FileExistsError: If the destination already contains files. Download to
             a fresh directory, validate it, then select that root instead.
     """
-    if version not in _VERSION_DOIS:
+    if not isinstance(version, str) or version not in _VERSION_DOIS:
         raise ValueError(f"version must be one of {sorted(_VERSION_DOIS)}, got {version!r}")
     doi = _VERSION_DOIS[version]
     if doi is None:
@@ -218,57 +264,164 @@ def download_dataset(
             "Download the complete release into a new directory, then select it "
             "with data_dir= or MHC_DATA_DIR. Existing roots are not repaired in place."
         )
-    target.mkdir(parents=True, exist_ok=True)
-
+    target.parent.mkdir(parents=True, exist_ok=True)
     token = api_token or os.getenv("DATAVERSE_API_TOKEN")
-    headers = {"User-Agent": _USER_AGENT}
-    if token:
-        headers["X-Dataverse-key"] = token
-    url = f"{_DATAVERSE_BASE}/api/access/dataset/:persistentId/?persistentId={doi}"
-
     print(f"Downloading {version!r} dataset ({doi}) → {target}")
-    req = urllib.request.Request(url, headers=headers)
-    with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp:
-        archive_path = tmp.name
-        try:
-            with urllib.request.urlopen(req) as resp:
-                shutil.copyfileobj(resp, tmp)
-        except Exception:
-            os.unlink(archive_path)
-            raise
-
-    try:
-        _extract_archive_recursive(Path(archive_path), target)
-    finally:
-        os.unlink(archive_path)
-
-    if version == "xs":
-        _post_process_xs(target)
-    elif version == "full":
-        _post_process_full(target)
-
-    write_dataset_marker(target, version)
-
+    # Staging beside the destination keeps the final move on one filesystem.
+    with tempfile.TemporaryDirectory(prefix=".openmhc-download-", dir=target.parent) as scratch:
+        stage = Path(scratch) / "dataset"
+        stage.mkdir()
+        _download_release(doi, stage, token)
+        _validate_requested_marker(stage, version)
+        _unpack_nested_archives(stage)
+        if version == "xs":
+            _post_process_xs(stage)
+        else:
+            _post_process_full(stage)
+        _validate_requested_marker(stage, version)
+        # Replace an empty destination atomically; a populated one is refused.
+        stage.replace(target)
     print(f"Done. Reuse this root via MHC_DATA_DIR={target} or data_dir={target!s}.")
     return target
+
+
+def _validate_requested_marker(root: Path, version: str) -> None:
+    """Require the packaged identity to agree with the requested release."""
+    markers = [read_dataset_marker(p) for p in (root, root / "data")
+               if (p / DATASET_VERSION_FILENAME).exists()]
+    if not markers:
+        raise ValueError("Downloaded release is missing its dataset marker")
+    for marker in markers:
+        if marker["version"] != version or marker.get("n_users") != EXPECTED_N_USERS[version]:
+            raise ValueError(f"Dataset marker does not match requested {version!r} release")
+    if len(markers) == 2 and markers[0] != markers[1]:
+        raise ValueError("Conflicting dataset markers at bundle root and data/")
+
+
+def _open_dataverse(url: str, token: str | None):
+    """Open a bounded-time request without forwarding credentials on redirects."""
+    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    if token:
+        request.add_unredirected_header("X-Dataverse-key", token)
+    try:
+        return urllib.request.urlopen(request, timeout=60)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise PermissionError(
+                "Dataverse denied access. Check the release's access requirements "
+                "and supply an authorized api_token or DATAVERSE_API_TOKEN."
+            ) from exc
+        raise
+
+
+def _relative_path(name: str) -> Path:
+    """Accept portable relative paths, never traversal or absolute paths."""
+    if (not isinstance(name, str) or not name or "\\" in name or ":" in name
+            or "\x00" in name or name.startswith("/") or ".." in name.split("/")):
+        raise ValueError(f"Unsafe archive/release path: {name!r}")
+    path = PurePosixPath(name)
+    if not path.parts:
+        raise ValueError(f"Empty archive/release path: {name!r}")
+    return Path(*path.parts)
+
+
+def _release_files(payload: dict, doi: str) -> list[tuple[Path, int, int, str, str, bool]]:
+    """Validate and pin file IDs, paths, sizes and checksums from one release."""
+    release = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(release, dict):
+        raise ValueError("Invalid Dataverse release metadata")
+    if (release.get("versionState") != "RELEASED"
+            or release.get("datasetPersistentId") != doi):
+        raise ValueError("Dataverse metadata is not the requested published release")
+    files = release.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError("Published release has no file inventory")
+    entries, paths, ids = [], set(), set()
+    for item in files:
+        if not isinstance(item, dict) or not isinstance(item.get("dataFile"), dict):
+            raise ValueError("Invalid Dataverse file metadata")
+        data = item["dataFile"]
+        label = item.get("label")
+        if not isinstance(label, str) or "/" in label:
+            raise ValueError("Invalid release filename")
+        directory = item.get("directoryLabel", "")
+        if not isinstance(directory, str) or type(item.get("restricted", False)) is not bool:
+            raise ValueError("Invalid release directory or restriction flag")
+        path = _relative_path(f"{directory}/{label}" if directory else label)
+        size, file_id = data.get("filesize"), data.get("id")
+        if type(size) is not int or size < 0 or type(file_id) is not int or file_id <= 0:
+            raise ValueError(f"Invalid release file size/id: {path}")
+        if path in paths or file_id in ids or any(p in paths for p in path.parents):
+            raise ValueError(f"Duplicate or conflicting release file: {path}")
+        if any(path in p.parents for p in paths):
+            raise ValueError(f"Conflicting release directory: {path}")
+        checksum = data.get("checksum", {})
+        if not isinstance(checksum, dict):
+            raise ValueError(f"Missing release checksum for {path}")
+        algorithm = str(checksum.get("type", "")).lower().replace("-", "")
+        digest = str(checksum.get("value", "")).lower()
+        if algorithm not in {"md5", "sha1", "sha256", "sha512"}:
+            raise ValueError(f"Unsupported release checksum for {path}")
+        digest_length = hashlib.new(algorithm).digest_size * 2
+        if not re.fullmatch(rf"[0-9a-f]{{{digest_length}}}", digest):
+            raise ValueError(f"Invalid release checksum for {path}")
+        paths.add(path)
+        ids.add(file_id)
+        entries.append((path, file_id, size, algorithm, digest, bool(item.get("restricted"))))
+    if not {Path(DATASET_VERSION_FILENAME), Path("data") / DATASET_VERSION_FILENAME} & paths:
+        raise ValueError("Published release inventory is missing its dataset marker")
+    return entries
+
+
+def _download_release(doi: str, dest: Path, token: str | None) -> None:
+    """Download every inventoried original file, failing on omissions or corruption."""
+    query = urllib.parse.urlencode({"persistentId": doi})
+    url = f"{_DATAVERSE_BASE}/api/datasets/:persistentId/versions/:latest-published?{query}"
+    with _open_dataverse(url, token) as response:
+        files = _release_files(json.load(response), doi)
+    if not token and any(entry[-1] for entry in files):
+        raise PermissionError("This release contains restricted files; supply an authorized Dataverse API token")
+    for path, file_id, size, algorithm, expected, _ in files:
+        target = dest / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        digest, received = hashlib.new(algorithm), 0
+        url = f"{_DATAVERSE_BASE}/api/access/datafile/{file_id}?format=original"
+        with _open_dataverse(url, token) as response, target.open("xb") as output:
+            while chunk := response.read(1024 * 1024):
+                received += len(chunk)
+                if received > size:
+                    raise ValueError(f"Download size mismatch for {path}")
+                digest.update(chunk)
+                output.write(chunk)
+        if received != size or digest.hexdigest() != expected:
+            raise ValueError(f"Download size/checksum mismatch for {path}")
 
 
 def _extract_archive_recursive(archive: Path, dest: Path) -> None:
     """Extract ``archive`` into ``dest``, recursively unpacking nested archives.
 
-    Dataverse's dataset-access endpoint always wraps files in an outer zip,
-    so a tar.gz upload comes back as zip-of-tarball. After extracting the
-    outer archive, any inner ``.tar``, ``.tar.gz``, ``.tgz``, or ``.zip``
+    Supports existing ZIP bundles containing uploaded tarballs. After
+    extracting the outer archive, any inner ``.tar``, ``.tar.gz``, ``.tgz``, or ``.zip``
     files are unpacked in place and removed.
     """
     _extract_one(archive, dest)
-    # Walk dest and unpack any nested archives the outer extract produced.
-    for path in list(dest.rglob("*")):
-        if not path.is_file():
-            continue
-        if _looks_like_archive(path):
-            _extract_one(path, path.parent)
-            path.unlink(missing_ok=True)
+    _unpack_nested_archives(dest)
+
+
+def _unpack_nested_archives(dest: Path) -> None:
+    """Unpack each newly revealed archive, with a bound on nesting depth."""
+    for _ in range(32):
+        archives = sorted(p for p in dest.rglob("*") if p.is_file() and _looks_like_archive(p))
+        if not archives:
+            return
+        for path in archives:
+            target = path.parent
+            # Full HDF5 archives contain bare files; XS contains hdf5/.
+            if path.name == "hdf5_sharable_2026_full.tar.gz":
+                target = path.parent / "hdf5"
+            _extract_one(path, target)
+            path.unlink()
+    raise ValueError("Archive nesting exceeds 32 levels")
 
 
 def _looks_like_archive(path: Path) -> bool:
@@ -286,18 +439,87 @@ def _extract_one(archive: Path, dest: Path) -> None:
     """Extract a single archive (zip / tar / tar.gz) into ``dest``.
 
     Detects format via the magic-byte sniffers in :mod:`zipfile` and
-    :mod:`tarfile` so the file extension doesn't matter — handy for the
-    Dataverse download which we save as ``.bin``.
+    :mod:`tarfile` so the file extension does not need to identify the format.
     """
     if zipfile.is_zipfile(archive):
         with zipfile.ZipFile(archive) as zf:
-            zf.extractall(dest)
+            for member in zf.infolist():
+                target = _extraction_target(dest, member.filename)
+                if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                    raise ValueError("Archive links are not supported")
+                if member.is_dir():
+                    target.mkdir(parents=True, exist_ok=True)
+                else:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with zf.open(member) as source, target.open("xb") as output:
+                        shutil.copyfileobj(source, output)
         return
     if tarfile.is_tarfile(archive):
-        with tarfile.open(archive) as tf:
-            tf.extractall(dest)
+        with archive.open("rb") as stream:
+            magic = stream.read(2)
+            stream.seek(0)
+            if magic == b"\x1f\x8b":
+                _extract_gzip_tar(stream, dest)
+            else:
+                with tarfile.open(fileobj=stream, mode="r|*") as tf:
+                    _extract_tar_members(tf, dest)
         return
     raise ValueError(f"could not detect archive format for {archive!r}; expected zip or tar/tar.gz")
+
+
+def _extraction_target(dest: Path, name: str) -> Path:
+    """Keep members inside the destination even if an existing parent is a link."""
+    target = dest / _relative_path(name)
+    if not target.resolve().is_relative_to(dest.resolve()):
+        raise ValueError(f"Archive path escapes destination: {name!r}")
+    if any(p.is_symlink() for p in (target, *target.parents) if p != dest and p.is_relative_to(dest)):
+        raise ValueError(f"Archive path follows a link: {name!r}")
+    return target
+
+
+def _extract_tar_members(archive: tarfile.TarFile, dest: Path) -> None:
+    """Extract regular files/directories without overwrites, links or special files."""
+    for member in archive:
+        if member.isdir() and member.name in (".", "./"):
+            continue
+        target = _extraction_target(dest, member.name)
+        if member.isdir():
+            target.mkdir(parents=True, exist_ok=True)
+        elif member.isfile():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.extractfile(member) as source, target.open("xb") as output:
+                shutil.copyfileobj(source, output)
+        else:
+            raise ValueError(f"Unsupported archive member type: {member.name}")
+
+
+def _extract_gzip_tar(stream, dest: Path) -> None:
+    """Read through the gzip trailer so truncation and checksum errors surface."""
+    with gzip.GzipFile(fileobj=stream, mode="rb") as uncompressed:
+        with tarfile.open(fileobj=uncompressed, mode="r|") as archive:
+            _extract_tar_members(archive, dest)
+        while uncompressed.read(1024 * 1024):
+            pass
+
+
+_METADATA_SUBDIRS = ("splits", "labels", "forecasting_sample_index", "imputation")
+
+
+def _validate_install_layout(dest: Path) -> None:
+    """Reject metadata collisions and conflicting markers before moving files."""
+    targets = set()
+    for source, target in _layout_moves(dest):
+        if target.exists() or target.is_symlink() or target in targets:
+            raise FileExistsError(
+                f"Cannot install {source}: conflicting destination {target}. "
+                "Extract or download the complete release into a fresh directory; "
+                "do not mix files from different releases."
+            )
+        targets.add(target)
+    markers = [read_dataset_marker(root) for root in (dest, dest / "data")
+               if (root / DATASET_VERSION_FILENAME).exists()]
+    if len(markers) == 2 and markers[0] != markers[1]:
+        raise ValueError("Conflicting dataset markers at bundle root and data/")
 
 
 def _post_process_xs(dest: Path) -> None:
@@ -306,129 +528,122 @@ def _post_process_xs(dest: Path) -> None:
     The Dataverse XS deposit lays files out with directory labels: large
     HuggingFace Arrow / HDF5 archives under ``archives/`` and metadata under
     ``data/`` (``data/processed``, ``data/labels``, ``data/splits``,
-    ``data/forecasting_sample_index``, ``data/imputation``). After the outer zip and the nested
+    ``data/forecasting_sample_index``, ``data/imputation``). After the
     tarballs are extracted, this moves everything to the canonical paths the
     evaluation API expects (``processed/daily_hf``, ``splits/``, ``labels/``,
     ``forecasting_sample_index/``, ``hourly_trajectory/``, …) and removes the
     now-empty staging directories.
     """
-    # Detect metadata collisions before moving any extracted files. Keeping old
-    # root schemas while silently leaving the new release under data/ is unsafe.
-    metadata_subdirs = ("splits", "labels", "forecasting_sample_index", "imputation")
-    for sub in metadata_subdirs:
-        source, target = dest / "data" / sub, dest / sub
-        if source.is_dir() and target.exists():
-            raise FileExistsError(
-                f"Cannot install dataset metadata from {source}: {target} already exists. "
-                "Extract or download the complete release into a fresh directory; "
-                "do not mix files from different releases."
-            )
+    _validate_install_layout(dest)
 
-    processed = dest / "processed"
-    processed.mkdir(parents=True, exist_ok=True)
-
-    archives = dest / "archives"
     data = dest / "data"
-
-    # 1. Large archives: archives/<name> -> canonical location.
-    _archive_targets = {
-        "daily_hf": processed / "daily_hf",
-        "daily_hourly_hf": processed / "daily_hourly_hf",
-        "hourly_trajectory": dest / "hourly_trajectory",
-        "minute_trajectory": dest / "minute_trajectory",
-        "hdf5": dest / "hdf5",
-    }
-    for name, target in _archive_targets.items():
-        source = archives / name
-        if source.is_dir() and not target.exists():
-            target.parent.mkdir(parents=True, exist_ok=True)
-            source.rename(target)
-
-    # 2. Metadata subtrees: data/<sub> -> root/<sub>.
-    for sub in metadata_subdirs:
-        source = data / sub
-        target = dest / sub
-        if source.is_dir() and not target.exists():
-            source.rename(target)
-
-    # 3. Loose processed metadata: data/processed/* -> processed/.
-    data_processed = data / "processed"
-    if data_processed.is_dir():
-        for item in data_processed.iterdir():
-            target = processed / item.name
-            if not target.exists():
-                item.rename(target)
-
-    # 4. Move normalization_stats.json from bundle root into processed/.
-    root_stats = dest / "normalization_stats.json"
-    if root_stats.exists() and not (processed / "normalization_stats.json").exists():
-        root_stats.rename(processed / "normalization_stats.json")
-
-    # 5. Remove now-empty staging directories.
-    for staging in (archives, data / "processed", data):
+    source_marker = data / DATASET_VERSION_FILENAME
+    target_marker = dest / DATASET_VERSION_FILENAME
+    if source_marker.exists():
+        if target_marker.exists():
+            source_marker.unlink()  # Equality was checked before any moves.
+        else:
+            source_marker.rename(target_marker)
+    for source, target in _layout_moves(dest):
+        target.parent.mkdir(parents=True, exist_ok=True)
+        source.rename(target)
+    for staging in (dest / "archives", data / "processed", data):
         if staging.is_dir() and not any(staging.iterdir()):
             staging.rmdir()
+    if (dest / "archives").exists():
+        raise ValueError("Unrecognized or conflicting files remain in archives/")
+
+
+def _layout_moves(dest: Path) -> list[tuple[Path, Path]]:
+    """Plan layout normalization once for both collision checks and moves."""
+    moves = [(dest / "data" / name, dest / name) for name in _METADATA_SUBDIRS]
+    for name in ("daily_hf", "daily_hourly_hf", "hourly_trajectory", "minute_trajectory", "hdf5"):
+        parent = dest / "processed" if name in ("daily_hf", "daily_hourly_hf") else dest
+        moves.append((dest / "archives" / name, parent / name))
+    processed = dest / "data" / "processed"
+    if processed.is_dir():
+        moves.extend((p, dest / "processed" / p.name) for p in processed.iterdir())
+    moves.append((dest / "normalization_stats.json", dest / "processed" / "normalization_stats.json"))
+    return [(source, target) for source, target in moves if source.exists()]
 
 
 def _post_process_full(dest: Path) -> None:
     """Handle multi-part archives left in place after full bundle extraction.
 
-    Dataverse serves each ``*.tar.gz.part-NN`` as a separate file.  After the
-    outer ZIP is extracted these parts sit in ``archives/`` and must be
+    Dataverse serves each ``*.tar.gz.part-NN`` as a separate file. Downloaded
+    parts sit in ``archives/`` and must be
     concatenated and streamed into ``tarfile`` before they can be unpacked.
     The part files are removed on success.
     """
-    # Masks are loose release files, so install them even when there are no
-    # multipart archives (for example, an already extracted bundle).
-    source, target = dest / "data" / "imputation", dest / "imputation"
-    if source.is_dir():
-        if target.exists():
-            raise FileExistsError(
-                f"Cannot install dataset masks from {source}: {target} already exists. "
-                "Extract or download the complete release into a fresh directory; "
-                "do not mix files from different releases."
-            )
-        source.rename(target)
-
+    _validate_install_layout(dest)
     archives_dir = dest / "archives"
-    if not archives_dir.exists():
-        return
 
     # Group part files by their base tar.gz name.
     groups: dict[str, list[Path]] = {}
     for part in archives_dir.glob("*.tar.gz.part-*"):
-        base = part.name.split(".part-")[0] + ".tar.gz"
+        base = part.name.split(".part-")[0]
         groups.setdefault(base, []).append(part)
 
     # Resolve each group's extraction target from the archive name.
     _dest_map = {
         "daily_hf_full.tar.gz": dest / "processed",
+        "daily_hourly_hf_full.tar.gz": dest / "processed",
         "hdf5_sharable_2026_full.tar.gz": dest / "hdf5",
         "minute_trajectory_full.tar.gz": dest,
+        "hourly_trajectory_full.tar.gz": dest,
     }
 
+    # Check every group before consuming any parts, including groups encountered
+    # after an otherwise valid archive. Numbering starts at zero without gaps.
     for base_name, parts in groups.items():
-        parts.sort()
-        target_dir = _dest_map.get(base_name, dest)
+        if base_name not in _dest_map:
+            raise ValueError(f"Unsupported Full multipart archive: {base_name}")
+        suffixes = [path.name.rsplit(".part-", 1)[1] for path in parts]
+        if any(not re.fullmatch(r"[0-9]+", suffix) for suffix in suffixes):
+            raise ValueError(f"Invalid multipart suffix for {base_name}")
+        parts.sort(key=lambda path: int(path.name.rsplit(".part-", 1)[1]))
+        numbers = [int(path.name.rsplit(".part-", 1)[1]) for path in parts]
+        if numbers != list(range(len(parts))):
+            raise ValueError(f"Missing or duplicate multipart segments for {base_name}")
+
+    for base_name, parts in groups.items():
+        target_dir = _dest_map[base_name]
         target_dir.mkdir(parents=True, exist_ok=True)
 
         # Stream concatenated parts through tarfile without writing a temp file.
         class _CatStream(io.RawIOBase):
             def __init__(self, paths: list[Path]) -> None:
-                self._files = [open(p, "rb") for p in paths]
+                super().__init__()
+                self._paths = paths
+                self._current = None
                 self._idx = 0
 
+            def readable(self) -> bool:
+                return True
+
+            def close(self) -> None:
+                if self._current is not None:
+                    self._current.close()
+                super().close()
+
             def readinto(self, b: bytearray) -> int:
-                while self._idx < len(self._files):
-                    n = self._files[self._idx].readinto(b)
+                while self._idx < len(self._paths):
+                    if self._current is None:
+                        self._current = self._paths[self._idx].open("rb")
+                    n = self._current.readinto(b)
                     if n:
                         return n
-                    self._files[self._idx].close()
+                    self._current.close()
+                    self._current = None
                     self._idx += 1
                 return 0
 
-        with tarfile.open(fileobj=io.BufferedReader(_CatStream(parts))) as tf:
-            tf.extractall(target_dir)
+        with io.BufferedReader(_CatStream(parts)) as stream:
+            _extract_gzip_tar(stream, target_dir)
 
         for part in parts:
             part.unlink(missing_ok=True)
+
+    # Full shares XS's metadata and single-archive layout, including masks.
+    # Normalize it even when the bundle contains no multipart archives.
+    _post_process_xs(dest)
