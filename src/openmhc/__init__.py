@@ -24,6 +24,7 @@ from openmhc._data_utils import (
     load_sample_metadata,
 )
 from openmhc._dataset import (
+    DatasetGuestbookRequiredError,
     Version,
     data_dir,
     download_dataset,
@@ -59,6 +60,7 @@ __all__ = [
     "evaluate_imputation",
     "evaluate_forecasting",
     # Dataset
+    "DatasetGuestbookRequiredError",
     "download_dataset",
     "data_dir",
     "read_dataset_marker",

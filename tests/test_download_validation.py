@@ -3,11 +3,13 @@
 import io
 import json
 import tarfile
+import urllib.error
 import urllib.parse
 import zipfile
 
 import pytest
 
+from openmhc import DatasetGuestbookRequiredError
 from openmhc import _dataset as dataset
 
 
@@ -217,6 +219,104 @@ def test_failed_transfer_never_installs_partial_root(tmp_path, monkeypatch, data
     assert root.exists() == existing
     assert not root.exists() or not list(root.iterdir())
     assert not list(tmp_path.glob(".openmhc-download-*"))
+
+
+@pytest.mark.parametrize("version", ["xs", "full"])
+@pytest.mark.parametrize("token", [None, "fixture-token"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_guestbook_rejection_gives_manual_setup_guidance(
+    tmp_path, monkeypatch, dataverse_response, version, token, existing,
+):
+    """Translate the real Dataverse rejection, even after a file was staged."""
+    release_response(dataverse_response, version=version)
+    root = tmp_path / "installed"
+    if existing:
+        root.mkdir()
+    guestbook_id = 729 if version == "xs" else 728
+    body = json.dumps({
+        "status": "ERROR",
+        "message": "You may not download this file without the required "
+                   f"Guestbook response for guestbookID {guestbook_id}.",
+    }).encode()
+    original = dataset.urllib.request.urlopen
+    rejection = None
+
+    def fail(request, **kwargs):
+        nonlocal rejection
+        if "/datafile/2?" in request.full_url:
+            rejection = urllib.error.HTTPError(
+                request.full_url, 400, "Bad Request", {}, io.BytesIO(body),
+            )
+            raise rejection
+        return original(request, **kwargs)
+
+    monkeypatch.setattr(dataset.urllib.request, "urlopen", fail)
+    with pytest.raises(DatasetGuestbookRequiredError) as caught:
+        dataset.download_dataset(version, root, api_token=token)
+    assert isinstance(caught.value, PermissionError)
+    assert caught.value.__cause__ is rejection
+    message = str(caught.value)
+    doi = dataset._VERSION_DOIS[version]
+    assert doi in message
+    assert f"https://doi.org/{doi.removeprefix('doi:')}" in message
+    assert "https://github.com/AshleyLab/OpenMHC/blob/main/docs/manual-dataset-setup.md" in message
+    assert "download the original release files through the browser" in message
+    assert "does not authorize" in message
+    assert root.exists() == existing
+    assert not root.exists() or not list(root.iterdir())
+    assert not list(tmp_path.glob(".openmhc-download-*"))
+
+
+@pytest.mark.parametrize("code,body", [
+    (400, b'{"status":"ERROR","message":"Invalid file format"}'),
+    (400, b"<html>Bad request</html>"),
+    (400, b"\xff"),
+    (400, b"[]"),
+    (400, b"null"),
+    (400, b'{"message": null}'),
+    (404, b'{"message":"required Guestbook response"}'),
+    (500, b'{"message":"required Guestbook response"}'),
+])
+def test_other_http_errors_keep_status_headers_and_body(
+    tmp_path, monkeypatch, dataverse_response, code, body,
+):
+    """Unrelated failures remain inspectable HTTP errors, including bad JSON."""
+    release_response(dataverse_response)
+    original = dataset.urllib.request.urlopen
+    failed_url = None
+
+    def fail(request, **kwargs):
+        nonlocal failed_url
+        if "/datafile/" in request.full_url:
+            failed_url = request.full_url
+            raise urllib.error.HTTPError(
+                failed_url, code, "original reason", {"X-Error-ID": "fixture"}, io.BytesIO(body),
+            )
+        return original(request, **kwargs)
+
+    monkeypatch.setattr(dataset.urllib.request, "urlopen", fail)
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        dataset.download_dataset("xs", tmp_path / "installed")
+    with caught.value as error:
+        assert error.code == code
+        assert error.url == failed_url
+        assert error.reason == "original reason"
+        assert error.headers["X-Error-ID"] == "fixture"
+        assert error.read() == body
+    assert not (tmp_path / "installed").exists()
+    assert not list(tmp_path.glob(".openmhc-download-*"))
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_access_denied_still_raises_permission_error(tmp_path, monkeypatch, code):
+    """Authentication and file permissions keep their existing token guidance."""
+    def fail(request, **kwargs):
+        raise urllib.error.HTTPError(request.full_url, code, "denied", {}, None)
+
+    monkeypatch.setattr(dataset.urllib.request, "urlopen", fail)
+    with pytest.raises(PermissionError, match="api_token") as caught:
+        dataset.download_dataset("xs", tmp_path / "installed")
+    assert not isinstance(caught.value, DatasetGuestbookRequiredError)
 
 
 @pytest.mark.parametrize("problem", ["draft", "wrong_doi", "empty", "no_marker", "duplicate", "path", "checksum", "size", "id", "file_parent"])

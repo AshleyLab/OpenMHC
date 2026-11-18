@@ -1,10 +1,26 @@
 # Manual Dataset Setup
 
-Use this guide if you cannot use `openmhc.download_dataset()` — for example, on air-gapped clusters, behind a corporate proxy, or when you already have the raw Dataverse bundle on disk.
+Use this guide if you cannot use `openmhc.download_dataset()` — for example, when the release requires a guestbook response, on air-gapped clusters, behind a corporate proxy, or when you already have the raw Dataverse bundle on disk.
 
 The OpenMHC dataset is distributed through Harvard Dataverse. Use the [XS deposit](https://doi.org/10.7910/DVN/RIKSK4) or [Full deposit](https://doi.org/10.7910/DVN/XNBITM), subject to its terms and file permissions.
 
-For an air-gapped machine, the simplest route is to run `openmhc.download_dataset` on a connected machine, then transfer the complete installed root and verify the transferred files. The steps below are for manual assembly from original release files.
+For an air-gapped machine, install on a connected machine first (using this guide
+or `openmhc.download_dataset` when the release permits API downloads), then
+transfer the complete installed root and verify the transferred files.
+
+## Releases requiring a guestbook response
+
+If the helper raises `openmhc.DatasetGuestbookRequiredError`, open the XS or Full
+deposit linked above in your browser. Complete its required guestbook form and
+download the original release files through the website. Obtain permission for
+any restricted files as well. Use the inventory checks below to confirm that
+you have every file, including all multipart segments, before extraction.
+
+The helper does not collect or submit guestbook answers. Completing the form in
+a browser does not authorize its subsequent API GET requests, so proceed with
+manual installation rather than retrying the helper. Dataverse's
+[API guestbook flow](https://guides.dataverse.org/en/latest/api/dataaccess.html#basic-file-access)
+requires submitting answers with the download request.
 
 ## Obtain a complete release inventory
 
@@ -16,7 +32,7 @@ curl -f -H "X-Dataverse-key: <your-token>" \
   -o release-inventory.json
 ```
 
-For Full, replace `RIKSK4` with `XNBITM`. Omit the token header when no authentication is needed. For every entry in `data.files`, download `/api/access/datafile/<dataFile.id>?format=original` into its `directoryLabel/label` path. Check its byte count against `dataFile.filesize` and its checksum against `dataFile.checksum`. All entries must be present and verified, including every multipart segment. Request access if a file is restricted; do not continue with only accessible files.
+For Full, replace `RIKSK4` with `XNBITM`. Omit the token header when no authentication is needed. For every entry in `data.files`, obtain the original file through the website if a guestbook response is required; otherwise download `/api/access/datafile/<dataFile.id>?format=original`. Place each file at its `directoryLabel/label` path. Check its byte count against `dataFile.filesize` and its checksum against `dataFile.checksum`. All entries must be present and verified, including every multipart segment. Request access if a file is restricted; do not continue with only accessible files.
 
 Keep this inventory for the entire installation. If you already have a ZIP bundle, compare its complete extracted file inventory, sizes and checksums with that same release inventory before unpacking inner archives. Do not forward API tokens to another host when following download redirects.
 

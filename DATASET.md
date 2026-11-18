@@ -49,7 +49,16 @@ Or set the `DATAVERSE_API_TOKEN` environment variable. Get a token at [your Data
 
 ### Manual download
 
-If you'd rather not use the helper (corporate proxies, air-gapped clusters), see [`docs/manual-dataset-setup.md`](docs/manual-dataset-setup.md) for inventory checks, extraction and marker handling.
+If Dataverse requires a guestbook response, `download_dataset` raises
+`openmhc.DatasetGuestbookRequiredError` (a `PermissionError`) with the selected
+release's DOI and manual setup link. Open that release in your browser, complete
+the required form, and download all original release files there. An API token
+alone does not satisfy this requirement, and completing the browser form does
+not authorize the installer's subsequent API requests.
+
+Follow [`docs/manual-dataset-setup.md`](docs/manual-dataset-setup.md) to verify and
+install those files. The same guide covers corporate proxies, air-gapped
+clusters and previously downloaded bundles.
 
 ## Layout
 

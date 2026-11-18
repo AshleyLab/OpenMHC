@@ -68,6 +68,10 @@ DATASET_VERSION_FILENAME = "dataset_version.json"
 Version = Literal["xs", "full"]
 
 
+class DatasetGuestbookRequiredError(PermissionError):
+    """Dataverse requires a guestbook response; download and install manually."""
+
+
 def _missing_dataset_root_error() -> ValueError:
     return ValueError(
         "OpenMHC dataset root is required for large benchmark payloads. "
@@ -229,7 +233,9 @@ def download_dataset(
     place. This avoids the dataset-ZIP service, which can omit restricted files
     or exceed the server's bundle size limit. If the dataset is
     restricted, supply your Dataverse API token via ``api_token=`` or the
-    ``DATAVERSE_API_TOKEN`` environment variable.
+    ``DATAVERSE_API_TOKEN`` environment variable. Releases requiring a guestbook
+    response must be downloaded through Dataverse's website and installed
+    manually; the exception includes the release and setup links.
 
     Args:
         version: ``"xs"`` (593-user quickstart subset, ~1.9 GB) or
@@ -244,6 +250,7 @@ def download_dataset(
 
     Raises:
         ValueError: If the version, release metadata, checksum or layout is invalid.
+        DatasetGuestbookRequiredError: If Dataverse requires a guestbook response.
         PermissionError: If restricted files require a token or access is denied.
         FileExistsError: If the destination already contains files. Download to
             a fresh directory, validate it, then select that root instead.
@@ -298,7 +305,7 @@ def _validate_requested_marker(root: Path, version: str) -> None:
         raise ValueError("Conflicting dataset markers at bundle root and data/")
 
 
-def _open_dataverse(url: str, token: str | None):
+def _open_dataverse(url: str, token: str | None, *, doi: str):
     """Open a bounded-time request without forwarding credentials on redirects."""
     request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
     if token:
@@ -306,6 +313,29 @@ def _open_dataverse(url: str, token: str | None):
     try:
         return urllib.request.urlopen(request, timeout=60)
     except urllib.error.HTTPError as exc:
+        if exc.code == 400:
+            with exc:
+                body = exc.read()
+            try:
+                payload = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                payload = None
+            message = payload.get("message") if isinstance(payload, dict) else None
+            if (isinstance(message, str)
+                    and "required guestbook response" in message.lower()):
+                raise DatasetGuestbookRequiredError(
+                    f"This release ({doi}) requires a Dataverse guestbook response. "
+                    f"Open https://doi.org/{doi.removeprefix('doi:')}, complete the "
+                    "required form, and download the original release files through "
+                    "the browser. Follow the manual setup instructions to install them: "
+                    "https://github.com/AshleyLab/OpenMHC/blob/main/docs/manual-dataset-setup.md. "
+                    "Completing the browser form does not authorize this installer's "
+                    "API download requests."
+                ) from exc
+            # Preserve the status, headers and readable body of unrelated errors.
+            raise urllib.error.HTTPError(
+                exc.url, exc.code, exc.msg, exc.headers, io.BytesIO(body)
+            ) from exc
         if exc.code in (401, 403):
             raise PermissionError(
                 "Dataverse denied access. Check the release's access requirements "
@@ -377,7 +407,7 @@ def _download_release(doi: str, dest: Path, token: str | None) -> None:
     """Download every inventoried original file, failing on omissions or corruption."""
     query = urllib.parse.urlencode({"persistentId": doi})
     url = f"{_DATAVERSE_BASE}/api/datasets/:persistentId/versions/:latest-published?{query}"
-    with _open_dataverse(url, token) as response:
+    with _open_dataverse(url, token, doi=doi) as response:
         files = _release_files(json.load(response), doi)
     if not token and any(entry[-1] for entry in files):
         raise PermissionError("This release contains restricted files; supply an authorized Dataverse API token")
@@ -386,7 +416,7 @@ def _download_release(doi: str, dest: Path, token: str | None) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         digest, received = hashlib.new(algorithm), 0
         url = f"{_DATAVERSE_BASE}/api/access/datafile/{file_id}?format=original"
-        with _open_dataverse(url, token) as response, target.open("xb") as output:
+        with _open_dataverse(url, token, doi=doi) as response, target.open("xb") as output:
             while chunk := response.read(1024 * 1024):
                 received += len(chunk)
                 if received > size:
