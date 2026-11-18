@@ -1,7 +1,11 @@
 # Recorded Hugging Face revisions for NeurIPS 2026 release preparation.
 # Dataset selections come from the release discussion; no Dataverse checks were run.
 schema_version: 1
-intended_tag: neurips-2026
+package_version: '1.0.0'
+intended_tag: v1.0.0
+intended_tag_aliases:
+- neurips-2026
+release_title: OpenMHC v1.0.0 — NeurIPS 2026
 recorded_at_utc: '2026-11-18T20:46:05.386097+00:00'
 inspected_code_commit: 6f141d353fea2514541ed286e3edb2e589ff467e
 paper:

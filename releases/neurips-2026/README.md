@@ -1,4 +1,18 @@
-# NeurIPS 2026 artifact versions
+# OpenMHC v1.0.0 — NeurIPS 2026
+
+This snapshot is prepared for the following software release:
+
+| Item | Value |
+| --- | --- |
+| Python package version | `1.0.0` |
+| Release tag | `v1.0.0` |
+| Conference tag | `neurips-2026` |
+| GitHub release title | OpenMHC v1.0.0 — NeurIPS 2026 |
+
+When publishing, create both tags on the same merged commit. Keep both tags
+fixed; subsequent software releases receive new version tags. After publication,
+check out `v1.0.0` (or `neurips-2026`) before following the instructions below.
+The package version is independent of the Dataverse dataset versions.
 
 [manifest.yaml](manifest.yaml) records the Hugging Face revisions selected for
 the NeurIPS 2026 release preparation: 14 OpenMHC model bundles, the upstream
