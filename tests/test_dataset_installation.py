@@ -2,12 +2,76 @@
 
 import io
 import json
+import tarfile
 import zipfile
 
 import numpy as np
 import pytest
 
 from openmhc import _dataset
+
+
+@pytest.mark.parametrize("version", ["full", "xs"])
+def test_download_installs_release_layout_and_preserves_revision(tmp_path, monkeypatch, dataverse_response, version):
+    """Real multipart/single-part layouts reach every loader's canonical path."""
+    payload = io.BytesIO()
+    marker = {"version": version, "n_users": _dataset.EXPECTED_N_USERS[version],
+              "dataset_revision": "2026-11-01T16:55:53.793587Z"}
+    stores = {"daily_hf": "processed/daily_hf", "daily_hourly_hf": "processed/daily_hourly_hf",
+              "hourly_trajectory": "hourly_trajectory", "minute_trajectory": "minute_trajectory",
+              "hdf5_sharable_2026": "hdf5"}
+    with zipfile.ZipFile(payload, "w") as outer:
+        outer.writestr("dataset_version.json", json.dumps(marker))
+        split_name = "sharable_users_seed42_2026" + ("_xs" if version == "xs" else "") + ".json"
+        split = {"train": [f"fixture_{i}" for i in range(marker["n_users"])],
+                 "validation": [], "test": []}
+        outer.writestr("data/splits/" + split_name, json.dumps(split))
+        for folder in ["labels", "splits", "forecasting_sample_index", "processed", "imputation/masks"]:
+            outer.writestr(f"data/{folder}/sentinel.json", "metadata")
+        for family in stores:
+            stream = io.BytesIO()
+            member = ("participant.h5" if version == "full" else "hdf5/participant.h5") if family == "hdf5_sharable_2026" else family + "/sentinel.arrow"
+            with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+                info = tarfile.TarInfo(member)
+                info.size = len(b"sensor payload")
+                archive.addfile(info, io.BytesIO(b"sensor payload"))
+            data = stream.getvalue()
+            name = f"archives/{family}_{version}.tar.gz"
+            if version == "full" and family in ["daily_hf", "minute_trajectory", "hdf5_sharable_2026"]:
+                midpoint = len(data) // 2
+                outer.writestr(name + ".part-00", data[:midpoint])
+                outer.writestr(name + ".part-01", data[midpoint:])
+            else:
+                outer.writestr(name, data)
+    monkeypatch.setitem(_dataset._VERSION_DOIS, version, "doi:test/fixture")
+    dataverse_response(payload.getvalue(), version)
+    root = _dataset.download_dataset(version, dest=tmp_path / "installed")
+    for family, folder in stores.items():
+        filename = "participant.h5" if family == "hdf5_sharable_2026" else "sentinel.arrow"
+        assert (root / folder / filename).read_bytes() == b"sensor payload"
+    for folder in ["labels", "splits", "forecasting_sample_index", "processed", "imputation/masks"]:
+        assert (root / folder / "sentinel.json").read_text() == "metadata"
+    assert _dataset.read_dataset_marker(root) == marker
+    from openmhc._evaluate import _DatasetPaths
+
+    paths = _DatasetPaths.resolve(root, version=version)
+    paths.require("daily_hf", "daily_hourly_hf", "hourly_trajectory", "labels_dir",
+                  "forecasting_sample_index_dir", "splits_file")
+    assert paths.root == root
+    assert not (root / "archives").exists()
+    assert not (root / "data").exists()
+
+
+@pytest.mark.parametrize("marker", [{"version": "full", "n_users": 11894}, {"version": "xs", "n_users": 11894}])
+def test_download_rejects_conflicting_release_marker(tmp_path, monkeypatch, dataverse_response, marker):
+    """Reject mismatched release identity instead of silently rewriting it."""
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("dataset_version.json", json.dumps(marker))
+    dataverse_response(payload.getvalue(), "xs")
+    with pytest.raises(ValueError, match="marker"):
+        _dataset.download_dataset("xs", dest=tmp_path / "installed")
+    assert not (tmp_path / "installed").exists()
 
 
 def test_download_rejects_nonempty_root_before_network(tmp_path, monkeypatch):
@@ -48,7 +112,7 @@ def test_extraction_collision_fails_before_any_moves(tmp_path, subdir):
 
 
 @pytest.mark.parametrize("precreate", [False, True])
-def test_download_installs_complete_schemas_in_fresh_root(tmp_path, monkeypatch, precreate):
+def test_download_installs_complete_schemas_in_fresh_root(tmp_path, monkeypatch, dataverse_response, precreate):
     """Both a new destination and an empty directory receive the incoming schemas."""
     root = tmp_path / "download"
     if precreate:
@@ -63,7 +127,7 @@ def test_download_installs_complete_schemas_in_fresh_root(tmp_path, monkeypatch,
         for filename, value in schemas.items():
             archive.writestr("data/labels/" + filename, json.dumps(value))
     payload = stream.getvalue()
-    monkeypatch.setattr(_dataset.urllib.request, "urlopen", lambda request: io.BytesIO(payload))
+    dataverse_response(payload, "xs")
     assert _dataset.download_dataset("xs", dest=root) == root
     for filename, value in schemas.items():
         assert json.loads((root / "labels" / filename).read_text()) == value
@@ -73,7 +137,7 @@ def test_download_installs_complete_schemas_in_fresh_root(tmp_path, monkeypatch,
 
 @pytest.mark.parametrize("version", ["xs", "full"])
 @pytest.mark.parametrize("layout", ["data", "canonical", "nested_zip"])
-def test_download_installs_masks_at_loader_path(tmp_path, monkeypatch, version, layout):
+def test_download_installs_masks_at_loader_path(tmp_path, monkeypatch, dataverse_response, version, layout):
     """Install every released mask unchanged where the evaluation loader looks."""
     from openmhc._constants import MASKING_SCENARIOS
     from openmhc._evaluate import _dataset_masks_dir
@@ -102,9 +166,9 @@ def test_download_installs_masks_at_loader_path(tmp_path, monkeypatch, version, 
         with zipfile.ZipFile(outer, "w") as archive:
             archive.writestr("release.zip", payload)
         payload = outer.getvalue()
-    # Exercise the Full installer without claiming that its public DOI is enabled.
+    # Keep this layout test independent of the configured release DOI.
     monkeypatch.setitem(_dataset._VERSION_DOIS, version, "doi:test/fixture")
-    monkeypatch.setattr(_dataset.urllib.request, "urlopen", lambda request: io.BytesIO(payload))
+    dataverse_response(payload, version)
 
     assert _dataset.download_dataset(version, dest=root) == root
     installed = _dataset_masks_dir(root, version)

@@ -123,3 +123,50 @@ def write_age_dataset(write_label_schemas):
 def age_label_environment(label_schema_environment):
     """Reuse schema setup and restore both configured and unconfigured states."""
     return label_schema_environment
+
+
+@pytest.fixture
+def dataverse_response(monkeypatch):
+    """Serve a synthetic published inventory and its original files without network."""
+    import hashlib
+    import io
+    import urllib.parse
+    import zipfile
+    from pathlib import PurePosixPath
+
+    from openmhc import _dataset
+
+    monkeypatch.delenv("DATAVERSE_API_TOKEN", raising=False)
+
+    def configure(bundle, version="xs", *, add_marker=True):
+        with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
+            contents = {name: archive.read(name) for name in archive.namelist() if not name.endswith("/")}
+        if add_marker and not {"dataset_version.json", "data/dataset_version.json"} & contents.keys():
+            contents["dataset_version.json"] = json.dumps(
+                {"version": version, "n_users": _dataset.EXPECTED_N_USERS[version]}
+            ).encode()
+        files, bodies = [], {}
+        for file_id, (name, content) in enumerate(contents.items(), 1):
+            path = PurePosixPath(name)
+            files.append({"label": path.name, "directoryLabel": str(path.parent) if str(path.parent) != "." else "",
+                          "restricted": False, "dataFile": {"id": file_id, "filesize": len(content),
+                          "checksum": {"type": "MD5", "value": hashlib.md5(content).hexdigest()}}})
+            bodies[file_id] = content
+        result = {"metadata": {"data": {"versionState": "RELEASED",
+                  "datasetPersistentId": _dataset._VERSION_DOIS[version], "files": files}},
+                  "bodies": bodies, "requests": []}
+
+        def respond(request, *, timeout):
+            assert timeout > 0
+            result["requests"].append(request)
+            url = urllib.parse.urlparse(request.full_url)
+            if url.path == "/api/datasets/:persistentId/versions/:latest-published":
+                return io.BytesIO(json.dumps(result["metadata"]).encode())
+            assert url.path.startswith("/api/access/datafile/")
+            assert urllib.parse.parse_qs(url.query) == {"format": ["original"]}
+            return io.BytesIO(result["bodies"][int(url.path.rsplit("/", 1)[-1])])
+
+        monkeypatch.setattr(_dataset.urllib.request, "urlopen", respond)
+        return result
+
+    return configure

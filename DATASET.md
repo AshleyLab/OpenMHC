@@ -1,10 +1,11 @@
 # OpenMHC Dataset
 
-The MyHeartCounts (MHC) wearable benchmark dataset is hosted separately from this code repo on **Harvard Dataverse**. It will be made available to all qualified researchers free of charge upon acceptance of the paper.
+The MyHeartCounts (MHC) wearable benchmark dataset is hosted separately from this code repo on **Harvard Dataverse**. Access is governed by the selected release’s Dataverse terms and file permissions.
 
 | Dataset | Size | Use case | DOI |
 |---|---|---|---|
-| OpenMHC | ~38 GB | Benchmark evaluation, leaderboard submissions | Available upon paper acceptance |
+| OpenMHC | ~38 GB | Benchmark evaluation, leaderboard submissions | [10.7910/DVN/XNBITM](https://doi.org/10.7910/DVN/XNBITM) |
+| OpenMHC-XS | ~1.9 GB | Development subset, 593 users | [10.7910/DVN/RIKSK4](https://doi.org/10.7910/DVN/RIKSK4) |
 
 The API additionally recognises a small development subset (`version="xs"`, 593 users) used for quickstarts and smoke tests. It is a subsample of the same release rather than a separate dataset.
 
@@ -18,11 +19,13 @@ import openmhc
 # Development subset — 593 users, ~1.9 GB
 openmhc.download_dataset(version="xs", dest="~/.cache/openmhc/data-xs")
 
-# Full dataset (upon paper acceptance — 11,894 users, ~38 GB) — distinct root
+# Full dataset — 11,894 users, ~38 GB — distinct root
 openmhc.download_dataset(version="full", dest="~/.cache/openmhc/data-full")
 ```
 
-`download_dataset` writes a `dataset_version.json` marker into `dest` so the eval API can verify it later.
+`download_dataset` reads the latest published file inventory, downloads each original file by ID, and verifies its size and checksum before extraction. It preserves the packaged `dataset_version.json`, including its revision. It does not use Dataverse's dataset-ZIP endpoint, which can omit files because of access restrictions or server size limits.
+
+Installation is staged beside `dest` on the same filesystem. The destination is populated only after downloads, extraction and marker checks succeed; failures discard staging and leave an existing empty destination untouched. Allow space for the downloaded archives and extracted files together. Transfers have a 60-second socket timeout; interrupted installations must be restarted, without resume support.
 
 OpenMHC never picks a dataset path implicitly. Pass `dest=` (download) / `data_dir=` (eval) or set `MHC_DATA_DIR` first:
 
@@ -37,14 +40,25 @@ export MHC_DATA_DIR=~/.cache/openmhc/data-full  # Full for leaderboard submissio
 If the dataset is restricted (DUA-gated), pass your Dataverse API token:
 
 ```python
-openmhc.download_dataset(version="xs", api_token="<your-token>")
+openmhc.download_dataset(version="full", dest="~/.cache/openmhc/data-full", api_token="<your-token>")
 ```
+
+The token must have permission to download every file in the selected release. The installer fails if any file is inaccessible; it does not install a public subset as a complete dataset. Tokens are not forwarded to redirected storage URLs.
 
 Or set the `DATAVERSE_API_TOKEN` environment variable. Get a token at [your Dataverse account page](https://dataverse.harvard.edu/dataverseuser.xhtml?selectTab=apiTokenTab).
 
 ### Manual download
 
-If you'd rather not use the helper (corporate proxies, air-gapped clusters), see [`docs/manual-dataset-setup.md`](docs/manual-dataset-setup.md) for the full per-version recipe (curl + extract + write marker).
+If Dataverse requires a guestbook response, `download_dataset` raises
+`openmhc.DatasetGuestbookRequiredError` (a `PermissionError`) with the selected
+release's DOI and manual setup link. Open that release in your browser, complete
+the required form, and download all original release files there. An API token
+alone does not satisfy this requirement, and completing the browser form does
+not authorize the installer's subsequent API requests.
+
+Follow [`docs/manual-dataset-setup.md`](docs/manual-dataset-setup.md) to verify and
+install those files. The same guide covers corporate proxies, air-gapped
+clusters and previously downloaded bundles.
 
 ## Layout
 
@@ -85,7 +99,7 @@ The eval API derives every large payload above from a single dataset root, resol
 
 ### The `dataset_version.json` marker
 
-Every dataset root must contain a `dataset_version.json` marker. `download_dataset` writes one automatically; for a hand-assembled root, write one with:
+Every dataset root must contain a `dataset_version.json` marker. `download_dataset` preserves and validates the marker supplied with the release. For a legacy hand-assembled root without a marker, write one with:
 
 ```python
 import openmhc
@@ -126,8 +140,8 @@ variant, and the Full masks must already be installed at the path above.
 
 The label schema files (`label_types.json`, `ordinal_dictionary.json`, `validity_config.json`) load together from `<dataset_root>/labels/`, alongside the participant payloads. Label configuration requires all three schemas and raises an error if any is missing or invalid JSON; there is no repository fallback. Legacy schema environment variables that point outside the selected schema set raise an error; unset them and select the root with `data_dir=` or `MHC_DATA_DIR`. Per-file payload overrides remain supported. `task_feature_exclusions.json` stays in the repository because it defines benchmark behavior.
 
-Schemas are restricted files on Dataverse, so reading the authoritative label
-names, types and encodings requires dataset access. The public repository keeps
+Schema access follows the selected release’s Dataverse permissions; restricted
+schemas require authorized dataset access. The public repository keeps
 historical survey documentation, not a current machine-readable label list.
 
 ### Existing dataset roots

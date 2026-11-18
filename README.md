@@ -86,7 +86,7 @@ export MHC_DATA_DIR=~/.cache/openmhc/data-xs
 ```
 
 Every dataset root must contain `dataset_version.json`. `download_dataset`
-writes it automatically, and the evaluation API cross-checks it against the
+preserves the packaged marker, and the evaluation API cross-checks it against the
 `version=` argument so an `xs` run cannot accidentally score against a full-data
 root, or vice versa.
 
