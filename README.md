@@ -21,6 +21,7 @@ What can this repository and the OpenMHC dataset be useful for?
 
 
 - **Dataset:** see [DATASET.md](DATASET.md)
+- **NeurIPS 2026 artifact versions:** see the [recorded Hugging Face revisions and loading instructions](releases/neurips-2026/README.md).
 
 ## Intended Use
 

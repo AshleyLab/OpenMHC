@@ -1,0 +1,277 @@
+# Recorded Hugging Face revisions for NeurIPS 2026 release preparation.
+# Dataset selections come from the release discussion; no Dataverse checks were run.
+schema_version: 1
+intended_tag: neurips-2026
+recorded_at_utc: '2026-11-18T20:46:05.386097+00:00'
+inspected_code_commit: 6f141d353fea2514541ed286e3edb2e589ff467e
+paper:
+  status: todo_official_neurips_publication
+  url: null
+datasets:
+  full:
+    doi: 10.7910/DVN/XNBITM
+    version: '1.4'
+  xs:
+    doi: 10.7910/DVN/RIKSK4
+    version: '1.2'
+huggingface:
+  models:
+    MyHeartCounts/openmhc-brits-imp:
+      revision: 88fba6e1eb409fff4113e53c1b250587f1db775d
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: BRITS.pypots
+      files:
+      - BRITS.pypots
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-chronos2-fc:
+      revision: 8a8ddaadabd4a7988279268f399d509effe18548
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: checkpoint
+      files:
+      - checkpoint/config.json
+      - checkpoint/model.safetensors
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-dlinear-7day-imp:
+      revision: 9428e88d3be0f9a4c58a02d17205aaf596b3fae6
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.pypots
+      files:
+      - model.pypots
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-dlinear-fc:
+      revision: 101fc456f4c0bfcd2ad697fda330390b160fd8dc
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.pypots
+      files:
+      - model.pypots
+      - openmhc_manifest.json
+      - standard_scaler_stats.json
+      - training_config.json
+    MyHeartCounts/openmhc-dlinear-imp:
+      revision: 4b1ef824209fbb291473a2a74745dd6f08e91ef1
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: DLinear.pypots
+      files:
+      - DLinear.pypots
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-fedformer-imp:
+      revision: 620612e81f252561984271d6379c79feaa7a40e4
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.pypots
+      files:
+      - fourier_modes.json
+      - model.pypots
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-lsm2-daily:
+      revision: aacb09cf634ad78977b8263e49cb70ebb677751f
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: loss=0.2706.ckpt
+      files:
+      - loss=0.2706.ckpt
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-lsm2-weekly:
+      revision: c4362d0ccfc8986e25f5db9d41caef3aca072535
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.ckpt
+      files:
+      - model.ckpt
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-lsm2-weekly-sparse:
+      revision: e6dbd5578b5a9377c1411a81e875947b1c44840a
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: loss=0.2464.ckpt
+      files:
+      - loss=0.2464.ckpt
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-mixlinear-fc:
+      revision: 40b5a3b099ad6d2c408b917be853c0f8132c65be
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.pypots
+      files:
+      - model.pypots
+      - openmhc_manifest.json
+      - standard_scaler_stats.json
+      - training_config.json
+    MyHeartCounts/openmhc-segrnn-fc:
+      revision: b3237e44c2856d46dd209be6899b09d3e1427ac6
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.pypots
+      files:
+      - model.pypots
+      - openmhc_manifest.json
+      - standard_scaler_stats.json
+      - training_config.json
+    MyHeartCounts/openmhc-timesnet-imp:
+      revision: 34228c08be306ef07361b6c6cf92eac7412912ea
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: TimesNet.pypots
+      files:
+      - TimesNet.pypots
+      - normalization_stats.json
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-toto-fc:
+      revision: 563dc6b810204011b45450857c540877fb6b9697
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.ckpt
+      files:
+      - model.ckpt
+      - openmhc_manifest.json
+    MyHeartCounts/openmhc-wbm-dp:
+      revision: c8cf35419812ee89edd6f92b49e73bdc2eea5e7b
+      source: openmhc_bundle
+      manifest: openmhc_manifest.json
+      checkpoint: model.ckpt
+      files:
+      - model.ckpt
+      - normalization_stats.json
+      - openmhc_manifest.json
+    amazon/chronos-2:
+      revision: 29ec3766d36d6f73f0696f85560a422f50e8498c
+      source: upstream_base_model
+      files:
+      - config.json
+      - model.safetensors
+    Datadog/Toto-Open-Base-1.0:
+      revision: 0411ceb27bdf7fc3e4892e99edc8ad08192dc3c5
+      source: upstream_base_model
+      files:
+      - config.json
+      - figures/architecture.png
+      - figures/rankings.png
+      - model.safetensors
+  results:
+    repo_id: MyHeartCounts/OpenMHC-leaderboard-data
+    revision: c4dc96b8dbf7af67704afaef179a2a613920952c
+    files:
+    - README.md
+    - SCHEMA.md
+    - demographics.meta.json
+    - demographics.parquet
+    - downstream/README.md
+    - downstream/SCHEMA.md
+    - downstream/bootstrap/README.md
+    - downstream/bootstrap/SCHEMA.md
+    - downstream/bootstrap/draws.meta.json
+    - downstream/bootstrap/draws.parquet
+    - downstream/chronos2.meta.json
+    - downstream/chronos2.parquet
+    - downstream/gru_d.meta.json
+    - downstream/gru_d.parquet
+    - downstream/linear.meta.json
+    - downstream/linear.parquet
+    - downstream/lsm2.meta.json
+    - downstream/lsm2.parquet
+    - downstream/multirocket.meta.json
+    - downstream/multirocket.parquet
+    - downstream/toto.meta.json
+    - downstream/toto.parquet
+    - downstream/wbm.meta.json
+    - downstream/wbm.parquet
+    - downstream/xgboost.meta.json
+    - downstream/xgboost.parquet
+    - forecasting/README.md
+    - forecasting/SCHEMA.md
+    - forecasting/autoARIMA.meta.json
+    - forecasting/autoARIMA.parquet
+    - forecasting/autoETS.meta.json
+    - forecasting/autoETS.parquet
+    - forecasting/bootstrap/README.md
+    - forecasting/bootstrap/SCHEMA.md
+    - forecasting/bootstrap/draws.meta.json
+    - forecasting/bootstrap/draws.parquet
+    - forecasting/chronos2_finetuned.meta.json
+    - forecasting/chronos2_finetuned.parquet
+    - forecasting/chronos2_zeroshot.meta.json
+    - forecasting/chronos2_zeroshot.parquet
+    - forecasting/dlinear.meta.json
+    - forecasting/dlinear.parquet
+    - forecasting/mixlinear.meta.json
+    - forecasting/mixlinear.parquet
+    - forecasting/seasonal_naive.meta.json
+    - forecasting/seasonal_naive.parquet
+    - forecasting/segrnn.meta.json
+    - forecasting/segrnn.parquet
+    - forecasting/toto_finetuned_ctx4096.meta.json
+    - forecasting/toto_finetuned_ctx4096.parquet
+    - forecasting/toto_zeroshot_ctx4096.meta.json
+    - forecasting/toto_zeroshot_ctx4096.parquet
+    - imputation/README.md
+    - imputation/SCHEMA.md
+    - imputation/bootstrap/README.md
+    - imputation/bootstrap/SCHEMA.md
+    - imputation/bootstrap/draws.meta.json
+    - imputation/bootstrap/draws.parquet
+    - imputation/bootstrap_with_dense_weekly/README.md
+    - imputation/bootstrap_with_dense_weekly/SCHEMA.md
+    - imputation/bootstrap_with_dense_weekly/draws.meta.json
+    - imputation/bootstrap_with_dense_weekly/draws.parquet
+    - imputation/brits.meta.json
+    - imputation/brits.parquet
+    - imputation/dlinear.meta.json
+    - imputation/dlinear.parquet
+    - imputation/dlinear_weekly.meta.json
+    - imputation/dlinear_weekly.parquet
+    - imputation/fedformer.meta.json
+    - imputation/fedformer.parquet
+    - imputation/linear.meta.json
+    - imputation/linear.parquet
+    - imputation/locf.meta.json
+    - imputation/locf.parquet
+    - imputation/lsm2.meta.json
+    - imputation/lsm2.parquet
+    - imputation/lsm2_weekly.meta.json
+    - imputation/lsm2_weekly.parquet
+    - imputation/lsm2_weekly_sparse.meta.json
+    - imputation/lsm2_weekly_sparse.parquet
+    - imputation/mean.meta.json
+    - imputation/mean.parquet
+    - imputation/mode.meta.json
+    - imputation/mode.parquet
+    - imputation/personalized_mean.meta.json
+    - imputation/personalized_mean.parquet
+    - imputation/personalized_mode.meta.json
+    - imputation/personalized_mode.parquet
+    - imputation/personalized_temporal_mean.meta.json
+    - imputation/personalized_temporal_mean.parquet
+    - imputation/temporal_mean.meta.json
+    - imputation/temporal_mean.parquet
+    - imputation/temporal_mode.meta.json
+    - imputation/temporal_mode.parquet
+    - imputation/timesnet.meta.json
+    - imputation/timesnet.parquet
+  leaderboard:
+    repo_id: MyHeartCounts/OpenMHC
+    revision: c549bf0fcc204b3b2209f539f5e66224e97dd6a5
+    files:
+    - Dockerfile
+    - README.md
+    - app.py
+    - leaderboard_compute.py
+    - logo.png
+    - requirements.txt
+verification:
+  huggingface_commit_and_file_metadata: checked
+  openmhc_bundle_manifest_references: checked
+  weight_downloads_and_hashes: not_performed
+  model_loading_and_benchmark_runs: not_performed
+  dataverse_inventories_and_access: not_performed
