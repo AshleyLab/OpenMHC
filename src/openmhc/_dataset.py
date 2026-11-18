@@ -47,7 +47,7 @@ from typing import Literal
 _DATAVERSE_BASE = "https://dataverse.harvard.edu"
 
 # Identify the client explicitly for Dataverse access requests.
-_USER_AGENT = "openmhc/0.1.0 (+https://github.com/AshleyLab/myheartcounts-dataset)"
+_USER_AGENT = "openmhc/1.0.0 (+https://github.com/AshleyLab/OpenMHC)"
 
 # DOIs per version. Set to None for versions that haven't been published yet.
 _VERSION_DOIS: dict[str, str | None] = {
