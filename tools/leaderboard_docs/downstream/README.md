@@ -121,12 +121,19 @@ MHC_DATA_DIR=<data> PYTHONPATH=src python scripts/paper_results/downstream/dev/p
 for m in linear multirocket xgboost lsm2 gru_d wbm toto chronos2; do
   python tools/upload_leaderboard_substrate.py --dir results/leaderboard_downstream \
     --method "$m" --track downstream --name "<Display>" --type "<Type>" \
-    --submitter "OpenMHC team" --subtrack static --fallback-rate <measured-pooled-rate>
+    --submitter "OpenMHC team" --subtrack static
 done
 
 # (6) Upload the bootstrap-draws reference (-> downstream/bootstrap/).
 python tools/upload_leaderboard_bootstrap.py --dir results/paper --track downstream
 ```
+
+Step (5) reads the measured pooled fallback rate from each adjacent
+`<method>.parquet.meta.json` and uploads it with the predictions in one commit.
+Keep each prediction file and its provenance sidecar together. Missing or invalid
+rates stop the upload. Step (3) requires measured `fallback.json` counts matching
+the exported task cohorts; legacy predictions without counts need evaluation
+before publication.
 
 Steps (2) and (6) keep the bootstrap CIs on the same canonical predictions as the point
 numbers — run them together whenever the substrates change.

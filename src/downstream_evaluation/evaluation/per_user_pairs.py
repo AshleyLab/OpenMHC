@@ -16,6 +16,7 @@ a membership filter of these rows.
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -91,7 +92,9 @@ def write_per_user_pairs_parquet(
     """Serialize the substrate (string keys → category, pairs → float32, zstd).
 
     When ``meta`` is given, also writes the ``<path>.meta.json`` provenance sidecar
-    (e.g. ``method`` / ``baseline`` / ``overall_fallback_rate``).
+    (e.g. ``method`` / ``baseline`` / ``overall_fallback_rate``), with a checksum
+    binding it to these serialized predictions. Rewriting without metadata removes
+    any old sidecar so a previous run's rate cannot survive.
     """
     path = Path(path)
     df = df.copy()
@@ -99,9 +102,16 @@ def write_per_user_pairs_parquet(
         df[col] = df[col].astype("category")
     for col in ("y_true", "y_pred", "y_proba"):
         df[col] = df[col].astype("float32")
+    meta_path = Path(f"{path}.meta.json")
+    meta_path.unlink(missing_ok=True)
     df[PER_USER_PAIRS_PARQUET_COLUMNS].to_parquet(path, index=False, compression="zstd")
     if meta is not None:
-        Path(f"{path}.meta.json").write_text(json.dumps(meta, indent=2))
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        meta = {**meta, "substrate_sha256": digest.hexdigest()}
+        meta_path.write_text(json.dumps(meta, indent=2, allow_nan=False))
 
 
 def read_per_user_pairs_parquet(path: str | Path) -> tuple[pd.DataFrame, dict | None]:

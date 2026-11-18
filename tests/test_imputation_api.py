@@ -851,3 +851,73 @@ class TestApplyFallbackSubstitution:
         # Asked counts: 10 per channel (target spans 10 timesteps on every channel).
         np.testing.assert_array_equal(asked, np.full(N_CHANNELS, 10, dtype=np.int64))
 
+
+
+@pytest.mark.parametrize('use_fill', [False, True])
+@pytest.mark.parametrize('missing_cells', [0, 2])
+def test_fallback_reporting_preserves_substitution_opt_out(tmp_path, use_fill, missing_cells):
+    """Preserve imputation behavior while distinguishing counted zero from disabled tracking."""
+    from imputation_evaluation.evaluation.evaluator import _apply_fallback, _empty_counts
+    from imputation_evaluation.evaluation.pair_writer import (
+        merge_counts_and_fallback,
+        read_fallback_sidecar,
+        write_fallback_sidecar,
+    )
+
+    predictions = np.ones((1, N_CHANNELS, 3), dtype=np.float32)
+    targets = np.ones_like(predictions)
+    predictions[0, 0, :missing_cells] = np.nan
+    before = predictions.copy()
+    fill = np.full(N_CHANNELS, 0.5, dtype=np.float32) if use_fill else None
+    sub, asked = _apply_fallback(predictions, targets, fill)
+    counts = _empty_counts()
+    counts.update(n_total=1, n_applicable=1, fallback_substituted=sub, fallback_asked=asked)
+    write_fallback_sidecar(tmp_path, 'test', {'gap': counts})
+    recorded = read_fallback_sidecar(tmp_path, 'test')['gap']
+    merged = merge_counts_and_fallback(recorded, n_channels=N_CHANNELS)
+    if use_fill:
+        assert sub.sum() == missing_cells
+        assert asked.sum() == predictions.size
+        expected = before.copy()
+        expected[~np.isfinite(expected)] = 0.5
+        np.testing.assert_array_equal(predictions, expected)
+        assert merged['overall_fallback_rate'] == missing_cells / predictions.size
+    else:
+        np.testing.assert_array_equal(predictions, before)
+        assert sub.sum() == asked.sum() == 0
+        assert merged['overall_fallback_rate'] is None
+
+
+@pytest.mark.parametrize('payload', [None, {}, {
+    'fallback_substituted': [0, 0],
+}, {'fallback_substituted': [0], 'fallback_asked': [2, 2]}])
+def test_imputation_missing_counts_remain_unknown(payload):
+    """Incomplete legacy sidecars stay readable but cannot manufacture zero rates."""
+    from imputation_evaluation.evaluation.pair_writer import merge_counts_and_fallback
+
+    assert merge_counts_and_fallback(payload, n_channels=2)['overall_fallback_rate'] is None
+
+
+@pytest.mark.parametrize('sub,asked', [([True, False], [2, 2]), ([0.0, 0.0], [2, 2]),
+                                      ([-1, 0], [2, 2]), ([3, 0], [2, 2])])
+def test_imputation_invalid_counts_are_rejected(sub, asked):
+    """Reject counters that cannot describe measured substitutions."""
+    from imputation_evaluation.evaluation.pair_writer import merge_counts_and_fallback
+
+    with pytest.raises(ValueError, match='fallback counts'):
+        merge_counts_and_fallback({
+            'fallback_substituted': sub, 'fallback_asked': asked,
+        }, n_channels=2)
+
+
+@pytest.mark.parametrize('scenarios', [{}, {'gap': {'test': {}}}, {
+    'gap': {'test': {'overall_fallback_rate': 0.0}, 'val': {}},
+}])
+def test_imputation_result_missing_rate_remains_unknown(scenarios):
+    """The public aggregate must not ignore an unmeasured scenario/split."""
+    from openmhc import ImputationResults
+
+    result = ImputationResults(scenarios=scenarios)
+    assert result.overall_fallback_rate is None
+    with pytest.raises(ValueError, match='measured'):
+        result.to_submission_yaml('m', 't', 'url')

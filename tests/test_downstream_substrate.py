@@ -7,8 +7,10 @@ parquet round-trip.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -32,6 +34,7 @@ def _write_task(pred_dir, method, task, df):
 
 
 def test_build_per_user_pairs_schema(tmp_path):
+    """Build one all-cohort row per participant and task."""
     method = "linear"
     _write_task(
         tmp_path,
@@ -68,6 +71,7 @@ def test_build_per_user_pairs_schema(tmp_path):
 
 
 def test_missing_task_files_are_skipped(tmp_path):
+    """Pool only tasks with saved predictions."""
     _write_task(
         tmp_path,
         "m",
@@ -81,6 +85,7 @@ def test_missing_task_files_are_skipped(tmp_path):
 
 
 def test_write_read_roundtrip_and_meta(tmp_path):
+    """Preserve pairs and bind metadata to the serialized file."""
     _write_task(
         tmp_path,
         "m",
@@ -96,6 +101,9 @@ def test_write_read_roundtrip_and_meta(tmp_path):
     assert list(back.columns) == PER_USER_PAIRS_PARQUET_COLUMNS
     assert meta["method"] == "m"
     assert meta["overall_fallback_rate"] == 0.0
+    assert meta["substrate_sha256"] == hashlib.sha256(p.read_bytes()).hexdigest()
+    write_per_user_pairs_parquet(df, p)
+    assert not Path(f"{p}.meta.json").exists()
     assert str(back["y_proba"].dtype) == "float32"
     assert str(back["method"].dtype) == "category"
 
@@ -112,32 +120,57 @@ def test_fallback_sidecar_roundtrip_and_pool(tmp_path):
     path = write_fallback_sidecar(tmp_path, "wbm", counts)
     assert path == tmp_path / "wbm" / "fallback.json"
     assert read_fallback_sidecar(tmp_path, "wbm") == counts
-    # pooled rate = (3 + 0) / (10 + 5); empty cohort -> 0.0; absent method -> None.
+    # pooled rate = (3 + 0) / (10 + 5); empty cohort -> unknown; absent method -> None.
     assert overall_fallback_rate(read_fallback_sidecar(tmp_path, "wbm")) == 3 / 15
-    assert overall_fallback_rate({}) == 0.0
+    assert overall_fallback_rate({}) is None
     assert read_fallback_sidecar(tmp_path, "linear") is None
 
 
-def test_resolve_fallback_rate_precedence(tmp_path):
-    """The producer resolves an override over the measured sidecar over 0.0."""
+@pytest.fixture
+def producer():
+    """Load the public offline exporter."""
     import importlib.util
-    from pathlib import Path
 
-    from downstream_evaluation.evaluation.predictions_io import write_fallback_sidecar
-
-    repo = Path(__file__).resolve().parents[1]
-    script = repo / "scripts/paper_results/downstream/leaderboard/produce_per_method_per_user_pairs.py"
+    script = Path(__file__).resolve().parents[1] / (
+        "scripts/paper_results/downstream/leaderboard/produce_per_method_per_user_pairs.py"
+    )
     spec = importlib.util.spec_from_file_location("produce_pairs", script)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    return mod
 
-    write_fallback_sidecar(tmp_path, "wbm", {"t": {"n_fallback": 2, "n_test": 8}})
-    # Measured sidecar.
-    assert mod.resolve_fallback_rate(tmp_path, "wbm", {}) == 2 / 8
-    # Explicit override wins over the sidecar.
-    assert mod.resolve_fallback_rate(tmp_path, "wbm", {"wbm": 0.6276}) == 0.6276
-    # No sidecar, no override -> 0.0 (legacy prediction dir).
-    assert mod.resolve_fallback_rate(tmp_path, "linear", {}) == 0.0
+
+def test_resolve_fallback_rate_requires_measured_counts(tmp_path, producer):
+    """Pool counts, including zero, without interpreting missing data as zero."""
+    from downstream_evaluation.evaluation.predictions_io import write_fallback_sidecar
+
+    write_fallback_sidecar(tmp_path, "wbm", {
+        "t": {"n_fallback": 2, "n_test": 8}, "u": {"n_fallback": 1, "n_test": 2},
+    })
+    assert producer.resolve_fallback_rate(tmp_path, "wbm", {"t": 8, "u": 2}) == 3 / 10
+    with pytest.raises(ValueError, match="missing measured"):
+        producer.resolve_fallback_rate(tmp_path, "linear", {"t": 8})
+    write_fallback_sidecar(tmp_path, "linear", {"t": {"n_fallback": 0, "n_test": 8}})
+    assert producer.resolve_fallback_rate(tmp_path, "linear", {"t": 8}) == 0.0
+
+
+@pytest.mark.parametrize("counts,sizes,message", [
+    ({}, {"t": 8}, "missing measured"),
+    ({"t": {"n_fallback": 1, "n_test": 8}}, {"u": 8}, "task set"),
+    ({"t": {"n_fallback": 1, "n_test": 8}}, {"t": 9}, "cohort size"),
+    *[({"t": value}, {"t": 8}, "invalid fallback") for value in (
+        None, {}, {"n_fallback": -1, "n_test": 8}, {"n_fallback": 9, "n_test": 8},
+        {"n_fallback": True, "n_test": 8}, {"n_fallback": 1.5, "n_test": 8},
+        {"n_fallback": 0, "n_test": 0}, {"n_fallback": 1, "n_test": "8"},
+    )],
+])
+def test_producer_rejects_inconsistent_counts(tmp_path, producer, counts, sizes, message):
+    """Reject missing, malformed and mismatched measurement cohorts."""
+    folder = tmp_path / "wbm"
+    folder.mkdir()
+    (folder / "fallback.json").write_text(json.dumps(counts))
+    with pytest.raises(ValueError, match=message):
+        producer.resolve_fallback_rate(tmp_path, "wbm", sizes)
 
 
 def test_producer_runs_from_saved_predictions_alone(tmp_path, monkeypatch):
@@ -159,14 +192,21 @@ def test_producer_runs_from_saved_predictions_alone(tmp_path, monkeypatch):
         "Diabetes",
         pd.DataFrame({"uid": ["u0"], "y_true": [1], "y_pred": [1], "y_proba": [0.9]}),
     )
+    (predictions / "wbm/fallback.json").write_text(json.dumps({
+        "Diabetes": {"n_fallback": 1, "n_test": 1},
+    }))
     argv = ["produce", "--predictions-dir", str(predictions), "--out-dir", str(out)]
     monkeypatch.setattr(sys, "argv", [*argv, "--methods", "wbm"])
     assert mod.main() == 0
-    df, _ = read_per_user_pairs_parquet(out / "wbm.parquet")
+    df, meta = read_per_user_pairs_parquet(out / "wbm.parquet")
+    assert meta["overall_fallback_rate"] == 1.0
     assert set(df["subgroup_attr"]) == set(df["subgroup_value"]) == {"all"}
 
 
-def test_evaluate_prediction_output_needs_no_enrollment_file(label_schema_environment, tmp_path):
+@pytest.mark.parametrize("missing_prediction", [False, True])
+def test_evaluate_prediction_output_needs_no_enrollment_file(
+    label_schema_environment, tmp_path, monkeypatch, missing_prediction
+):
     """A non-Linear method on non-age tasks writes its substrate from the lookup alone."""
     import openmhc
     from downstream_evaluation.data.provider import lookup_filename
@@ -201,8 +241,20 @@ def test_evaluate_prediction_output_needs_no_enrollment_file(label_schema_enviro
             self.n = len(context.user_ids)
 
         def predict(self, data):
-            return np.linspace(0.1, 0.9, self.n)
+            predictions = np.linspace(0.1, 0.9, self.n)
+            if missing_prediction:
+                predictions[0] = np.nan
+            return predictions
 
+    from downstream_evaluation.evaluation.evaluator import (
+        DownstreamEvaluator,
+        _combine_with_fallback,
+    )
+
+    def synthetic_baseline(self, task, ttype, predictions, train_td, test_td):
+        return _combine_with_fallback(predictions, np.full(len(predictions), 0.6), ttype)
+
+    monkeypatch.setattr(DownstreamEvaluator, "_apply_fallback", synthetic_baseline)
     out = tmp_path / "out"
     results = openmhc.evaluate_prediction(
         Constant(), version="xs", tasks=["Diabetes"], data_dir=root, output_dir=out
@@ -212,10 +264,23 @@ def test_evaluate_prediction_output_needs_no_enrollment_file(label_schema_enviro
     assert set(results.per_user_pairs["subgroup_attr"]) == {"all"}
     saved, meta = read_per_user_pairs_parquet(out / "constant.parquet")
     assert set(saved["subgroup_value"]) == {"all"}
-    assert meta["overall_fallback_rate"] == 0.0
+    expected_rate = int(missing_prediction) / 4
+    assert results.overall_fallback_rate == meta["overall_fallback_rate"] == expected_rate
     assert json.loads((out / "constant/fallback.json").read_text()) == {
-        "Diabetes": {"n_fallback": 0, "n_test": 4}
+        "Diabetes": {"n_fallback": int(missing_prediction), "n_test": 4}
     }
+    tools = str(Path(__file__).resolve().parents[1] / "tools")
+    monkeypatch.syspath_prepend(tools)
+    from upload_leaderboard_substrate import resolve_fallback_rate
+
+    assert resolve_fallback_rate(
+        out / "constant.parquet", "constant", "downstream", None, None
+    ) == expected_rate
+    expected_predictions = np.linspace(0.1, 0.9, 4)
+    if missing_prediction:
+        expected_predictions[0] = 0.6
+    np.testing.assert_allclose(saved["y_proba"], expected_predictions, rtol=1e-6)
+    assert saved["y_true"].tolist() == [0, 1, 0, 1]
     assert not (out / "_subgroups.json").exists()
     assert api.STORE._enrollment is None
 
@@ -278,3 +343,39 @@ def test_reduce_substrate_to_point_baseline_invariants(tmp_path):
     cohort = reduce_substrate_to_point(df[df["user_id"].isin(uids[:4])])
     assert cohort["linear"]["skill"]["Overall"] == pytest.approx(0.0, abs=1e-12)
     assert cohort["good"] != res["good"]
+
+
+def test_producer_rejects_duplicate_participant_task_rows(tmp_path, monkeypatch, producer):
+    """Matching counts must not hide a duplicate participant in a task's predictions."""
+    predictions, out = tmp_path / 'predictions', tmp_path / 'out'
+    _write_task(predictions, 'wbm', 'Diabetes', pd.DataFrame({
+        'uid': ['u0', 'u0'], 'y_true': [1, 1], 'y_pred': [1, 1], 'y_proba': [0.9, 0.9],
+    }))
+    (predictions / 'wbm/fallback.json').write_text(json.dumps({
+        'Diabetes': {'n_fallback': 0, 'n_test': 2},
+    }))
+    monkeypatch.setattr(sys, 'argv', [
+        'produce', '--predictions-dir', str(predictions), '--out-dir', str(out), '--methods', 'wbm',
+    ])
+    with pytest.raises(SystemExit, match='duplicate participant-task'):
+        producer.main()
+    assert not (out / 'wbm.parquet').exists()
+
+
+@pytest.mark.parametrize('column', ['y_true', 'y_pred', 'y_proba'])
+@pytest.mark.parametrize('value', [np.nan, np.inf, -np.inf])
+def test_producer_rejects_nonfinite_pairs(tmp_path, monkeypatch, producer, column, value):
+    """Neither missing nor infinite pairs may be published after fallback scoring."""
+    predictions, out = tmp_path / 'predictions', tmp_path / 'out'
+    frame = pd.DataFrame({'uid': ['u0'], 'y_true': [1.0], 'y_pred': [1.0], 'y_proba': [0.9]})
+    frame[column] = value
+    _write_task(predictions, 'wbm', 'Diabetes', frame)
+    (predictions / 'wbm/fallback.json').write_text(json.dumps({
+        'Diabetes': {'n_fallback': 0, 'n_test': 1},
+    }))
+    monkeypatch.setattr(sys, 'argv', [
+        'produce', '--predictions-dir', str(predictions), '--out-dir', str(out), '--methods', 'wbm',
+    ])
+    with pytest.raises(SystemExit, match='non-finite pair'):
+        producer.main()
+    assert not (out / 'wbm.parquet').exists()

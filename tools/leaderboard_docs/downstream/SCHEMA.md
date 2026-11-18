@@ -82,9 +82,14 @@ Tiny display sidecar the leaderboard reads to render the row, produced by
   "type": "Deep Learning",          // category label
   "submitter": "Stanford CS",       // lab / team
   "subtrack": "static",             // static | longitudinal
-  "fallback_rate": 0.0              // fraction substituted with the Linear baseline (optional; "n/a" if absent)
+  "fallback_rate": 0.0              // measured fraction substituted with the Linear baseline
 }
 ```
+
+`results.to_submission_yaml(...)` includes `fallback_rate` from the evaluation
+results. It is the total number of substituted participant-task predictions
+divided by the total number of scored test predictions, pooled across tasks.
+Keep the generated metadata with the prediction file from the same evaluation.
 
 ## Conventions
 
@@ -99,3 +104,12 @@ Submitters open a PR on the dataset with `HfApi().upload_folder(...,
 create_pr=True)` (see the repo README, "Submit to the Leaderboard").
 Maintainers can use `tools/upload_leaderboard_substrate.py --track downstream`
 in the [code repo](https://github.com/AshleyLab/myheartcounts-dataset).
+It requires measured fallback metadata, reads the adjacent `.parquet.meta.json`
+from the exporter, and publishes predictions and display metadata in one commit.
+The renderer can still show "n/a" for older entries without a rate; the uploader
+will not publish a new entry without one.
+
+A measured zero means explicit zero substitutions over a positive evaluation
+count. Missing measurements or an empty evaluation are not zero: new result
+objects expose `None` (JSON `null`), and submission helpers/uploader reject that
+value. Do not replace it with `0.0`; recover recorded counts or rerun evaluation.

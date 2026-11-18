@@ -1,7 +1,9 @@
 """Direct Linear substitution preserves scores and participant alignment."""
 from __future__ import annotations
+
 import numpy as np
 import pytest
+
 from downstream_evaluation.evaluation.evaluator import _combine_with_fallback
 from openmhc import PredictionResults
 
@@ -163,9 +165,9 @@ def test_missing_feature_fails_loud_not_zero_filled():
 def test_prediction_results_fallback_fields_default():
     """PredictionResults stays constructible from records alone (additive fields)."""
     pr = PredictionResults(records=[{"task": "t", "metric": "auprc", "value": 0.5}])
-    assert pr.overall_fallback_rate == 0.0
+    assert pr.overall_fallback_rate is None
     assert pr.fallback_rate == {}
-    assert "overall_fallback_rate=0.0000" in repr(pr)
+    assert "overall_fallback_rate=unknown" in repr(pr)
 
 
 def test_prediction_results_fallback_fields_populated():
@@ -178,3 +180,25 @@ def test_prediction_results_fallback_fields_populated():
     assert pr.fallback_rate == {"task_a": 0.5}
     # Fallback stays out of the metrics table so eval_<method>.csv is unaffected.
     assert "fallback" not in {c for c in pr.to_dataframe().columns}
+
+
+@pytest.mark.parametrize('counts', [None, {'task': {}}, {
+    'task': {'n_test': 10},
+}, {'task': {'n_test': 10, 'n_fallback': 0.5}}])
+def test_downstream_missing_counts_cannot_become_zero(counts):
+    """Pooling requires an explicit integer numerator and denominator per task."""
+    from downstream_evaluation.evaluation.predictions_io import overall_fallback_rate
+
+    with pytest.raises(ValueError):
+        overall_fallback_rate(counts)
+
+
+def test_downstream_empty_and_zero_fallback_are_distinct():
+    """No evaluated predictions is unknown; zero substitutions over ten is measured."""
+    from downstream_evaluation.evaluation.predictions_io import overall_fallback_rate
+
+    assert overall_fallback_rate({}) is None
+    assert overall_fallback_rate({'task': {'n_test': 0, 'n_fallback': 0}}) is None
+    assert overall_fallback_rate({'task': {'n_test': 10, 'n_fallback': 0}}) == 0.0
+    with pytest.raises(ValueError, match='measured'):
+        PredictionResults(records=[]).to_submission_yaml('m', 't', 'url')

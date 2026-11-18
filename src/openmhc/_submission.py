@@ -6,7 +6,7 @@ track's subdirectory:
 
 - ``<track>/<method>.parquet``   — the per-user substrate produced by the eval
 - ``<track>/<method>.meta.json`` — the display sidecar the leaderboard reads
-  (``display_name``, ``type``, ``submitter``, ``subtrack``)
+  (``display_name``, ``type``, ``submitter``, ``subtrack``, ``fallback_rate``)
 
 The maintainers recompute the paired skill score and average
 rank from the substrate during ingestion (LOCF baseline for Track 2, Linear for
@@ -23,6 +23,7 @@ parquet itself is produced by the evaluation run, not by these helpers.
 from __future__ import annotations
 
 import json
+import math
 import re
 
 LEADERBOARD_REPO = "MyHeartCounts/OpenMHC-leaderboard-data"
@@ -42,6 +43,8 @@ def imputation_to_submission_yaml(
     foundation_variant: str = "N/A (not a foundation model)",
     feature_dim: str = "—",
     notes: str = "",
+    *,
+    fallback_rate: float,
 ) -> str:
     """Render the Track 2 (imputation) leaderboard submission packet.
 
@@ -64,6 +67,8 @@ def imputation_to_submission_yaml(
         foundation_variant: Foundation-model variant, for the PR description.
         feature_dim: Latent / embedding dim, or "—".
         notes: Free-form notes for reviewers.
+        fallback_rate: Measured substitution fraction from the evaluation results.
+            Prefer ``results.to_submission_yaml(...)`` to pass it automatically.
 
     Returns:
         Plain-text packet: a copy-paste ``meta.json`` block plus the PR
@@ -84,6 +89,7 @@ def imputation_to_submission_yaml(
         feature_dim=feature_dim,
         foundation_variant=foundation_variant,
         notes=notes,
+        fallback_rate=fallback_rate,
     )
 
 
@@ -97,6 +103,8 @@ def prediction_to_submission_yaml(
     foundation_variant: str = "N/A (not a foundation model)",
     feature_dim: str = "—",
     notes: str = "",
+    *,
+    fallback_rate: float,
 ) -> str:
     """Render the Track 1 (outcome prediction) leaderboard submission packet.
 
@@ -123,6 +131,7 @@ def prediction_to_submission_yaml(
         feature_dim=feature_dim,
         foundation_variant=foundation_variant,
         notes=notes,
+        fallback_rate=fallback_rate,
     )
 
 
@@ -135,6 +144,8 @@ def forecasting_to_submission_yaml(
     foundation_variant: str = "N/A (not a foundation model)",
     feature_dim: str = "—",
     notes: str = "",
+    *,
+    fallback_rate: float,
 ) -> str:
     """Render the Track 3 (forecasting) leaderboard submission packet.
 
@@ -160,12 +171,45 @@ def forecasting_to_submission_yaml(
         feature_dim=feature_dim,
         foundation_variant=foundation_variant,
         notes=notes,
+        fallback_rate=fallback_rate,
     )
 
 
 # ---------------------------------------------------------------------------
 # Internal rendering
 # ---------------------------------------------------------------------------
+
+
+def _validate_fallback_rate(value: object) -> float:
+    """Reject missing or invalid substitution fractions before rendering metadata."""
+    if (
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not math.isfinite(value) or not 0 <= value <= 1
+    ):
+        raise ValueError("Submission requires a measured fallback rate, finite and in [0, 1]")
+    return float(value)
+
+
+def _imputation_fallback_rate(scenarios: dict, *, allow_missing: bool = False) -> float | None:
+    """Take the maximum only when every scenario/split has a measured rate."""
+    missing = not isinstance(scenarios, dict) or not scenarios
+    rates = []
+    if isinstance(scenarios, dict):
+        for splits in scenarios.values():
+            if not isinstance(splits, dict) or not splits:
+                missing = True
+                continue
+            for metrics in splits.values():
+                value = metrics.get("overall_fallback_rate") if isinstance(metrics, dict) else None
+                if value is None:
+                    missing = True
+                else:
+                    rates.append(_validate_fallback_rate(value))
+    if missing or not rates:
+        if allow_missing:
+            return None
+        raise ValueError("Submission requires a measured fallback rate for every scenario/split")
+    return max(rates)
 
 
 def _slug(name: str) -> str:
@@ -190,6 +234,7 @@ def _render_packet(
     feature_dim: str,
     foundation_variant: str,
     notes: str,
+    fallback_rate: float,
 ) -> str:
     """Format the meta.json sidecar block plus the PR file checklist."""
     method = _slug(method_name)
@@ -198,6 +243,7 @@ def _render_packet(
         "type": method_category,
         "submitter": submitter_team,
         "subtrack": subtrack,
+        "fallback_rate": _validate_fallback_rate(fallback_rate),
     }
     parts = [
         f"# Leaderboard submission packet — {method_name}",

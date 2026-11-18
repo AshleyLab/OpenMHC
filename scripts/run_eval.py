@@ -96,7 +96,7 @@ def main() -> None:
     if output_dir:
         print(
             f"wrote {output_dir}/{method}.parquet "
-            f"(overall_fallback_rate={results.overall_fallback_rate:.4f})"
+            f"(overall_fallback_rate={results.overall_fallback_rate})"
         )
 
 

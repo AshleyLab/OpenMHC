@@ -147,7 +147,7 @@ class ForecastingEvaluator:
         random.seed(config.seed)
 
         # Populated by ``_run_sequential``; always present so ``run`` can read it.
-        self._fallback_summary: dict = {"overall_fallback_rate": 0.0, "fallback_rate": {}}
+        self._fallback_summary: dict = {"overall_fallback_rate": None, "fallback_rate": {}}
 
     def run(self) -> dict:
         """Execute full evaluation pipeline.
@@ -391,6 +391,11 @@ class ForecastingEvaluator:
         self._fallback_summary = self._summarize_fallback(
             model_name, fallback_substituted, fallback_total
         )
+        if public_writer.skipped_users:
+            # Counters cover only this invocation's new predictions. Reused
+            # files still contribute to scoring, so the full-run rate is unknown.
+            self._fallback_summary = {"overall_fallback_rate": None, "fallback_rate": {}}
+            logger.warning("Fallback rate unavailable: existing prediction files were reused")
 
     @staticmethod
     def _apply_seasonal_naive_fallback(
@@ -424,7 +429,7 @@ class ForecastingEvaluator:
     ) -> dict:
         """Aggregate per-channel Seasonal-Naive fallback rates and warn if used."""
         if substituted is None or total is None or int(total.sum()) == 0:
-            return {"overall_fallback_rate": 0.0, "fallback_rate": {}}
+            return {"overall_fallback_rate": None, "fallback_rate": {}}
 
         total_cells = int(total.sum())
         subst_cells = int(substituted.sum())

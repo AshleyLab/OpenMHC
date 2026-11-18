@@ -17,7 +17,7 @@ standard `huggingface_hub` token discovery (`HF_TOKEN` env or
 - **Dataset** `MyHeartCounts/OpenMHC-leaderboard-data` (`repo_type="dataset"`,
   public) — the per-method substrate: `<track>/<method>.parquet` plus display
   sidecars `<track>/<method>.meta.json`
-  (`{display_name, type, submitter, subtrack[, fallback_rate]}`). Track 2
+  (`{display_name, type, submitter, subtrack, fallback_rate}`). Track 2
   ships `imputation/<method>.parquet` (per-user errors); Track 1 ships
   `downstream/<method>.parquet` (per-user **prediction pairs** — its
   ranking/correlation metrics don't decompose per user, see
@@ -46,16 +46,26 @@ views keep those rows for the participants in the cohort, using `demographics.pa
    python tools/upload_leaderboard_substrate.py \
        --dir <dir> --method <m> --track imputation \
        --name "<Display>" --type "<Type>" --submitter "<Team>" \
-       --fallback-rate <Results.overall_fallback_rate>
+       --results-json <evaluation-dir>/results.json
    ```
 
-   This writes both `<m>.parquet` and the `<m>.meta.json` sidecar.
-   `--fallback-rate` records `fallback_rate` in the sidecar (issue #39);
-   omit it and the value is read from the substrate's `<m>.parquet.meta.json`
-   provenance sidecar if present, else the row shows "n/a". The `method` column is
-   validated against `<m>` for `imputation` and `downstream`. The upload stops if the
-   file has users absent from `demographics.parquet`, because they would be left out
-   of every cohort view.
+   The uploader publishes `<m>.parquet` and `<m>.meta.json` together, preserving
+   existing display fields unless overridden.
+
+   For Track 1, keep the exported `<m>.parquet.meta.json` beside the predictions;
+   the uploader reads its measured fallback rate automatically. For imputation
+   and forecasting, you can supply `--results-json` from the same evaluation.
+   `results.to_submission_yaml(...)` also includes the measured rate.
+
+   Missing, invalid or conflicting measurements stop the upload. A measured zero
+   is valid; an unknown rate must not be replaced with zero. Resumed forecasting
+   runs may have incomplete counts and require complete evaluation metadata before
+   publication. `--fallback-rate` only checks agreement with the recorded measurement.
+
+   The uploader checks method identity, available prediction checksums and
+   demographic coverage. Keep predictions and metadata from the same evaluation
+   together. If the remote repository changes during upload, rerun the command.
+
 2. The Space recomputes only on **restart** (in-process cache, no auto-refresh).
    Restart it to pick up the new/changed method. Uploading to the dataset does
    *not* trigger a Space rebuild; only pushing to the Space does.
