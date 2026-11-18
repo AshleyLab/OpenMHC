@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -14,6 +15,12 @@ if str(_TOOLS) not in sys.path:
     sys.path.insert(0, str(_TOOLS))
 
 import upload_leaderboard_substrate as uploader  # noqa: E402
+
+
+def _repository_not_found(message: str):
+    """Build a Hub error without depending on its underlying HTTP client."""
+    response = Mock(status_code=404, headers={}, request=None)
+    return uploader.RepositoryNotFoundError(message, response=response)
 
 
 def test_validate_method_column_downstream_pass(tmp_path):
@@ -272,7 +279,7 @@ def test_new_repository_created_only_after_validation(upload_case):
 
     case = upload_case
     case.api.repo_info.side_effect = [
-        uploader.RepositoryNotFoundError("new repo"), SimpleNamespace(sha="initial-revision"),
+        _repository_not_found("new repo"), SimpleNamespace(sha="initial-revision"),
     ]
     uploader.main()
     case.reader.assert_not_called()
@@ -329,7 +336,7 @@ def test_failed_commit_does_not_report_success_or_upload_separately(upload_case,
 def test_lost_repository_access_does_not_skip_cohort_validation(upload_case):
     """An existing repository becoming inaccessible must stop the upload."""
     case = upload_case
-    case.reader.side_effect = uploader.RepositoryNotFoundError("inaccessible")
+    case.reader.side_effect = _repository_not_found("inaccessible")
     with pytest.raises(uploader.RepositoryNotFoundError):
         uploader.main()
     case.api.create_commit.assert_not_called()
